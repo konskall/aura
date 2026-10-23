@@ -243,12 +243,25 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
         applied_brightness_ = brightness;
         bsp_display_brightness_set(brightness);
     }
+    // The alert rings until it is handled, a little louder each pass.
+    const auto audio = audio_.diagnostics();
+    if (!clock_.snapshot().alert) alert_since_ms_ = 0;
+    else if (alert_since_ms_ == 0) alert_since_ms_ = now;
     if (clock_.snapshot().alert && !display_.snapshot().muted_by_flip && now >= chime_next_ms_ &&
-        audio_.diagnostics().state != AudioState::Playing) {
-        audio_.play_test_tone(450);
-        chime_next_ms_ = now + 1600;
+        audio.state != AudioState::Playing) {
+        audio_.play_pcm(make_alarm_melody(alarm_loudness(now - alert_since_ms_)));
+        chime_next_ms_ = now + kAlarmCycleMs;
     }
-    if (display_.snapshot().muted_by_flip && audio_.diagnostics().state == AudioState::Playing) audio_.stop();
+    if (display_.snapshot().muted_by_flip && audio.state == AudioState::Playing) audio_.stop();
+    // A soft chime for a phone notification that was not there before.
+    if (phone_.snapshot().sequence != chime_phone_sequence_) {
+        chime_phone_sequence_ = phone_.snapshot().sequence;
+        std::vector<std::string> ids;
+        for (const auto& item : phone_.snapshot().notifications) ids.push_back("p" + std::to_string(item.uid));
+        const bool quiet = display_.snapshot().muted_by_flip || audio.muted || audio.state == AudioState::Playing ||
+                           clock_.snapshot().alert || recording_note_;
+        if (message_chime_.observe(std::move(ids), now, quiet)) audio_.play_pcm(make_message_chime());
+    }
     save();
 }
 

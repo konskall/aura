@@ -7,6 +7,7 @@ idf_component_register(
         "${AURA_ROOT}/shared/core/src/briefing.cpp"
         "${AURA_ROOT}/shared/core/src/clock_services.cpp"
         "${AURA_ROOT}/shared/core/src/display_power.cpp"
+        "${AURA_ROOT}/shared/core/src/sounds.cpp"
         "${AURA_ROOT}/shared/core/src/notes.cpp"
         "${AURA_ROOT}/shared/core/src/ota_update.cpp"
         "${AURA_ROOT}/shared/core/src/phone_link.cpp"

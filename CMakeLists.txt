@@ -48,6 +48,7 @@ add_library(aura_core STATIC
     shared/core/src/briefing.cpp
     shared/core/src/clock_services.cpp
     shared/core/src/display_power.cpp
+    shared/core/src/sounds.cpp
     shared/core/src/notes.cpp
     shared/core/src/ota_update.cpp
     shared/core/src/phone_link.cpp

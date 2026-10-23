@@ -12,6 +12,7 @@
 #include "aura/ota_update.hpp"
 #include "aura/phone_link.hpp"
 #include "aura/provider.hpp"
+#include "aura/sounds.hpp"
 #include "aura/translation.hpp"
 #include "aura/voice.hpp"
 #include "aura/weather.hpp"
@@ -99,6 +100,7 @@ private:
     void speak(const std::string& text, const std::string& language);
     bool execute(const AssistantAction& action);
     bool route_message(const AssistantAction& action);
+    void chime_for_new_messages(std::uint64_t now, AudioState audio_state);
     void simulate_imu(const std::string& kind);
     void demo_phone_notification(const std::string& payload);
     void load_stores();
@@ -151,6 +153,11 @@ private:
     std::uint64_t update_started_ms_{0};
     std::uint64_t update_verify_ms_{0};
     std::uint64_t chime_next_ms_{0};
+    std::uint64_t alert_since_ms_{0};
+    MessageChimeGate message_chime_;
+    std::uint64_t chime_aoraton_sequence_{0};
+    std::uint64_t chime_phone_sequence_{0};
+    int chime_demo_count_{-1};
     std::uint32_t imu_time_ms_{0};
     std::uint32_t next_phone_uid_{100};
     std::uint32_t note_file_counter_{0};

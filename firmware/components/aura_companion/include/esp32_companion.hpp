@@ -7,6 +7,7 @@
 #include "aura/notes.hpp"
 #include "aura/ota_update.hpp"
 #include "aura/phone_link.hpp"
+#include "aura/sounds.hpp"
 #include "aura/voice.hpp"
 #include "esp32_microphone.hpp"
 #include "esp32_motion.hpp"
@@ -72,6 +73,9 @@ private:
     bool button_down_{false};
     std::uint64_t button_since_ms_{0};
     std::uint64_t chime_next_ms_{0};
+    std::uint64_t alert_since_ms_{0};
+    MessageChimeGate message_chime_;
+    std::uint64_t chime_phone_sequence_{0};
     std::uint32_t note_counter_{0};
     std::uint64_t saved_clock_{0};
     std::uint64_t saved_notes_{0};

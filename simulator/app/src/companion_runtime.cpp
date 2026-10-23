@@ -282,6 +282,30 @@ bool CompanionRuntime::execute(const AssistantAction& action) {
     return false;
 }
 
+// A soft chime for a notification that was not there before: Aoraton
+// messages, phone notifications and the labelled DEMO ones.
+void CompanionRuntime::chime_for_new_messages(std::uint64_t now, AudioState audio_state) {
+    const auto& aoraton = ctx_.aoraton->snapshot();
+    const auto& phone = phone_.snapshot();
+    const int demo = ctx_.controller->snapshot().notification_count;
+    if (aoraton.sequence == chime_aoraton_sequence_ && phone.sequence == chime_phone_sequence_ &&
+        demo == chime_demo_count_) {
+        return;
+    }
+    chime_aoraton_sequence_ = aoraton.sequence;
+    chime_phone_sequence_ = phone.sequence;
+    chime_demo_count_ = demo;
+    std::vector<std::string> ids;
+    for (const auto& item : aoraton.notifications) ids.push_back("a" + item.message_id);
+    for (const auto& item : phone.notifications) ids.push_back("p" + std::to_string(item.uid));
+    for (int index = 1; index <= demo; ++index) ids.push_back("d" + std::to_string(index));
+    // Quiet: face down or muted, while something plays or rings, or while the
+    // microphone is open (the chime would be recorded).
+    const bool quiet = display_.snapshot().muted_by_flip || ctx_.audio->diagnostics().muted ||
+                       audio_state == AudioState::Playing || clock_.snapshot().alert || job_ != VoiceJob::None;
+    if (message_chime_.observe(std::move(ids), now, quiet)) ctx_.audio->play_pcm(make_message_chime());
+}
+
 // Only a room the owner clearly named (or the only room) is used.
 bool CompanionRuntime::route_message(const AssistantAction& action) {
     const auto& rooms = ctx_.aoraton->snapshot().rooms;
@@ -548,13 +572,17 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
             ctx_.ui->open_briefing();
         }
         was_dark_ = dark;
-        // The alert rings until it is handled; face down silences it.
+        // The alert rings until it is handled, a little louder each pass; face
+        // down silences it.
+        if (!clock_.snapshot().alert) alert_since_ms_ = 0;
+        else if (alert_since_ms_ == 0) alert_since_ms_ = now;
         if (clock_.snapshot().alert && !display_.snapshot().muted_by_flip && now >= chime_next_ms_ &&
             audio_state != AudioState::Playing) {
-            ctx_.audio->play_test_tone(450);
-            chime_next_ms_ = now + 1600;
+            ctx_.audio->play_pcm(make_alarm_melody(alarm_loudness(now - alert_since_ms_)));
+            chime_next_ms_ = now + kAlarmCycleMs;
         }
         if (display_.snapshot().muted_by_flip && audio_state == AudioState::Playing) ctx_.audio->stop();
+        chime_for_new_messages(now, audio_state);
     }
 
     if (pair_ready_ms_ != 0 && now >= pair_ready_ms_) {

@@ -6,6 +6,7 @@
 #include "aura/notes.hpp"
 #include "aura/ota_update.hpp"
 #include "aura/phone_link.hpp"
+#include "aura/sounds.hpp"
 #include "aura/text_util.hpp"
 #include "aura/translation.hpp"
 #include "aura/voice.hpp"
@@ -475,7 +476,50 @@ void voice_tests() {
 
 }  // namespace
 
+void sound_tests() {
+    using namespace aura;
+    const auto peak = [](const PcmClip& clip) {
+        int loudest = 0;
+        for (const auto sample : clip.samples) loudest = std::max(loudest, std::abs(static_cast<int>(sample)));
+        return loudest;
+    };
+    const auto milliseconds = [](const PcmClip& clip) {
+        return static_cast<std::uint32_t>(clip.samples.size() * 1000 / kSoundSampleRate);
+    };
+
+    const auto chime = make_message_chime();
+    expect(chime.format.sample_rate == kSoundSampleRate && chime.format.channels == 1 &&
+           chime.format.bits_per_sample == 16, "chime is 16 kHz mono PCM");
+    expect(milliseconds(chime) >= 250 && milliseconds(chime) <= 600, "chime is short");
+    expect(peak(chime) > 4000 && peak(chime) < 14000, "chime is audible but soft");
+    expect(std::abs(chime.samples.front()) < 200 && std::abs(chime.samples.back()) < 200,
+           "chime starts and ends without a click");
+
+    const auto quiet = make_alarm_melody(alarm_loudness(0));
+    const auto full = make_alarm_melody(alarm_loudness(60000));
+    expect(milliseconds(full) >= 800 && milliseconds(full) + 500 <= kAlarmCycleMs,
+           "one alarm pass leaves a pause in its cycle");
+    expect(peak(full) > 26000 && peak(full) < 31500, "full alarm is loud without clipping");
+    expect(std::abs(peak(quiet) * 10 - peak(full) * 3) < peak(full) / 10, "the alarm starts at 30 %");
+    expect(peak(make_alarm_melody(4.0F)) == peak(full) && peak(make_alarm_melody(-1.0F)) == 0,
+           "alarm loudness is clamped");
+    expect(alarm_loudness(0) < alarm_loudness(15000) && alarm_loudness(15000) < alarm_loudness(30000) &&
+           alarm_loudness(30000) == 1.0F && alarm_loudness(600000) == 1.0F, "alarm loudness rises to full in 30 s");
+
+    MessageChimeGate gate;
+    expect(!gate.observe({"a1"}, 1000, false), "notifications already there at start-up do not chime");
+    expect(gate.observe({"a1", "a2"}, 2000, false), "a new notification chimes");
+    expect(!gate.observe({"a1", "a2"}, 9000, false), "the same notifications do not chime again");
+    expect(!gate.observe({"a2"}, 10000, false), "reading a room is not a new message");
+    expect(!gate.observe({"a2", "a3"}, 11000, true), "no chime while quiet");
+    expect(!gate.observe({"a2", "a3"}, 16000, false), "a message seen while quiet does not chime later");
+    expect(gate.observe({"a2", "a3", "p7"}, 20000, false), "a phone notification chimes too");
+    expect(!gate.observe({"a2", "a3", "p7", "a4"}, 21000, false), "a burst chimes at most once every few seconds");
+    expect(gate.observe({"a5"}, 30000, false), "the next message after the pause chimes again");
+}
+
 int main() {
+    sound_tests();
     text_tests();
     clock_tests();
     notes_tests();
