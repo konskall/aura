@@ -137,6 +137,8 @@ struct AuraUi::Impl {
     lv_obj_t* host_metrics_label{};
     lv_obj_t* wifi_password_area{};
     lv_obj_t* wifi_password_status{};
+    lv_obj_t* unlock_area{};
+    lv_obj_t* unlock_status{};
     lv_obj_t* wifi_visibility_icon{};
     lv_obj_t* wifi_spinner{};
     lv_obj_t* wifi_forget_label{};
@@ -415,6 +417,11 @@ struct AuraUi::Impl {
         const auto index = reinterpret_cast<std::intptr_t>(lv_obj_get_user_data(lv_event_get_current_target_obj(event)));
         if (index < 0 || static_cast<std::size_t>(index) >= self->aoraton.rooms.size()) return;
         const auto& room = self->aoraton.rooms[static_cast<std::size_t>(index)];
+        if (!self->aoraton.mock_mode && !room.key_available && self->aoraton.pairing == AoratonPairingState::Paired) {
+            // A locked room opens the key screen instead of failing silently.
+            self->navigate(UiView::AoratonUnlock);
+            return;
+        }
         const bool opened = self->callbacks.on_aoraton_room && self->callbacks.on_aoraton_room(room.id);
         if (!opened) {
             self->render(UiView::AoratonRooms);
@@ -459,6 +466,38 @@ struct AuraUi::Impl {
         if (self->callbacks.on_aoraton_unpair) self->callbacks.on_aoraton_unpair();
         self->navigation.replace(UiView::AoratonRooms);
         self->render(UiView::AoratonRooms);
+    }
+
+    static void unlock_submit_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action()) return;
+        self->submit_unlock();
+    }
+
+    static void unlock_ready_event(lv_event_t* event) {
+        lv_async_call([](void* data) {
+            auto* self = static_cast<Impl*>(data);
+            if (self->current_view == UiView::AoratonUnlock) self->submit_unlock();
+        }, lv_event_get_user_data(event));
+    }
+
+    static void paste_invite_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action()) return;
+        if (self->callbacks.on_aoraton_paste_invite) self->callbacks.on_aoraton_paste_invite();
+        self->render(UiView::AoratonPair);
+    }
+
+    void submit_unlock() {
+        if (!unlock_area || !callbacks.on_aoraton_unlock) return;
+        const char* typed = lv_textarea_get_text(unlock_area);
+        if (!typed || !*typed) return;
+        std::string passphrase(typed);
+        const bool queued = callbacks.on_aoraton_unlock(passphrase);
+        volatile char* bytes = passphrase.empty() ? nullptr : &passphrase[0];
+        for (std::size_t index = 0; index < passphrase.size(); ++index) bytes[index] = 0;
+        if (queued) lv_textarea_set_text(unlock_area, "");
+        update_unlock_status();
     }
 
     static void aoraton_notification_event(lv_event_t* event) {
@@ -1582,14 +1621,16 @@ struct AuraUi::Impl {
 
     void render_aoraton_rooms() {
         if (!aoraton.mock_mode && aoraton.pairing != AoratonPairingState::Paired) {
+            const bool reauth = aoraton.pairing == AoratonPairingState::ReauthorizationRequired;
             make_header(t().aoraton);
             if (aoraton.runtime_mode == AoratonRuntimeMode::IntegrationTest) header_tag(t().secure_test, ui::tokens::amber);
-            state_symbol(96, 88, ui::IconRole::Encrypted, ui::tokens::lilac);
-            line(content, t().aoraton_connect, kGutter, 196, kWidth, ui::font_title(), ui::tokens::text,
-                 LV_TEXT_ALIGN_CENTER);
-            label(content, t().aoraton_connect_help, kGutter, 242, kWidth, ui::font_caption(),
-                  ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
-            auto* connect = pill(content, t().aoraton_connect, ui::ButtonTone::Primary, kGutter, kActionY, kWidth,
+            state_symbol(96, 88, reauth ? ui::IconRole::Lock : ui::IconRole::Encrypted,
+                         reauth ? ui::tokens::amber : ui::tokens::lilac);
+            line(content, reauth ? c().aoraton_reauth : t().aoraton_connect, kGutter, 196, kWidth, ui::font_title(),
+                 ui::tokens::text, LV_TEXT_ALIGN_CENTER);
+            label(content, reauth ? c().aoraton_reauth_detail : c().aoraton_sign_in_help, kGutter, 242, kWidth,
+                  ui::font_caption(), ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
+            auto* connect = pill(content, c().aoraton_sign_in, ui::ButtonTone::Primary, kGutter, kActionY, kWidth,
                                  pairing_start_event);
             ui::set_button_disabled(connect, !callbacks.on_aoraton_pair_start);
             return;
@@ -1598,14 +1639,18 @@ struct AuraUi::Impl {
         make_header(t().aoraton, ui::IconRole::Compose, compose_event, ui::tokens::blue,
                     !aoraton.rooms.empty() && connected);
         auto* list = make_list();
-        line(list, connected ? security_text() : t().disconnected, kGutter + 4, 0, kWidth - 8,
-             ui::font_caption(), connected ? ui::tokens::mint : ui::tokens::coral);
+        // The live account is polled, so it never claims instant delivery.
+        const char* status = !connected ? t().disconnected :
+                             (aoraton.mock_mode ? security_text() : c().aoraton_live_polling);
+        line(list, status, kGutter + 4, 0, kWidth - 8, ui::font_caption(),
+             connected ? ui::tokens::mint : ui::tokens::coral);
         int y = 40;
         // All authorized rooms (bounded by the service) live in one vertical scroller.
         const std::size_t count = aoraton.rooms.size();
         for (std::size_t index = 0; index < count; ++index) {
             const auto& room = aoraton.rooms[index];
-            const char* preview = !room.key_available ? t().aoraton_room_locked :
+            const char* preview = !room.key_available ?
+                                  (aoraton.mock_mode ? t().aoraton_room_locked : c().aoraton_room_locked) :
                                   (room.preview.empty() ? t().no_messages : room.preview.c_str());
             auto* row = list_row(list, y, room.display_name.c_str(), preview,
                                  index % 3 == 2 ? ui::IconRole::Room : ui::IconRole::Message,
@@ -1627,28 +1672,128 @@ struct AuraUi::Impl {
             y += kRowPitch;
         }
         if (!aoraton.mock_mode && aoraton.pairing == AoratonPairingState::Paired) {
-            settings_row(list, y, t().aoraton_pair_title, aoraton.account_label.empty() ? nullptr :
+            settings_row(list, y, c().aoraton_account_title, aoraton.account_label.empty() ? nullptr :
                          aoraton.account_label.c_str(), ui::IconRole::Settings, ui::tokens::ice, UiView::AoratonPair);
             y += kRowPitch;
         }
         list_end(list, y);
     }
 
+    bool key_state_is_error() const {
+        switch (aoraton.key_state) {
+            case AoratonKeyState::WrongPassphrase:
+            case AoratonKeyState::NotConfigured:
+            case AoratonKeyState::NotMember:
+            case AoratonKeyState::InvalidInvite:
+            case AoratonKeyState::Failed: return true;
+            case AoratonKeyState::Unknown:
+            case AoratonKeyState::Unlocking:
+            case AoratonKeyState::Ready: break;
+        }
+        return false;
+    }
+
+    const char* key_state_text() const {
+        switch (aoraton.key_state) {
+            case AoratonKeyState::Unlocking: return c().aoraton_keys_unlocking;
+            case AoratonKeyState::WrongPassphrase: return c().aoraton_keys_wrong;
+            case AoratonKeyState::NotConfigured: return c().aoraton_keys_not_configured;
+            case AoratonKeyState::NotMember: return c().aoraton_keys_not_member;
+            case AoratonKeyState::InvalidInvite: return c().aoraton_keys_invalid_invite;
+            case AoratonKeyState::Failed: return c().aoraton_keys_failed;
+            case AoratonKeyState::Unknown:
+            case AoratonKeyState::Ready: break;
+        }
+        return nullptr;
+    }
+
+    std::string key_count_text() const {
+        if (aoraton.key_count == 0) return c().aoraton_keys_none;
+        if (aoraton.key_count == 1) return c().aoraton_keys_one;
+        char text[48];
+        std::snprintf(text, sizeof(text), c().aoraton_keys_format, static_cast<unsigned>(aoraton.key_count));
+        return text;
+    }
+
+    // The signed-in account: who, room keys, invite paste, sign out.
+    void render_aoraton_account() {
+        make_header(t().aoraton);
+        auto* list = make_list();
+        int y = 0;
+        list_row(list, y, t().connected, aoraton.account_label.empty() ? nullptr : aoraton.account_label.c_str(),
+                 ui::IconRole::Success, ui::tokens::mint);
+        y += kRowPitch;
+        const bool invite_error = aoraton.key_state == AoratonKeyState::NotMember ||
+                                  aoraton.key_state == AoratonKeyState::InvalidInvite;
+        const char* key_text = key_state_text();
+        const std::string count_text = key_count_text();
+        settings_row(list, y, c().aoraton_keys, key_text && !invite_error ? key_text : count_text.c_str(),
+                     ui::IconRole::Lock, ui::tokens::lilac, UiView::AoratonUnlock);
+        y += kRowPitch;
+        auto* paste = list_row(list, y, c().aoraton_paste_invite, invite_error ? key_text : c().aoraton_paste_hint,
+                               ui::IconRole::Copy, ui::tokens::blue);
+        lv_obj_set_clickable(paste, static_cast<bool>(callbacks.on_aoraton_paste_invite));
+        lv_obj_add_event_cb(paste, paste_invite_event, LV_EVENT_CLICKED, this);
+        // Back returns to the rooms; sign-out stays above the fold.
+        y += kRowPitch + 8;
+        auto* sign_out = pill(list, c().aoraton_sign_out, ui::ButtonTone::Danger, kGutter, y, kWidth, unpair_event);
+        ui::set_button_disabled(sign_out, !callbacks.on_aoraton_unpair);
+        list_end(list, y + kButtonHeight + 16);
+    }
+
+    void render_aoraton_unlock() {
+        make_header(c().aoraton_unlock_title, ui::IconRole::Check, unlock_submit_event, ui::tokens::blue,
+                    static_cast<bool>(callbacks.on_aoraton_unlock));
+        unlock_area = make_text_input(kGutter, 100, kWidth, 72, c().aoraton_unlock_placeholder, true);
+        lv_textarea_set_password_mode(unlock_area, true);
+        lv_textarea_set_max_length(unlock_area, 256);
+        lv_obj_add_event_cb(unlock_area, unlock_ready_event, LV_EVENT_READY, this);
+        unlock_status = line(content, c().aoraton_unlock_hint, kGutter + 4, 176, kWidth - 8, ui::font_caption(),
+                             ui::tokens::text_tertiary);
+        update_unlock_status();
+        make_form_keyboard(unlock_area, ui::KeyboardProfile::Password);
+    }
+
+    // Key results arrive while the owner may be typing: only the status line
+    // changes, so a re-render never wipes the field.
+    void update_unlock_status() {
+        if (!unlock_status) return;
+        const char* state = key_state_text();
+        const bool unlocked = aoraton.key_state == AoratonKeyState::Ready && aoraton.key_count > 0;
+        const std::string text = state ? std::string(state) :
+                                 (unlocked ? key_count_text() : std::string(c().aoraton_unlock_hint));
+        lv_label_set_text(unlock_status, text.c_str());
+        lv_obj_set_style_text_color(unlock_status,
+                                    ui::color(key_state_is_error() ? ui::tokens::coral :
+                                              (unlocked ? ui::tokens::mint : ui::tokens::text_tertiary)),
+                                    0);
+    }
+
+    const char* sign_in_error_title() const {
+        if (aoraton.pairing == AoratonPairingState::Expired || aoraton.last_error == "SIGN_IN_TIMEOUT") {
+            return c().aoraton_timeout_title;
+        }
+        if (aoraton.last_error == "SIGN_IN_NETWORK") return c().aoraton_sign_in_network;
+        if (aoraton.last_error == "SIGN_IN_UNAVAILABLE") return c().aoraton_sign_in_unavailable;
+        return c().aoraton_sign_in_failed;
+    }
+
     void render_aoraton_pair() {
-        make_header(t().aoraton_pair_title);
         const auto state = aoraton.pairing;
         if (state == AoratonPairingState::Paired) {
-            state_symbol(100, 96, ui::IconRole::Success, ui::tokens::mint);
-            line(content, t().connected, kGutter, 208, kWidth, ui::font_title(), ui::tokens::text,
-                 LV_TEXT_ALIGN_CENTER);
-            if (!aoraton.account_label.empty()) {
-                line(content, aoraton.account_label.c_str(), kGutter, 252, kWidth, ui::font_caption(),
-                     ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
-            }
-            pill(content, t().rooms, ui::ButtonTone::Primary, kGutter, 292, kWidth, pairing_done_event);
-            auto* unpair = pill(content, t().aoraton_unpair, ui::ButtonTone::Danger, kGutter, kActionY, kWidth,
-                                unpair_event);
-            ui::set_button_disabled(unpair, !callbacks.on_aoraton_unpair);
+            render_aoraton_account();
+            return;
+        }
+        make_header(t().aoraton);
+        if (state == AoratonPairingState::NotPaired || state == AoratonPairingState::ReauthorizationRequired) {
+            const bool reauth = state == AoratonPairingState::ReauthorizationRequired;
+            state_symbol(100, 96, reauth ? ui::IconRole::Lock : ui::IconRole::Encrypted,
+                         reauth ? ui::tokens::amber : ui::tokens::lilac);
+            state_text(212, reauth ? c().aoraton_reauth : t().aoraton_connect,
+                       reauth ? c().aoraton_reauth_detail : c().aoraton_sign_in_help);
+            auto* connect = pill(content, c().aoraton_sign_in, ui::ButtonTone::Primary, kGutter, kActionY, kWidth,
+                                 pairing_start_event);
+            ui::set_button_disabled(connect, !callbacks.on_aoraton_pair_start);
             return;
         }
 
@@ -1675,11 +1820,13 @@ struct AuraUi::Impl {
             return;
         }
         if (state == AoratonPairingState::Expired || state == AoratonPairingState::Error) {
-            state_symbol(100, 96, ui::IconRole::Error, ui::tokens::coral);
-            const bool expired = state == AoratonPairingState::Expired;
-            const bool backend_missing = !expired && aoraton.last_error == "PAIRING_TEST_BACKEND_NOT_CONFIGURED";
-            auto* column = state_text(212, expired ? t().aoraton_pair_expired : t().aoraton_pair_failed,
-                                      backend_missing ? t().aoraton_pair_backend_missing : nullptr);
+            const bool timed_out = state == AoratonPairingState::Expired || aoraton.last_error == "SIGN_IN_TIMEOUT";
+            state_symbol(timed_out ? 80 : 100, 96, ui::IconRole::Error, ui::tokens::coral);
+            const bool backend_missing = aoraton.last_error == "PAIRING_TEST_BACKEND_NOT_CONFIGURED";
+            auto* column = state_text(timed_out ? 188 : 212,
+                                      backend_missing ? t().aoraton_pair_failed : sign_in_error_title(),
+                                      backend_missing ? t().aoraton_pair_backend_missing :
+                                      (timed_out ? c().aoraton_timeout_detail : nullptr));
             (void)column;
             pill(content, t().retry, ui::ButtonTone::Primary, kGutter, kActionY, kHalfWidth, pairing_start_event);
             pill(content, t().cancel, ui::ButtonTone::Danger, kGutter + kHalfWidth + 16, kActionY, kHalfWidth,
@@ -1708,7 +1855,7 @@ struct AuraUi::Impl {
             lv_obj_set_size(spinner, 96, 96);
             lv_obj_set_pos(spinner, (ui::tokens::display_width - 96) / 2, 120);
             lv_obj_set_style_arc_color(spinner, ui::color(ui::tokens::indigo), LV_PART_INDICATOR);
-            label(content, t().aoraton_pair_waiting, kGutter, 240, kWidth, ui::font_body(),
+            label(content, c().aoraton_sign_in_waiting, kGutter, 240, kWidth, ui::font_body(),
                   ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
             if (expiry[0]) line(content, expiry, kGutter, 312, kWidth, ui::font_caption(), ui::tokens::text_tertiary,
                                 LV_TEXT_ALIGN_CENTER);
@@ -2954,6 +3101,8 @@ struct AuraUi::Impl {
         host_metrics_label = nullptr;
         wifi_password_area = nullptr;
         wifi_password_status = nullptr;
+        unlock_area = nullptr;
+        unlock_status = nullptr;
         wifi_visibility_icon = nullptr;
         wifi_spinner = nullptr;
         wifi_forget_label = nullptr;
@@ -2990,6 +3139,7 @@ struct AuraUi::Impl {
             case UiView::Audio: render_audio(); break;
             case UiView::AoratonRooms: render_aoraton_rooms(); break;
             case UiView::AoratonPair: render_aoraton_pair(); break;
+            case UiView::AoratonUnlock: render_aoraton_unlock(); break;
             case UiView::AoratonConversation: render_aoraton_conversation(); break;
             case UiView::AoratonCompose: render_aoraton_compose(); break;
             case UiView::AoratonConfirm: render_aoraton_confirm(); break;
@@ -3166,6 +3316,10 @@ void AuraUi::apply_aoraton(const AoratonSnapshot& snapshot) {
     if (snapshot.sequence == impl_->aoraton.sequence) return;
     const bool notifications_changed = snapshot.notifications.size() != impl_->aoraton.notifications.size();
     impl_->aoraton = snapshot;
+    if (impl_->current_view == UiView::AoratonUnlock) {
+        impl_->update_unlock_status();
+        return;
+    }
     if (impl_->current_view == UiView::AoratonRooms ||
         impl_->current_view == UiView::Notifications ||
         impl_->current_view == UiView::AoratonPair ||

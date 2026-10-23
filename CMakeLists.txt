@@ -56,6 +56,9 @@ add_library(aura_core STATIC
     shared/core/src/voice.cpp
     shared/core/src/aoraton_crypto.cpp
     shared/core/src/aoraton_real.cpp
+    shared/core/src/json_reader.cpp
+    shared/core/src/aoraton_account.cpp
+    shared/core/src/aoraton_account_worker.cpp
     shared/core/src/audio_service.cpp
     shared/core/src/assistant_state.cpp
     shared/core/src/device_status.cpp
@@ -112,12 +115,15 @@ add_executable(aura_simulator
     simulator/app/src/windows_aoraton_vault.cpp
     simulator/app/src/windows_wifi_service.cpp
     simulator/app/src/fail_closed_aoraton_transport.cpp
+    simulator/app/src/winhttp_client.cpp
+    simulator/app/src/loopback_sign_in.cpp
+    simulator/app/src/aoraton_account_transport.cpp
 )
 target_include_directories(aura_simulator PRIVATE simulator/app/include)
 target_compile_definitions(aura_simulator PRIVATE LV_CONF_INCLUDE_SIMPLE LV_LVGL_H_INCLUDE_SIMPLE SDL_MAIN_HANDLED)
 target_link_libraries(aura_simulator PRIVATE aura_ui lvgl SDL2::SDL2-static)
 if(WIN32)
-    target_link_libraries(aura_simulator PRIVATE winhttp shell32 bcrypt crypt32 wlanapi)
+    target_link_libraries(aura_simulator PRIVATE winhttp ws2_32 shell32 bcrypt crypt32 wlanapi)
     target_link_options(aura_simulator PRIVATE -mconsole)
 endif()
 
@@ -126,6 +132,8 @@ if(BUILD_TESTING)
     if(AURA_NODE_EXECUTABLE)
         add_test(NAME aura_aoraton_webcrypto_oracle
             COMMAND ${AURA_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/interop/aoraton_webcrypto_oracle.mjs)
+        add_test(NAME aura_aoraton_vault_vectors
+            COMMAND ${AURA_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/interop/make_aoraton_vault_vectors.mjs --check)
     endif()
     add_executable(aura_core_tests tests/unit/assistant_state_test.cpp)
     target_link_libraries(aura_core_tests PRIVATE aura_core)
@@ -133,6 +141,9 @@ if(BUILD_TESTING)
     add_executable(aura_audio_tests tests/unit/audio_service_test.cpp)
     target_link_libraries(aura_audio_tests PRIVATE aura_core)
     add_test(NAME aura_audio_tests COMMAND aura_audio_tests)
+    add_executable(aura_json_reader_tests tests/unit/json_reader_test.cpp)
+    target_link_libraries(aura_json_reader_tests PRIVATE aura_core)
+    add_test(NAME aura_json_reader_tests COMMAND aura_json_reader_tests)
     add_executable(aura_aoraton_tests tests/unit/aoraton_service_test.cpp)
     target_link_libraries(aura_aoraton_tests PRIVATE aura_core)
     add_test(NAME aura_aoraton_tests COMMAND aura_aoraton_tests)
@@ -183,6 +194,39 @@ if(BUILD_TESTING)
         target_include_directories(aura_aoraton_crypto_tests PRIVATE simulator/app/include)
         target_link_libraries(aura_aoraton_crypto_tests PRIVATE aura_core bcrypt)
         add_test(NAME aura_aoraton_crypto_tests COMMAND aura_aoraton_crypto_tests)
+        add_executable(aura_aoraton_account_tests
+            tests/unit/aoraton_account_test.cpp
+            simulator/app/src/windows_aoraton_crypto.cpp
+        )
+        target_include_directories(aura_aoraton_account_tests PRIVATE simulator/app/include)
+        target_compile_definitions(aura_aoraton_account_tests PRIVATE
+            AURA_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+        target_link_libraries(aura_aoraton_account_tests PRIVATE aura_core bcrypt)
+        add_test(NAME aura_aoraton_account_tests COMMAND aura_aoraton_account_tests)
+        add_executable(aura_aoraton_account_worker_tests
+            tests/unit/aoraton_account_worker_test.cpp
+            simulator/app/src/windows_aoraton_crypto.cpp
+        )
+        target_include_directories(aura_aoraton_account_worker_tests PRIVATE simulator/app/include)
+        target_compile_definitions(aura_aoraton_account_worker_tests PRIVATE
+            AURA_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+        target_link_libraries(aura_aoraton_account_worker_tests PRIVATE aura_core bcrypt)
+        add_test(NAME aura_aoraton_account_worker_tests COMMAND aura_aoraton_account_worker_tests)
+        add_executable(aura_aoraton_account_smoke
+            tests/smoke/aoraton_account_smoke.cpp
+            simulator/app/src/winhttp_client.cpp
+            simulator/app/src/loopback_sign_in.cpp
+            simulator/app/src/aoraton_account_transport.cpp
+            simulator/app/src/windows_aoraton_crypto.cpp
+            simulator/app/src/windows_aoraton_vault.cpp
+        )
+        target_include_directories(aura_aoraton_account_smoke PRIVATE simulator/app/include)
+        target_link_libraries(aura_aoraton_account_smoke PRIVATE aura_core winhttp ws2_32 shell32 bcrypt crypt32)
+        if(AURA_NODE_EXECUTABLE)
+            add_test(NAME aura_aoraton_account_smoke
+                COMMAND ${AURA_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/interop/run_aoraton_account_smoke.mjs
+                        $<TARGET_FILE:aura_aoraton_account_smoke>)
+        endif()
         add_executable(aura_aoraton_vault_tests
             tests/unit/aoraton_vault_test.cpp
             simulator/app/src/windows_aoraton_vault.cpp

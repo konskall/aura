@@ -229,6 +229,48 @@ int main() {
                "late acknowledgement reconciles the retained send");
     }
 
+    {
+        // Room keys for the signed-in account: the passphrase and the invite only
+        // travel inside a command, and the snapshot reports state, never secrets.
+        AoratonMailbox key_mailbox;
+        RealAoratonService keys(key_mailbox, AoratonRuntimeMode::Live, [] { return std::string("k-1"); });
+        expect(!keys.unlock_keys("synthetic passphrase") && keys.snapshot().last_error == "PAIRING_REQUIRED",
+               "unlock requires a signed-in account");
+        AoratonEvent paired;
+        paired.type = AoratonEventType::Paired;
+        paired.account_label = "owner@example.com";
+        push(key_mailbox, std::move(paired), "sign-in queued");
+        keys.tick(1);
+        expect(!keys.unlock_keys(""), "empty passphrase refused");
+        expect(keys.unlock_keys("synthetic passphrase"), "unlock enqueued");
+        expect(keys.snapshot().key_state == AoratonKeyState::Unlocking, "unlocking shown");
+        expect(!keys.add_invite_key("#key=x&k=y") && keys.snapshot().last_error == "KEYS_BUSY",
+               "one key operation at a time");
+        AoratonCommand unlock;
+        expect(key_mailbox.pop_command(unlock) && unlock.type == AoratonCommandType::UnlockVault &&
+                   unlock.plaintext == "synthetic passphrase",
+               "passphrase crosses the mailbox inside the command");
+        unlock.clear_plaintext();
+        expect(unlock.plaintext.empty(), "command wipes the passphrase");
+        AoratonEvent changed;
+        changed.type = AoratonEventType::KeysChanged;
+        changed.key_state = AoratonKeyState::Ready;
+        changed.key_count = 3;
+        push(key_mailbox, std::move(changed), "keys changed queued");
+        keys.tick(1);
+        expect(keys.snapshot().key_state == AoratonKeyState::Ready && keys.snapshot().key_count == 3,
+               "key state and count reported");
+        expect(keys.add_invite_key("https://aoraton.com/#room=x&key=v2.Q&k=synthetic"), "invite enqueued");
+        AoratonCommand invite;
+        expect(key_mailbox.pop_command(invite) && invite.type == AoratonCommandType::AddInviteKey, "invite command");
+        AoratonEvent revoked;
+        revoked.type = AoratonEventType::SessionRevoked;
+        push(key_mailbox, std::move(revoked), "revocation queued");
+        keys.tick(1);
+        expect(keys.snapshot().key_state == AoratonKeyState::Unknown && keys.snapshot().key_count == 0,
+               "revocation resets key state");
+    }
+
     AoratonMailbox bounded;
     for (std::size_t index = 0; index < AoratonMailbox::kMaxEvents; ++index) {
         AoratonEvent event;

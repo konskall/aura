@@ -12,7 +12,7 @@ The owner asked for every proposal from the v12 review: a real assistant (follow
 
 1. **The model proposes, the owner decides.** Answers may end with one `ACTION: {json}` line. The device parses it strictly (`parse_assistant_answer`: fixed types, bounded fields, last line only) and shows a confirmation card. Nothing runs without a tap. A message goes through the existing Aoraton confirmation screen.
 2. **Device facts are data.** Time, battery, Wi‑Fi, the loaded forecast, timers, alarms and reminders travel with each question as a quoted block; the provider is told to ignore instructions inside it. Notes and phone notifications are added **only** when the question is about them (`question_mentions_notes/phone`).
-3. **Memory is short and local.** Up to four exchanges, 600 bytes each, kept in RAM and forgotten after five quiet minutes or on «Νέα συζήτηση». Never written to disk or logs.
+3. **Memory is short and local.** Up to four exchanges, 600 bytes each, kept in RAM and forgotten after five quiet minutes or on «Νέο θέμα». Never written to disk or logs.
 4. **Truthful capabilities.** `CompanionCapabilities` says what this platform can do now (microphone, recognition, Greek voice, IMU, phone link, wake word). The UI disables or explains the rest. DEMO stand-ins say DEMO.
 5. **Same models on both platforms.** All logic lives in `shared/core` and is unit-tested; the simulator and the firmware only move bytes.
 
@@ -28,7 +28,7 @@ The owner asked for every proposal from the v12 review: a real assistant (follow
 
 ## Features
 
-- **Conversation:** follow-ups use the memory; the Answer screen offers «Νέα συζήτηση» while memory is active and a speaker button when a Greek voice exists.
+- **Conversation:** follow-ups use the memory; the Answer screen offers «Νέο θέμα» (clears the memory; «Νέα συζήτηση» did not fit the half-width button) while memory is active and a speaker button when a Greek voice exists.
 - **Voice:** tap the orb; the PC microphone records 16 kHz mono with an energy VAD (stops 1.2 s after speech, 15 s max, 6 s without speech → «Δεν σε άκουσα»). The halo follows the real level. Recognition → Codex → the spoken answer through the existing PCM path (Speaking screen).
 - **Weather questions** without a city are answered from the loaded forecast once one exists; city changes still open the Weather screens.
 - **Clock app:** timers (nine one-tap presets), alarms (hour/minute rollers, once or daily), reminders (text, then a time choice). Full-screen alert with pulsing ring and a repeating chime; «Τέλος», «Αναβολή 5 λεπτά» or «+1 λεπτό». Alarms missed for over an hour are not rung late; overdue reminders are.

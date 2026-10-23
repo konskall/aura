@@ -1,4 +1,20 @@
-# Aoraton v11 progress
+# Aoraton progress
+
+## 2026-10-23: account sign-in (simulator)
+
+Design: `docs/design/AURA_AORATON_ACCOUNT_LOGIN_DESIGN.md`; plan: `docs/superpowers/plans/2026-10-23-aoraton-account-login.md`.
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Bounded JSON reader (shared) | TEST VERIFIED | `aura_json_reader_tests`, ESP-IDF flag check |
+| Account protocol: PKCE, PostgREST paths, parsers, invite, key vault | TEST VERIFIED | `aura_aoraton_account_tests` (RFC 7636, RFC 7914 PBKDF2, WebCrypto vault vectors) |
+| Shared account worker: sign-in, refresh rotation, 401 retry, revocation, rooms/overview, polling, notifications, sends (ack/reject/uncertain→reconciled), vault/invite keys, sign-out | TEST VERIFIED | `aura_aoraton_account_worker_tests` against an in-memory fake |
+| Windows platform: WinHTTP, loopback callback, DPAPI store, end to end | TEST VERIFIED | `aura_aoraton_account_smoke` against the loopback Node fake |
+| UI: sign-in, waiting, timeout hint, re-sign-in, account page, keys, invite paste, polling label | TEST VERIFIED | pointer checks `aoraton.sign_in/paste_invite/keys_row/unlock_submit/sign_out`; captures `aoraton-account-*` |
+| Real aoraton.com sign-in, keys, read and send | NOT RUN | Needs the owner: `scripts/setup-aoraton.ps1` (done locally), `run.bat`, sign in |
+| ESP32 sign-in (via phone) | NOT STARTED | Shared worker is ready behind its four interfaces |
+
+## v11 baseline
 
 Updated: 2026-10-21
 

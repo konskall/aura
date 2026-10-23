@@ -25,7 +25,9 @@ First-time setup and normal demo mode:
 .\scripts\dev-simulator.ps1
 ```
 
-To connect the Assistant screen to the locally authenticated Codex CLI:
+For testing, double-click `run.bat` (or run it from a terminal): it builds what changed and opens the simulator with Codex answers. `run.bat mock` uses the DEMO answers instead. To use your own aoraton.com account, run `.\scripts\setup-aoraton.ps1` once (see `docs/SIMULATOR.md`).
+
+To connect the Assistant screen to the locally authenticated Codex CLI by hand:
 
 ```powershell
 codex login status

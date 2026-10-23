@@ -163,6 +163,8 @@ void RealAoratonService::clear_session_data() noexcept {
     snapshot_.pairing_code.clear();
     snapshot_.pairing_sas.clear();
     snapshot_.pairing_seconds_remaining = 0;
+    snapshot_.key_state = AoratonKeyState::Unknown;
+    snapshot_.key_count = 0;
     pairing_elapsed_ms_ = 0;
 }
 
@@ -503,6 +505,10 @@ void RealAoratonService::process(AoratonEvent event) {
             snapshot_.pairing_seconds_remaining = 0;
             snapshot_.last_error = event.error.empty() ? "PAIRING_FAILED" : bounded_utf8(std::move(event.error), 96);
             break;
+        case AoratonEventType::KeysChanged:
+            snapshot_.key_state = event.key_state;
+            snapshot_.key_count = std::min<std::uint32_t>(event.key_count, static_cast<std::uint32_t>(kMaxRooms * 8));
+            break;
         case AoratonEventType::Failure:
             snapshot_.last_error = event.error.empty() ? "AORATON_FAILURE" : bounded_utf8(std::move(event.error), 96);
             break;
@@ -599,6 +605,40 @@ bool RealAoratonService::cancel_pairing() {
     snapshot_.last_error.clear();
     touch();
     return true;
+}
+
+bool RealAoratonService::enqueue_secret(AoratonCommandType type, const std::string& secret) {
+    if (snapshot_.pairing != AoratonPairingState::Paired) {
+        snapshot_.last_error = "PAIRING_REQUIRED";
+        touch();
+        return false;
+    }
+    if (secret.empty() || secret.size() > 4096) {
+        snapshot_.last_error = type == AoratonCommandType::UnlockVault ? "PASSPHRASE_EMPTY" : "INVITE_INVALID";
+        touch();
+        return false;
+    }
+    if (snapshot_.key_state == AoratonKeyState::Unlocking) {
+        snapshot_.last_error = "KEYS_BUSY";
+        touch();
+        return false;
+    }
+    AoratonCommand command;
+    command.type = type;
+    command.plaintext = secret;
+    if (!enqueue(std::move(command))) return false;
+    snapshot_.key_state = AoratonKeyState::Unlocking;
+    snapshot_.last_error.clear();
+    touch();
+    return true;
+}
+
+bool RealAoratonService::unlock_keys(const std::string& passphrase) {
+    return enqueue_secret(AoratonCommandType::UnlockVault, passphrase);
+}
+
+bool RealAoratonService::add_invite_key(const std::string& invite) {
+    return enqueue_secret(AoratonCommandType::AddInviteKey, invite);
 }
 
 bool RealAoratonService::unpair() {

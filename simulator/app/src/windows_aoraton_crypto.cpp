@@ -378,4 +378,49 @@ bool WindowsAoratonCryptoV2::safety_code_material(const AoratonRoomKey& room_key
     return true;
 }
 
+bool WindowsAoratonAccountCrypto::random_bytes(std::uint8_t* destination, std::size_t size) {
+    return destination && fits_ulong(size) &&
+           BCryptGenRandom(nullptr, destination, static_cast<ULONG>(size), BCRYPT_USE_SYSTEM_PREFERRED_RNG) >= 0;
+}
+
+bool WindowsAoratonAccountCrypto::sha256(const std::uint8_t* data,
+                                         std::size_t size,
+                                         std::array<std::uint8_t, 32>& digest) {
+    return WindowsAoratonCryptoV2::sha256(data, size, digest);
+}
+
+bool WindowsAoratonAccountCrypto::pbkdf2_sha256(const std::string& passphrase,
+                                                const std::vector<std::uint8_t>& salt,
+                                                std::uint32_t iterations,
+                                                std::array<std::uint8_t, 32>& key) {
+    if (iterations == 0 || !fits_ulong(passphrase.size()) || !fits_ulong(salt.size())) return false;
+    AlgorithmHandle algorithm;
+    if (BCryptOpenAlgorithmProvider(algorithm.out(), BCRYPT_SHA256_ALGORITHM, nullptr,
+                                    BCRYPT_ALG_HANDLE_HMAC_FLAG) < 0) return false;
+    return BCryptDeriveKeyPBKDF2(algorithm,
+                                 reinterpret_cast<PUCHAR>(const_cast<char*>(passphrase.data())),
+                                 static_cast<ULONG>(passphrase.size()),
+                                 const_cast<PUCHAR>(salt.data()), static_cast<ULONG>(salt.size()),
+                                 iterations, key.data(), static_cast<ULONG>(key.size()), 0) >= 0;
+}
+
+bool WindowsAoratonAccountCrypto::aes_gcm_open(const std::array<std::uint8_t, 32>& key,
+                                               const std::string& wire,
+                                               std::string& plaintext) {
+    plaintext.clear();
+    AoratonV2Envelope envelope;
+    AoratonCryptoError error = AoratonCryptoError::None;
+    if (!aoraton_parse_v2_envelope(wire, envelope, error)) return false;
+    std::vector<std::uint8_t> bytes;
+    bool authentication_failed = false;
+    if (!WindowsAoratonCryptoV2::aes_gcm_decrypt(key, envelope.iv.data(), envelope.ciphertext_and_tag, bytes,
+                                                 authentication_failed)) {
+        clear_bytes(bytes.data(), bytes.size());
+        return false;
+    }
+    plaintext.assign(bytes.begin(), bytes.end());
+    clear_bytes(bytes.data(), bytes.size());
+    return true;
+}
+
 }  // namespace aura

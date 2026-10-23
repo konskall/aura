@@ -23,6 +23,8 @@ enum class AoratonCommandType {
     ConfirmPairingSas,
     CancelPairing,
     Unpair,
+    UnlockVault,
+    AddInviteKey,
 };
 
 class AoratonCommand final {
@@ -59,6 +61,7 @@ enum class AoratonEventType {
     PairingAwaitingSas,
     PairingExpired,
     PairingFailed,
+    KeysChanged,
     Failure,
 };
 
@@ -79,6 +82,8 @@ struct AoratonEvent {
     std::string pairing_code;
     std::string pairing_sas;
     std::uint32_t pairing_seconds_remaining{0};
+    AoratonKeyState key_state{AoratonKeyState::Unknown};
+    std::uint32_t key_count{0};
 };
 
 class AoratonMailbox final {
@@ -124,9 +129,12 @@ public:
     bool confirm_pairing_sas() override;
     bool cancel_pairing() override;
     bool unpair() override;
+    bool unlock_keys(const std::string& passphrase) override;
+    bool add_invite_key(const std::string& invite) override;
     const AoratonSnapshot& snapshot() const noexcept override { return snapshot_; }
 
 private:
+    bool enqueue_secret(AoratonCommandType type, const std::string& secret);
     AoratonRoom* find_room(const std::string& room_id);
     AoratonMessage* find_outgoing(const std::string& client_message_id);
     void process(AoratonEvent event);

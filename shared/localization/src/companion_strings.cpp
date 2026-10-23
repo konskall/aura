@@ -42,7 +42,7 @@ const CompanionStrings& companion_el_gr() noexcept {
 
         s.transcribing_title = "Σε άκουσα";
         s.transcribing_detail = "Αναγνώριση ομιλίας…";
-        s.new_conversation = "Νέα συζήτηση";
+        s.new_conversation = "Νέο θέμα";
         s.memory_format = "Συνέχεια συζήτησης · %u";
         s.action_question = "Να το κάνω;";
         s.action_timer_format = "Χρονόμετρο %s";
@@ -185,6 +185,38 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.update_block_offline = "Χρειάζεται Wi‑Fi";
         s.update_block_battery = "Χρειάζεται μπαταρία 30 τοις εκατό ή φόρτιση";
         s.update_demo_note = "DEMO · δεν εγκαθίσταται τίποτα";
+
+        s.aoraton_sign_in = "Σύνδεση με Google";
+        s.aoraton_sign_in_help = "Ο λογαριασμός σου aoraton.com ανοίγει στον browser του υπολογιστή.";
+        s.aoraton_sign_in_waiting = "Ολοκλήρωσε τη σύνδεση στον browser του υπολογιστή";
+        s.aoraton_account_title = "Λογαριασμός aoraton";
+        s.aoraton_sign_out = "Αποσύνδεση";
+        s.aoraton_reauth = "Χρειάζεται νέα σύνδεση";
+        s.aoraton_reauth_detail = "Η σύνδεση με το aoraton.com έληξε ή ανακλήθηκε. Τα κλειδιά δωματίων κρατήθηκαν.";
+        s.aoraton_timeout_title = "Δεν ήρθε απάντηση";
+        s.aoraton_timeout_detail =
+            "Αν έμεινες στο aoraton.com, πρόσθεσε στις Redirect URLs του Supabase: http://127.0.0.1:4779/**";
+        s.aoraton_sign_in_failed = "Η σύνδεση δεν ολοκληρώθηκε. Δοκίμασε ξανά.";
+        s.aoraton_sign_in_network = "Δεν υπάρχει σύνδεση με το aoraton.com";
+        s.aoraton_sign_in_unavailable = "Ο browser δεν άνοιξε. Κλείσε άλλο ανοιχτό AURA και δοκίμασε ξανά.";
+        s.aoraton_live_polling = "E2EE · ανανέωση κάθε 10 δευτερόλεπτα";
+        s.aoraton_room_locked = "Κλειδωμένο";
+        s.aoraton_keys = "Κλειδιά δωματίων";
+        s.aoraton_keys_one = "1 δωμάτιο";
+        s.aoraton_keys_format = "%u δωμάτια";
+        s.aoraton_keys_none = "Κλειδωμένα";
+        s.aoraton_keys_unlocking = "Ξεκλείδωμα…";
+        s.aoraton_unlock_title = "Συνθηματικό";
+        s.aoraton_unlock_placeholder = "Συνθηματικό αντιγράφου";
+        s.aoraton_unlock_hint = "Από το θησαυροφυλάκιο κλειδιών";
+        s.aoraton_unlock = "Ξεκλείδωμα";
+        s.aoraton_paste_invite = "Πρόσκληση";
+        s.aoraton_paste_hint = "Επικόλληση συνδέσμου";
+        s.aoraton_keys_wrong = "Λάθος συνθηματικό";
+        s.aoraton_keys_not_configured = "Δεν έχεις θησαυροφυλάκιο κλειδιών";
+        s.aoraton_keys_not_member = "Δεν είσαι μέλος εκεί";
+        s.aoraton_keys_invalid_invite = "Δεν είναι πρόσκληση";
+        s.aoraton_keys_failed = "Αποτυχία· δοκίμασε ξανά";
         return s;
     }();
     return strings;
@@ -210,7 +242,7 @@ const CompanionStrings& companion_en_us() noexcept {
 
         s.transcribing_title = "Got it";
         s.transcribing_detail = "Recognising speech…";
-        s.new_conversation = "New chat";
+        s.new_conversation = "New topic";
         s.memory_format = "Continuing · %u";
         s.action_question = "Shall I?";
         s.action_timer_format = "Timer %s";
@@ -353,6 +385,38 @@ const CompanionStrings& companion_en_us() noexcept {
         s.update_block_offline = "Needs Wi‑Fi";
         s.update_block_battery = "Needs 30 percent battery or charging";
         s.update_demo_note = "DEMO · nothing is installed";
+
+        s.aoraton_sign_in = "Sign in with Google";
+        s.aoraton_sign_in_help = "Your aoraton.com account opens in the PC's browser.";
+        s.aoraton_sign_in_waiting = "Finish signing in in the PC's browser";
+        s.aoraton_account_title = "aoraton account";
+        s.aoraton_sign_out = "Sign out";
+        s.aoraton_reauth = "Sign in again";
+        s.aoraton_reauth_detail = "The aoraton.com session expired or was revoked. Room keys were kept.";
+        s.aoraton_timeout_title = "No answer";
+        s.aoraton_timeout_detail =
+            "If you stayed on aoraton.com, add this to the Supabase Redirect URLs: http://127.0.0.1:4779/**";
+        s.aoraton_sign_in_failed = "Sign-in did not finish. Try again.";
+        s.aoraton_sign_in_network = "aoraton.com is unreachable";
+        s.aoraton_sign_in_unavailable = "The browser did not open. Close any other AURA and try again.";
+        s.aoraton_live_polling = "E2EE · refreshes every 10 seconds";
+        s.aoraton_room_locked = "Locked";
+        s.aoraton_keys = "Room keys";
+        s.aoraton_keys_one = "1 room";
+        s.aoraton_keys_format = "%u rooms";
+        s.aoraton_keys_none = "Locked";
+        s.aoraton_keys_unlocking = "Unlocking…";
+        s.aoraton_unlock_title = "Passphrase";
+        s.aoraton_unlock_placeholder = "Backup passphrase";
+        s.aoraton_unlock_hint = "From your key vault";
+        s.aoraton_unlock = "Unlock";
+        s.aoraton_paste_invite = "Invite";
+        s.aoraton_paste_hint = "Paste the link";
+        s.aoraton_keys_wrong = "Wrong passphrase";
+        s.aoraton_keys_not_configured = "No key vault set up";
+        s.aoraton_keys_not_member = "You're not a member";
+        s.aoraton_keys_invalid_invite = "Not an invite link";
+        s.aoraton_keys_failed = "Failed; try again";
         return s;
     }();
     return strings;

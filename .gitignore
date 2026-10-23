@@ -26,3 +26,5 @@ __pycache__/
 # Generated screenshots, motion frames, evidence sheets and pre-change source
 # archives (~580 MB). Regenerate with scripts/test.ps1; ledger: docs/VERIFICATION.md.
 artifacts/
+# Local aoraton.com settings (scripts/setup-aoraton.ps1)
+config/*.local.json

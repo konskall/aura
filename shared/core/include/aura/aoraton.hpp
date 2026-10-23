@@ -38,6 +38,18 @@ enum class AoratonPairingState {
     Error,
 };
 
+// Room-key availability for the signed-in account (vault or invite link).
+enum class AoratonKeyState {
+    Unknown,
+    Unlocking,
+    Ready,
+    NotConfigured,
+    WrongPassphrase,
+    NotMember,
+    InvalidInvite,
+    Failed,
+};
+
 struct AoratonRoom {
     std::string id;
     std::string display_name;
@@ -92,6 +104,8 @@ struct AoratonSnapshot {
     std::string pairing_sas;
     std::uint32_t pairing_seconds_remaining{0};
     std::size_t max_message_bytes{512};
+    AoratonKeyState key_state{AoratonKeyState::Unknown};
+    std::uint32_t key_count{0};
 };
 
 class IAoratonService {
@@ -112,6 +126,10 @@ public:
     virtual bool confirm_pairing_sas() { return false; }
     virtual bool cancel_pairing() { return false; }
     virtual bool unpair() { return false; }
+    // The passphrase and the invite (which carries a room key) only cross the
+    // mailbox inside a command that wipes them; neither is kept in a snapshot.
+    virtual bool unlock_keys(const std::string&) { return false; }
+    virtual bool add_invite_key(const std::string&) { return false; }
     virtual const AoratonSnapshot& snapshot() const noexcept = 0;
 };
 

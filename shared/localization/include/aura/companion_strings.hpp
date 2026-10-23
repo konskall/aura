@@ -178,6 +178,38 @@ struct CompanionStrings {
     const char* update_block_offline;
     const char* update_block_battery;
     const char* update_demo_note;
+
+    // aoraton.com account (sign-in through the PC browser, room keys)
+    const char* aoraton_sign_in;
+    const char* aoraton_sign_in_help;
+    const char* aoraton_sign_in_waiting;
+    const char* aoraton_account_title;
+    const char* aoraton_sign_out;
+    const char* aoraton_reauth;
+    const char* aoraton_reauth_detail;
+    const char* aoraton_timeout_title;
+    const char* aoraton_timeout_detail;
+    const char* aoraton_sign_in_failed;
+    const char* aoraton_sign_in_network;
+    const char* aoraton_sign_in_unavailable;
+    const char* aoraton_live_polling;
+    const char* aoraton_room_locked;
+    const char* aoraton_keys;
+    const char* aoraton_keys_one;
+    const char* aoraton_keys_format;  // %u
+    const char* aoraton_keys_none;
+    const char* aoraton_keys_unlocking;
+    const char* aoraton_unlock_title;
+    const char* aoraton_unlock_placeholder;
+    const char* aoraton_unlock_hint;
+    const char* aoraton_unlock;
+    const char* aoraton_paste_invite;
+    const char* aoraton_paste_hint;
+    const char* aoraton_keys_wrong;
+    const char* aoraton_keys_not_configured;
+    const char* aoraton_keys_not_member;
+    const char* aoraton_keys_invalid_invite;
+    const char* aoraton_keys_failed;
 };
 
 const CompanionStrings& companion_el_gr() noexcept;

@@ -1,0 +1,31 @@
+{
+  "note": "Synthetic vectors only (tests/interop/make_aoraton_vault_vectors.mjs).",
+  "passphrase": "AURA synthetic vault ✓",
+  "kdf_salt": "AAECAwQFBgcICQoLDA0ODw",
+  "kdf_iters": 1000,
+  "check_blob": "v2:AQEBAQEBAQEBAQEB:YXOTgIFeatdEav2oqhUI5QNFlsEWjei9nm5pEX5YpqAdAf0",
+  "rows": [
+    {
+      "room_key": "v2.QUFBQUFBQUFBQUFBQUFBQUFB",
+      "blob": "v2:AgICAgICAgICAgIC:nOX54oxW2vemHTBxE66FDdAyXV0o1xLYRETXpoEwIzVEO4uDfpajeaR-0NjszhtsHC5Iww3OfDRJU9tmZiN2ne_9LJCWkyvSIJPJp_6ogguU1VmsbigAc-u72yF9pcWcShmKWpXaxg"
+    },
+    {
+      "room_key": "demo_room_1234",
+      "blob": "v2:AwMDAwMDAwMDAwMD:VzxAQKyKM3GlIqQTja3CXRjWZe9DjKiPvlwj2y2vPdHDT3g-v-s5S5yeQJ4TJULSynP6wgPaOQX4JRyIR7qZ-Rj5C1fDuNnprGcf4l9lQ84GTW_F96zGF5F9Q_Xh3MX8deYY2fSP"
+    },
+    {
+      "room_key": "v2.WldaWldaWldaWldaWldaWlda",
+      "blob": "v2:CQkJCQkJCQkJCQkJ:hS2gRypyHFSMhKfJoOBrwFver-ApO19ndChpTkGh7SzF0VgffFnaXEHCZIwu1KzC_lQmUeTOhmvgeDvmdzhqIhI5baa3GfInNfHhPWCK-bTsVmWibdolZKvxDcQjC4sWRJnjoPqo4w"
+    }
+  ],
+  "expected": [
+    {
+      "room_key": "v2.QUFBQUFBQUFBQUFBQUFBQUFB",
+      "rk_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "room_key": "demo_room_1234",
+      "rk_hex": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ]
+}

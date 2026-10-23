@@ -1,5 +1,6 @@
 #pragma once
 
+#include "aura/aoraton_account.hpp"
 #include "aura/aoraton_crypto.hpp"
 
 #include <array>
@@ -12,6 +13,8 @@
 namespace aura {
 
 class WindowsAoratonCryptoV2 final : public IAoratonCryptoV2 {
+    friend class WindowsAoratonAccountCrypto;
+
 public:
     using RandomSource = std::function<bool(std::uint8_t*, std::size_t)>;
 
@@ -58,6 +61,20 @@ private:
                                 bool& authentication_failed);
 
     RandomSource random_source_;
+};
+
+// Account-level primitives (PKCE, the key vault) over the same CNG providers.
+class WindowsAoratonAccountCrypto final : public IAoratonAccountCrypto {
+public:
+    bool random_bytes(std::uint8_t* destination, std::size_t size) override;
+    bool sha256(const std::uint8_t* data, std::size_t size, std::array<std::uint8_t, 32>& digest) override;
+    bool pbkdf2_sha256(const std::string& passphrase,
+                       const std::vector<std::uint8_t>& salt,
+                       std::uint32_t iterations,
+                       std::array<std::uint8_t, 32>& key) override;
+    bool aes_gcm_open(const std::array<std::uint8_t, 32>& key,
+                      const std::string& wire,
+                      std::string& plaintext) override;
 };
 
 }  // namespace aura

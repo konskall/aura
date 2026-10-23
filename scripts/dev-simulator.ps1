@@ -34,6 +34,15 @@ if ($Provider -eq 'codex' -and -not $env:AURA_CODEX_PATH -and -not (Get-Command 
     if ($null -ne $appCodex) { $env:AURA_CODEX_PATH = $appCodex.FullName }
 }
 $env:AURA_BRIDGE_WORKDIR = Join-Path $repo 'bridge\runtime\assistant_sandbox'
+# Your own aoraton.com account: config\aoraton.local.json comes from setup-aoraton.ps1
+# (public Supabase URL and anon key only). Without it the Aoraton screens show DEMO rooms.
+$aoratonConfig = Join-Path $repo 'config\aoraton.local.json'
+if (-not $Smoke -and -not $env:AURA_AORATON_MODE -and (Test-Path -LiteralPath $aoratonConfig)) {
+    $aoraton = Get-Content -LiteralPath $aoratonConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+    $env:AURA_AORATON_URL = $aoraton.url
+    $env:AURA_AORATON_ANON_KEY = $aoraton.anon_key
+    $env:AURA_AORATON_MODE = 'live'
+}
 
 $bridge = $null
 $controls = $null
@@ -59,6 +68,11 @@ try {
     $controlUrl = "http://127.0.0.1:4777/?token=$token"
     Write-Host "AURA control panel: $controlUrl"
     Write-Host "Provider: $Provider"
+    if ($env:AURA_AORATON_MODE -eq 'live') {
+        Write-Host 'Aoraton: your aoraton.com account (Aoraton > Sign in with Google)'
+    } else {
+        Write-Host 'Aoraton: DEMO rooms (run scripts\setup-aoraton.ps1 to use your account)'
+    }
     $whisper = Join-Path $repo '.tools\whisper\bin\whisper-cli.exe'
     if (-not (Test-Path -LiteralPath $whisper)) {
         Write-Host 'Speech recognition: not installed (run scripts\setup-voice.ps1)'

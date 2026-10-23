@@ -72,6 +72,8 @@ enum class UiView {
     PhoneLink,
     DisplaySettings,
     Update,
+    // aoraton.com account
+    AoratonUnlock,
 };
 
 // What this platform can do right now; the UI never offers the rest.
@@ -114,6 +116,10 @@ struct AuraUiCallbacks {
     std::function<bool()> on_aoraton_pair_confirm_sas;
     std::function<void()> on_aoraton_pair_cancel;
     std::function<void()> on_aoraton_unpair;
+    // The passphrase is handed over once and the field is cleared; the invite
+    // link is read by the platform (the PC clipboard) and never shown.
+    std::function<bool(const std::string& passphrase)> on_aoraton_unlock;
+    std::function<bool()> on_aoraton_paste_invite;
     std::function<void()> on_weather_open;
     std::function<void()> on_weather_refresh;
     std::function<void(const std::string& query)> on_weather_search;

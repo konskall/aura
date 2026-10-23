@@ -9,7 +9,9 @@ Windows 10/11, PowerShell 5.1+, Git and network access are needed for first setu
 .\scripts\dev-simulator.ps1
 ```
 
-Demo Mode is the default. To use the locally authenticated Codex CLI for Assistant turns:
+For everyday testing, `run.bat` in the repository root runs `build-simulator.ps1` (incremental) and then `dev-simulator.ps1 -Provider codex`; `run.bat mock` selects Demo Mode. It refuses to start a second copy while a simulator window is open, and it pauses on failure so a double-clicked window does not vanish.
+
+Demo Mode is the default of `dev-simulator.ps1`. To use the locally authenticated Codex CLI for Assistant turns:
 
 ```powershell
 codex login status
@@ -17,6 +19,18 @@ codex login status
 ```
 
 The second command starts hidden loopback helpers, opens the control panel and runs the visible simulator in the foreground. Closing the simulator tears down helpers owned by the script. When `codex` is not on `PATH`, the script uses the newest `codex.exe` shipped with the Codex desktop app (`%LOCALAPPDATA%\OpenAI\Codex\bin\…`) for that run only; `AURA_CODEX_PATH` overrides it.
+
+## Your aoraton.com account
+
+Run `.\scripts\setup-aoraton.ps1` once. It reads the public Supabase URL and anon key from `..\incognitochat\services\supabaseConfig.ts` (read-only) into the git-ignored `config\aoraton.local.json`. After that, `run.bat` and `dev-simulator.ps1` start Aoraton in live mode.
+
+1. Open Aoraton and choose **Σύνδεση με Google**.
+2. Finish signing in in the browser that opens.
+3. Open **Κλειδιά δωματίων** and type the aoraton key-vault passphrase. Alternatively, copy an invite link on aoraton.com and choose **Πρόσκληση**.
+
+If the browser stays on aoraton.com, add `http://127.0.0.1:4779/**` to Supabase → Authentication → URL Configuration → Redirect URLs.
+
+Rooms refresh every 10 s (polling, not realtime). Sending always goes through the confirmation screen. Without the config file, Aoraton shows DEMO rooms.
 
 ## Voice and companion features (v13)
 

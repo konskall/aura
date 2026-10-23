@@ -114,9 +114,12 @@ def bright_border_pixels(frame: Image.Image) -> int:
 
 
 def parse_performance(path: Path) -> dict[str, object]:
-    text = path.read_text(encoding="utf-16", errors="ignore")
+    # Tee-Object writes UTF-16 or UTF-8 depending on the PowerShell host; Python 3.14's
+    # text reader rejects UTF-16 without a BOM, so decode the bytes directly.
+    raw = path.read_bytes()
+    text = raw.decode("utf-16", errors="ignore")
     if "AURA motion evidence:" not in text:
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        text = raw.decode("utf-8-sig", errors="ignore")
     values = {}
     for key in ("mercury_frames", "mercury_estimated_hz", "mercury_buffer_bytes",
                 "handler_avg_ms", "handler_max_ms", "lvgl_used_bytes", "lvgl_fragmentation"):

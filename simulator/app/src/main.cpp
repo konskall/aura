@@ -6,6 +6,7 @@
 #include "aura/companion_runtime.hpp"
 #include "aura/control_events.hpp"
 #include "aura/device_status.hpp"
+#include "aura/aoraton_account_transport.hpp"
 #include "aura/fail_closed_aoraton_transport.hpp"
 #include "aura/local_codex_provider.hpp"
 #include "aura/mock_provider.hpp"
@@ -274,18 +275,37 @@ int main(int argc, char** argv) {
     std::unique_ptr<aura::AoratonMailbox> aoraton_mailbox;
     std::unique_ptr<aura::IAoratonService> aoraton_service;
     std::unique_ptr<aura::simulator::FailClosedAoratonTransport> aoraton_fail_closed_transport;
+    std::unique_ptr<aura::simulator::AoratonAccountTransport> aoraton_account_transport;
+    aura::WindowsAoratonAccountCrypto aoraton_id_crypto;
     if (aoraton_mode_name == "mock") {
         aoraton_service = std::make_unique<aura::MockAoratonService>();
     } else if (aoraton_mode_name == "test" || aoraton_mode_name == "live") {
         const auto runtime_mode = aoraton_mode_name == "test" ?
             aura::AoratonRuntimeMode::IntegrationTest : aura::AoratonRuntimeMode::Live;
         aoraton_mailbox = std::make_unique<aura::AoratonMailbox>();
-        aoraton_service = std::make_unique<aura::RealAoratonService>(
-            *aoraton_mailbox, runtime_mode, aoraton_client_message_id);
-        aoraton_fail_closed_transport =
-            std::make_unique<aura::simulator::FailClosedAoratonTransport>(*aoraton_mailbox);
-        std::cerr << "AURA Aoraton " << (runtime_mode == aura::AoratonRuntimeMode::IntegrationTest ? "TEST" : "LIVE")
-                  << ": transport disabled until a reviewed isolated pairing backend is configured\n";
+        aura::simulator::AoratonTransportOptions aoraton_options;
+        std::string aoraton_config_error;
+        // The owner's own aoraton.com account (docs/design/AURA_AORATON_ACCOUNT_LOGIN_DESIGN.md);
+        // capture and interaction runs never sign in, so they keep the fail-closed adapter.
+        const bool account_configured = aura::simulator::load_aoraton_transport_options(aoraton_options,
+                                                                                        aoraton_config_error);
+        if (account_configured) {
+            aoraton_service = std::make_unique<aura::RealAoratonService>(
+                *aoraton_mailbox, runtime_mode, [&aoraton_id_crypto] {
+                    return aura::aoraton_new_client_message_id(aoraton_id_crypto);
+                });
+            aoraton_account_transport = std::make_unique<aura::simulator::AoratonAccountTransport>(
+                *aoraton_mailbox, std::move(aoraton_options));
+            std::cerr << "AURA Aoraton " << (runtime_mode == aura::AoratonRuntimeMode::IntegrationTest ? "TEST" : "LIVE")
+                      << ": account sign-in through the PC browser\n";
+        } else {
+            aoraton_service = std::make_unique<aura::RealAoratonService>(
+                *aoraton_mailbox, runtime_mode, aoraton_client_message_id);
+            aoraton_fail_closed_transport =
+                std::make_unique<aura::simulator::FailClosedAoratonTransport>(*aoraton_mailbox);
+            std::cerr << "AURA Aoraton " << (runtime_mode == aura::AoratonRuntimeMode::IntegrationTest ? "TEST" : "LIVE")
+                      << ": transport disabled (" << aoraton_config_error << "; run scripts\\setup-aoraton.ps1)\n";
+        }
     } else {
         std::cerr << "AURA: invalid AURA_AORATON_MODE='" << aoraton_mode_name
                   << "' (expected mock, test, or live); refusing implicit fallback\n";
@@ -355,6 +375,11 @@ int main(int argc, char** argv) {
         int wifi_scan{0};
         int wifi_connect{0};
         int wifi_forget{0};
+        int aoraton_unlock{0};
+        int aoraton_unlock_bytes{0};
+        int aoraton_paste{0};
+        int aoraton_sign_in{0};
+        int aoraton_sign_out{0};
     } interaction_counts;
 
     std::function<void()> provider_changed_hook;
@@ -482,6 +507,8 @@ int main(int argc, char** argv) {
     const bool deterministic_run = smoke || ui_stress || !capture_scenario.empty() ||
         !interaction_report.empty() || !motion_scenario.empty() || !weather_live_city.empty() ||
         aoraton_pairing_smoke;
+    // Deterministic runs never sign in to the owner's account.
+    if (aoraton_account_transport && !deterministic_run) aoraton_account_transport->start();
     aura::WifiModel wifi_model;
     aura::simulator::WindowsWifiService wifi_service;
     aura::simulator::WifiHostScan wifi_host;
@@ -606,14 +633,26 @@ int main(int argc, char** argv) {
             }
             return;
         }
+        const auto previous = controller.snapshot();
         if (pending) {
-            controller.dispatch({aura::EventType::Fail, "BUSY"});
-            apply();
-            return;
+            // A repeated send while the same question is being answered waits for that answer.
+            if (pending_generation == previous.turn_generation) return;
+            // The reply belongs to a turn that already ended (an error or a reset); it is never shown.
+            if (provider) provider->cancel();
+            pending = false;
+        }
+        // A shown answer, confirmation card, error or listening screen closes first, so the
+        // new question is the one on screen and in the conversation memory.
+        if (previous.state != aura::AssistantState::Idle && previous.state != aura::AssistantState::Transcribing) {
+            if (cancel_voice_hook) cancel_voice_hook();
+            const auto audio_state = audio.diagnostics().state;
+            if (audio_state == aura::AudioState::Playing || audio_state == aura::AudioState::Paused) audio.stop();
+            controller.dispatch({aura::EventType::Reset});
         }
         if (prompt.empty()) prompt = text.capture_short_prompt;
-        controller.dispatch({aura::EventType::TurnStarted, prompt});
+        const bool started = controller.dispatch({aura::EventType::TurnStarted, prompt});
         apply();
+        if (!started) return;
         pending_generation = controller.snapshot().turn_generation;
         if (pending_reply.valid()) retired_replies.push_back(std::move(pending_reply));
         pending_reply = provider->start_turn(turn_request_hook ? turn_request_hook(std::move(prompt)) :
@@ -712,10 +751,36 @@ int main(int argc, char** argv) {
         ++interaction_counts.aoraton_cancel;
         aoraton.cancel_send();
     };
-    ui_callbacks.on_aoraton_pair_start = [&] { return aoraton.begin_pairing(); };
+    ui_callbacks.on_aoraton_pair_start = [&] {
+        ++interaction_counts.aoraton_sign_in;
+        return aoraton.begin_pairing();
+    };
     ui_callbacks.on_aoraton_pair_confirm_sas = [&] { return aoraton.confirm_pairing_sas(); };
     ui_callbacks.on_aoraton_pair_cancel = [&] { aoraton.cancel_pairing(); };
-    ui_callbacks.on_aoraton_unpair = [&] { aoraton.unpair(); };
+    ui_callbacks.on_aoraton_unpair = [&] {
+        ++interaction_counts.aoraton_sign_out;
+        aoraton.unpair();
+    };
+    ui_callbacks.on_aoraton_unlock = [&](const std::string& passphrase) {
+        ++interaction_counts.aoraton_unlock;
+        interaction_counts.aoraton_unlock_bytes = static_cast<int>(passphrase.size());
+        return aoraton.unlock_keys(passphrase);
+    };
+    // The invite link (it carries a room key) comes from the PC clipboard, never
+    // through the control panel's event log, and is wiped after use.
+    ui_callbacks.on_aoraton_paste_invite = [&] {
+        ++interaction_counts.aoraton_paste;
+        char* clipboard = SDL_GetClipboardText();
+        std::string invite = clipboard ? clipboard : "";
+        if (clipboard) {
+            for (char* cursor = clipboard; *cursor; ++cursor) *cursor = 0;
+            SDL_free(clipboard);
+        }
+        const bool queued = !invite.empty() && aoraton.add_invite_key(invite);
+        volatile char* bytes = invite.empty() ? nullptr : &invite[0];
+        for (std::size_t index = 0; index < invite.size(); ++index) bytes[index] = 0;
+        return queued;
+    };
     ui_callbacks.on_weather_open = [&] {
         ++interaction_counts.weather_open;
         open_weather();
@@ -950,6 +1015,53 @@ int main(int argc, char** argv) {
             aoraton_capture_override = snapshot;
             ui.apply_aoraton(snapshot);
             ui.show(aura::UiView::AoratonRooms);
+        } else if (capture_scenario.rfind("aoraton-account", 0) == 0) {
+            // aoraton.com account screens with a DEMO label (no real account).
+            aura::AoratonSnapshot snapshot;
+            snapshot.mock_mode = false;
+            snapshot.runtime_mode = aura::AoratonRuntimeMode::Live;
+            snapshot.pairing = aura::AoratonPairingState::Paired;
+            snapshot.connection = aura::AoratonConnectionState::Connected;
+            snapshot.account_label = "DEMO λογαριασμός";
+            snapshot.key_state = aura::AoratonKeyState::Ready;
+            snapshot.key_count = 3;
+            aura::UiView view = aura::UiView::AoratonPair;
+            if (capture_scenario == "aoraton-account-signin") {
+                snapshot.pairing = aura::AoratonPairingState::NotPaired;
+                snapshot.connection = aura::AoratonConnectionState::Disconnected;
+                snapshot.account_label.clear();
+                view = aura::UiView::AoratonRooms;
+            } else if (capture_scenario == "aoraton-account-waiting") {
+                snapshot.pairing = aura::AoratonPairingState::WaitingForBrowser;
+                snapshot.pairing_seconds_remaining = 287;
+            } else if (capture_scenario == "aoraton-account-timeout") {
+                snapshot.pairing = aura::AoratonPairingState::Error;
+                snapshot.last_error = "SIGN_IN_TIMEOUT";
+            } else if (capture_scenario == "aoraton-account-reauth") {
+                snapshot.pairing = aura::AoratonPairingState::ReauthorizationRequired;
+                view = aura::UiView::AoratonRooms;
+            } else if (capture_scenario == "aoraton-account-unlock") {
+                snapshot.key_state = aura::AoratonKeyState::WrongPassphrase;
+                view = aura::UiView::AoratonUnlock;
+            } else if (capture_scenario == "aoraton-account-rooms") {
+                aura::AoratonRoom open;
+                open.id = "demo-open";
+                open.display_name = "DEMO Οικογένεια";
+                open.preview = "DEMO Τα λέμε το βράδυ";
+                open.unread = 2;
+                aura::AoratonRoom locked;
+                locked.id = "demo-locked";
+                locked.display_name = "DEMO Δουλειά";
+                locked.key_available = false;
+                snapshot.rooms = {open, locked};
+                view = aura::UiView::AoratonRooms;
+            } else if (capture_scenario == "aoraton-account-invite") {
+                snapshot.key_state = aura::AoratonKeyState::NotMember;
+            }
+            snapshot.sequence = aoraton.snapshot().sequence + 1000;
+            aoraton_capture_override = snapshot;
+            ui.apply_aoraton(snapshot);
+            ui.show(view);
         } else if (capture_scenario == "aoraton-pair") {
             aura::AoratonSnapshot snapshot;
             snapshot.mock_mode = false;
@@ -1269,7 +1381,7 @@ int main(int argc, char** argv) {
                 poll_wifi(std::chrono::steady_clock::now());
                 apply();
                 ui.apply_audio(audio.diagnostics());
-                ui.apply_aoraton(aoraton.snapshot());
+                ui.apply_aoraton(aoraton_capture_override ? *aoraton_capture_override : aoraton.snapshot());
                 ui.apply_status(device_status.snapshot());
                 ui.apply_weather(weather_model.snapshot());
                 ui.apply_wifi(wifi_model.snapshot());
@@ -1541,6 +1653,26 @@ int main(int argc, char** argv) {
                interaction_counts.ask == ask_again_before + 1 &&
                controller.snapshot().state == aura::AssistantState::Listening,
                aura::state_name(controller.snapshot().state));
+
+        // Typed questions (the control panel's prompt): one sent over the listening screen
+        // replaces it, and a repeat while it is being answered waits instead of failing BUSY.
+        start_turn(text.capture_long_prompt);
+        start_turn(text.capture_long_prompt);
+        record("assistant.prompt_repeat", "while-thinking",
+               pending && controller.snapshot().state == aura::AssistantState::Thinking &&
+               controller.snapshot().user_text == text.capture_long_prompt,
+               aura::state_name(controller.snapshot().state));
+        cancel();
+        controller.dispatch({aura::EventType::TurnStarted, text.capture_short_prompt});
+        controller.dispatch({aura::EventType::FinalResult, text.capture_short_answer});
+        apply(); pump(4);
+        start_turn(text.capture_long_prompt);
+        record("assistant.prompt_after_answer", "replaces-question",
+               controller.snapshot().state == aura::AssistantState::Thinking &&
+               controller.snapshot().user_text == text.capture_long_prompt,
+               aura::state_name(controller.snapshot().state));
+        cancel();
+        apply(); pump(4);
 
         reset_to(aura::UiView::Launcher);
         tap(96, 336);
@@ -1941,6 +2073,56 @@ int main(int argc, char** argv) {
                interaction_counts.aoraton_cancel == message_cancel_before + 1 &&
                ui.view() == aura::UiView::AoratonConversation,
                std::to_string(static_cast<int>(ui.view())));
+
+        // aoraton.com account screens, shown through a live-mode snapshot (DEMO label).
+        std::uint64_t account_serial = 0;
+        auto account_snapshot = [&](aura::AoratonPairingState pairing) {
+            aura::AoratonSnapshot snapshot;
+            snapshot.mock_mode = false;
+            snapshot.runtime_mode = aura::AoratonRuntimeMode::Live;
+            snapshot.pairing = pairing;
+            snapshot.connection = pairing == aura::AoratonPairingState::Paired ?
+                aura::AoratonConnectionState::Connected : aura::AoratonConnectionState::Disconnected;
+            if (pairing == aura::AoratonPairingState::Paired) snapshot.account_label = "DEMO λογαριασμός";
+            snapshot.key_state = aura::AoratonKeyState::Ready;
+            snapshot.key_count = 2;
+            snapshot.sequence = aoraton.snapshot().sequence + 5000 + (++account_serial);
+            aoraton_capture_override = snapshot;
+            ui.apply_aoraton(snapshot);
+        };
+        account_snapshot(aura::AoratonPairingState::NotPaired);
+        reset_to(aura::UiView::AoratonRooms);
+        const int sign_in_before = interaction_counts.aoraton_sign_in;
+        tap(240, 420);
+        record("aoraton.sign_in", "button-center", interaction_counts.aoraton_sign_in == sign_in_before + 1,
+               std::to_string(interaction_counts.aoraton_sign_in - sign_in_before));
+        account_snapshot(aura::AoratonPairingState::Paired);
+        reset_to(aura::UiView::AoratonPair);
+        const int paste_before = interaction_counts.aoraton_paste;
+        tap(240, 332);
+        record("aoraton.paste_invite", "row-center",
+               interaction_counts.aoraton_paste == paste_before + 1 && ui.view() == aura::UiView::AoratonPair,
+               std::to_string(interaction_counts.aoraton_paste - paste_before));
+        tap(240, 236);
+        record("aoraton.keys_row", "row-center", ui.view() == aura::UiView::AoratonUnlock,
+               std::to_string(static_cast<int>(ui.view())));
+        const int unlock_before = interaction_counts.aoraton_unlock;
+        tap(432, 48);
+        const bool empty_refused = interaction_counts.aoraton_unlock == unlock_before;
+        for (int key = 0; key < 8; ++key) tap(25 + key * 477 / 10, 243);
+        tap(432, 48);
+        record("aoraton.unlock_submit", "typed-passphrase",
+               empty_refused && interaction_counts.aoraton_unlock == unlock_before + 1 &&
+               interaction_counts.aoraton_unlock_bytes == 8,
+               std::to_string(interaction_counts.aoraton_unlock_bytes));
+        reset_to(aura::UiView::AoratonPair);
+        const int sign_out_before = interaction_counts.aoraton_sign_out;
+        tap(240, 432);
+        record("aoraton.sign_out", "button-center",
+               interaction_counts.aoraton_sign_out == sign_out_before + 1 && ui.view() == aura::UiView::AoratonRooms,
+               std::to_string(interaction_counts.aoraton_sign_out - sign_out_before));
+        aoraton_capture_override.reset();
+        ui.apply_aoraton(aoraton.snapshot());
 
         controller.dispatch({aura::EventType::Reset});
         controller.dispatch({aura::EventType::TurnStarted, text.capture_thinking_prompt});

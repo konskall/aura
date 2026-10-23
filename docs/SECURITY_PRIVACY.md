@@ -10,4 +10,15 @@ Weather provider credentials remain exclusively in the separately operated `tles
 
 The Aoraton source audit was read-only. AURA did not copy GPL implementation or connect to Supabase. Clean-room v2 crypto is now implemented with Windows CNG and ESP-IDF mbedTLS source; synthetic vectors contain no live room material. Windows test sessions/keys are designed for a current-user DPAPI vault with atomic rotation and zeroization. Tokens and keys never enter snapshots, LVGL, Codex, the bridge or logs. Production transport and pairing remain disabled pending an isolated backend, deployed RLS verification and a separately authorized Aoraton browser/backend patch; see [aoraton/SECURITY_BOUNDARIES.md](aoraton/SECURITY_BOUNDARIES.md) and [aoraton/PAIRING_PROTOCOL.md](aoraton/PAIRING_PROTOCOL.md).
 
+**2026-10-23, owner decision: account sign-in** ([design](design/AURA_AORATON_ACCOUNT_LOGIN_DESIGN.md)). The simulator can now sign in to the owner's own aoraton.com account through the PC browser (Supabase PKCE, return to `127.0.0.1:4779`). This deliberately replaces the device-scoped pairing route: AURA then holds a normal session of that account, with the account's full rights.
+
+- **Never copied from a browser:** AURA performs its own sign-in.
+- **Storage on the PC:**
+  - The refresh token and room keys are kept only in the current-user DPAPI vault (`%LOCALAPPDATA%\AURA\aoraton-v11.dpapi`).
+  - The access token stays in memory.
+  - The vault passphrase and invite links are wiped right after use.
+  - Invite links come from the PC clipboard, never through the control-panel event log.
+- **Ending the session:** **Αποσύνδεση** erases the vault and ends the session on the server. Signing out on aoraton.com (global scope) also ends AURA's session, which is the remedy for a lost device.
+- **Automated tests** use a loopback fake of the Supabase endpoints and never contact the real project.
+
 Telemetry is off. Runtime logs may contain request IDs, timing, status codes and error classes, but not private prompts or messages. Fictional fixtures are labeled `DEMO` and must never be presented as live facts.

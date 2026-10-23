@@ -10,7 +10,7 @@ Updated: 2026-10-21
 4. A confirmed send is `Queued`, then `Submitted`, then `Acknowledged`; no network response is represented as `Sent`. `Failed` and `Uncertain` are distinct.
 5. Windows E2EE uses CNG (`bcrypt`); firmware uses the ESP-IDF mbedTLS APIs. Wire framing and UTF-8 validation live in `shared/`.
 6. Windows secrets use current-user DPAPI with atomic replacement. No token or room key is placed in UI snapshots, the generic event log, Codex, or screenshots.
-7. Pairing must use a device-owned anonymous Supabase identity plus explicit, per-room grants and browser-to-device encrypted room-key transfer. It must not copy the browser refresh token and must never place room keys in QR data.
+7. *(Superseded 2026-10-23 by the owner's decision to sign in with their own account; see `docs/design/AURA_AORATON_ACCOUNT_LOGIN_DESIGN.md`. AURA still never copies a browser session.)* Pairing must use a device-owned anonymous Supabase identity plus explicit, per-room grants and browser-to-device encrypted room-key transfer. It must not copy the browser refresh token and must never place room keys in QR data.
 8. Real transport is fail-closed until an isolated backend can prove its schema/RLS and pairing grant contract. Mock remains clearly marked; no production URL or credential is embedded.
 9. Simulator mode is explicit through `AURA_AORATON_MODE`. TEST/LIVE never fall back to mock; while the backend contract is unavailable, the native adapter converts commands to typed failure events and never manufactures rooms, acknowledgements or notifications.
 
