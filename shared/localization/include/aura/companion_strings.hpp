@@ -148,6 +148,8 @@ struct CompanionStrings {
     const char* display_title;
     const char* always_on;
     const char* always_on_detail;
+    const char* aod_new_one;
+    const char* aod_new_format;  // %d
     const char* raise_to_wake;
     const char* raise_detail;
     const char* flip_to_mute;
@@ -210,6 +212,9 @@ struct CompanionStrings {
     const char* aoraton_keys_not_member;
     const char* aoraton_keys_invalid_invite;
     const char* aoraton_keys_failed;
+    const char* aoraton_keys_unlocked_one;
+    const char* aoraton_keys_unlocked_format;  // %u
+    const char* aoraton_e2ee;
 };
 
 const CompanionStrings& companion_el_gr() noexcept;

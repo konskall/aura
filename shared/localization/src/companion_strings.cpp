@@ -156,6 +156,8 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.display_title = "Οθόνη";
         s.always_on = "Πάντα αναμμένη";
         s.always_on_detail = "Αχνό ρολόι όταν δεν τη χρησιμοποιείς";
+        s.aod_new_one = "1 νέο";
+        s.aod_new_format = "%d νέα";
         s.raise_to_wake = "Ανάβει με σήκωμα";
         s.raise_detail = "Η οθόνη ανάβει όταν τη σηκώνεις";
         s.flip_to_mute = "Σίγαση ανάποδα";
@@ -217,6 +219,9 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.aoraton_keys_not_member = "Δεν είσαι μέλος εκεί";
         s.aoraton_keys_invalid_invite = "Δεν είναι πρόσκληση";
         s.aoraton_keys_failed = "Αποτυχία· δοκίμασε ξανά";
+        s.aoraton_keys_unlocked_one = "Ξεκλειδώθηκε 1 δωμάτιο";
+        s.aoraton_keys_unlocked_format = "Ξεκλειδώθηκαν %u δωμάτια";
+        s.aoraton_e2ee = "E2EE";
         return s;
     }();
     return strings;
@@ -356,6 +361,8 @@ const CompanionStrings& companion_en_us() noexcept {
         s.display_title = "Display";
         s.always_on = "Always on";
         s.always_on_detail = "A dim clock when idle";
+        s.aod_new_one = "1 new";
+        s.aod_new_format = "%d new";
         s.raise_to_wake = "Raise to wake";
         s.raise_detail = "Lights up when you lift it";
         s.flip_to_mute = "Turn over to mute";
@@ -417,6 +424,9 @@ const CompanionStrings& companion_en_us() noexcept {
         s.aoraton_keys_not_member = "You're not a member";
         s.aoraton_keys_invalid_invite = "Not an invite link";
         s.aoraton_keys_failed = "Failed; try again";
+        s.aoraton_keys_unlocked_one = "1 room unlocked";
+        s.aoraton_keys_unlocked_format = "%u rooms unlocked";
+        s.aoraton_e2ee = "E2EE";
         return s;
     }();
     return strings;

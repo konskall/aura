@@ -1434,8 +1434,47 @@
 
     // ---- Always-on clock, calls and phone ------------------------------------
 
+    // Where the newest notification came from; DEMO data says so.
+    std::string notification_source() const {
+        if (!aoraton.notifications.empty()) return aoraton.notifications.back().room_alias;
+        if (!phone.notifications.empty()) {
+            const auto& newest = phone.notifications.front();
+            return newest.demo ? newest.app + " · " + t().demo : newest.app;
+        }
+        return snapshot.notification_count > 0 ? std::string(t().demo) : std::string{};
+    }
+
+    // A row of items centred on the screen; the burn-in shift moves it too.
+    lv_obj_t* centered_row(int y, int gap) {
+        auto* row = lv_obj_create(content);
+        ui::reset(row);
+        lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(row, gap, 0);
+        lv_obj_align(row, LV_ALIGN_TOP_MID, display_power.shift_x, y + display_power.shift_y);
+        return row;
+    }
+
+    // Ambient clock: weather, time, date, new messages and the next alarm on
+    // black. Drawn once per minute (or when its data changes), never animated.
     void render_always_on() {
         header_action = true;
+        const bool lit = display_power.mode != DisplayMode::Off;
+        const int dx = display_power.shift_x;
+        const int dy = display_power.shift_y;
+        const auto& sky = weather.data;
+        const bool has_weather = lit && weather.has_data && sky.valid();
+        const std::uint32_t tint = has_weather && sky.is_day ? weather_condition_accent(sky.condition) :
+                                                               ui::tokens::indigo;
+        // A faint halo in the colour of the sky behind the clock: eight thin
+        // steps read as one soft glow, and only its core rises above black.
+        if (lit) {
+            for (int size = 420; size >= 140; size -= 40) {
+                auto* halo = make_dot(content, size, tint, 7);
+                lv_obj_set_pos(halo, 240 + dx - size / 2, 214 + dy - size / 2);
+            }
+        }
         // The whole screen wakes the device; that first touch does nothing else.
         auto* catcher = lv_button_create(content);
         ui::reset(catcher);
@@ -1444,29 +1483,60 @@
         lv_obj_set_style_bg_opa(catcher, LV_OPA_TRANSP, 0);
         lv_obj_set_clickable(catcher, true);
         lv_obj_add_event_cb(catcher, wake_event, LV_EVENT_CLICKED, this);
-        if (display_power.mode == DisplayMode::Off) return;
-        const int dx = display_power.shift_x;
-        const int dy = display_power.shift_y;
+        if (!lit) return;
         constexpr std::uint32_t kDim = 0x6F7A8C;
+        constexpr std::uint32_t kFaint = 0x535D6D;
+        if (has_weather) {
+            auto* row = centered_row(72, 10);
+            if (auto* icon = icon_view(row, weather_condition_icon(sky.condition), 34, tint)) {
+                lv_obj_set_style_opa(icon, LV_OPA_70, 0);
+            }
+            char temperature[16];
+            std::snprintf(temperature, sizeof(temperature), "%.0f°", sky.temperature_c);
+            ui::make_label(row, temperature, kDim, ui::font_title());
+            auto* city = ui::make_label(row, sky.location.name.c_str(), kFaint, ui::font_caption());
+            lv_label_set_long_mode(city, LV_LABEL_LONG_DOT);
+            lv_obj_set_style_max_width(city, 200, 0);
+            char range[48];
+            std::snprintf(range, sizeof(range), "↑ %.0f°   ↓ %.0f°", sky.daily_maximum_c, sky.daily_minimum_c);
+            std::string detail = range;
+            if (sky.origin == WeatherDataOrigin::Demo) {
+                detail += std::string(" · ") + v().demo_badge;
+            } else if (sky.origin == WeatherDataOrigin::Cache || sky.stale) {
+                detail += std::string(" · ") + v().weather_cached;
+            }
+            line(content, detail.c_str(), kGutter + dx, 116 + dy, kWidth, ui::font_caption(), kFaint,
+                 LV_TEXT_ALIGN_CENTER);
+        }
         if (status.clock_valid) {
             char time[12];
             std::snprintf(time, sizeof(time), "%02d:%02d", status.hour, status.minute);
-            label(content, time, dx, 140 + dy, ui::tokens::display_width, ui::font_clock(), kDim, LV_TEXT_ALIGN_CENTER);
+            label(content, time, dx, 162 + dy, ui::tokens::display_width, ui::font_clock(), kDim, LV_TEXT_ALIGN_CENTER);
         }
         const auto date = date_text();
         if (!date.empty()) {
-            line(content, date.c_str(), kGutter + dx, 228 + dy, kWidth, ui::font_caption(), kDim, LV_TEXT_ALIGN_CENTER);
+            line(content, date.c_str(), kGutter + dx, 254 + dy, kWidth, ui::font_caption(), kDim, LV_TEXT_ALIGN_CENTER);
+        }
+        int y = 312;
+        if (const int total = notification_total(); total > 0) {
+            auto* row = centered_row(y, 10);
+            make_dot(row, 10, ui::tokens::pink, LV_OPA_80);
+            char count[24];
+            std::snprintf(count, sizeof(count), c().aod_new_format, total);
+            std::string text = total == 1 ? c().aod_new_one : count;
+            const auto source = notification_source();
+            if (!source.empty()) text += " · " + source;
+            auto* note = ui::make_label(row, text.c_str(), kDim, ui::font_caption());
+            lv_label_set_long_mode(note, LV_LABEL_LONG_DOT);
+            lv_obj_set_style_max_width(note, 340, 0);
+            y += 40;
         }
         if (const auto alarm = next_alarm(clock)) {
+            auto* row = centered_row(y, 8);
+            icon_view(row, ui::IconRole::Reminder, 24, kFaint);
             char time[8];
             std::snprintf(time, sizeof(time), "%02d:%02d", alarm->hour, alarm->minute);
-            auto* icon = icon_view(content, ui::IconRole::Reminder, 24, kDim);
-            lv_obj_set_pos(icon, 196 + dx, 276 + dy);
-            line(content, time, 228 + dx, 274 + dy, 80, ui::font_caption(), kDim);
-        }
-        if (notification_total() > 0) {
-            auto* dot = make_dot(content, 10, ui::tokens::pink, LV_OPA_70);
-            lv_obj_set_pos(dot, 235 + dx, 320 + dy);
+            ui::make_label(row, time, kFaint, ui::font_caption());
         }
     }
 

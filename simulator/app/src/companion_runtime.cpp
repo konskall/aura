@@ -251,6 +251,8 @@ void CompanionRuntime::deliver_reply(const std::string& raw) {
     std::optional<AssistantAction> action = parsed.action;
     // A message is confirmed on the Aoraton confirmation screen itself.
     if (action && action->type == AssistantActionType::Message) {
+        // Show the reply first: applied later, it would cover the confirmation.
+        ctx_.ui->apply(controller.snapshot());
         if (!route_message(*action)) ctx_.ui->show_message(l10n::companion_el_gr().action_failed, true);
         action.reset();
     }

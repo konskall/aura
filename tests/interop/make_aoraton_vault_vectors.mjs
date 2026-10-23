@@ -55,7 +55,9 @@ const fixture = {
 
 const text = `${JSON.stringify(fixture, null, 2)}\n`;
 if (process.argv.includes('--check')) {
-  assert.equal(await readFile(fixtureUrl, 'utf8'), text, 'vault fixture matches WebCrypto output');
+  // A Windows checkout (core.autocrlf) may store the fixture with CRLF.
+  const stored = (await readFile(fixtureUrl, 'utf8')).replace(/\r\n/g, '\n');
+  assert.equal(stored, text, 'vault fixture matches WebCrypto output');
   console.log('aoraton vault vectors verified');
 } else {
   await writeFile(fixtureUrl, text, 'utf8');

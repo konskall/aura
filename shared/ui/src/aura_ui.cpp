@@ -1715,14 +1715,42 @@ struct AuraUi::Impl {
         return text;
     }
 
-    // The signed-in account: who, room keys, invite paste, sign out.
+    // The first character of the account name (UTF-8), for its avatar.
+    std::string account_initial() const {
+        const auto& name = aoraton.account_label;
+        if (name.empty()) return {};
+        const auto lead = static_cast<unsigned char>(name.front());
+        const std::size_t bytes = lead < 0x80 ? 1 : (lead >= 0xF0 ? 4 : (lead >= 0xE0 ? 3 : 2));
+        return name.substr(0, std::min(bytes, name.size()));
+    }
+
+    // The signed-in account: a card with who and whether the link is up, then
+    // room keys, invite paste and sign out, all above the fold.
     void render_aoraton_account() {
         make_header(t().aoraton);
         auto* list = make_list();
-        int y = 0;
-        list_row(list, y, t().connected, aoraton.account_label.empty() ? nullptr : aoraton.account_label.c_str(),
-                 ui::IconRole::Success, ui::tokens::mint);
-        y += kRowPitch;
+        auto* card = lv_obj_create(list);
+        ui::reset(card);
+        ui::style_platter(card, ui::tokens::lilac, ui::tokens::radius_large, true);
+        lv_obj_set_style_pad_all(card, 0, 0);
+        lv_obj_set_size(card, kWidth, 104);
+        lv_obj_set_pos(card, kGutter, 0);
+        auto* avatar = make_dot(card, 64, ui::tokens::lilac, kTint);
+        lv_obj_set_pos(avatar, 20, 20);
+        const auto initial = account_initial();
+        if (initial.empty()) {
+            if (auto* icon = icon_view(avatar, ui::IconRole::Encrypted, 32, ui::tokens::lilac)) lv_obj_center(icon);
+        } else {
+            lv_obj_center(ui::make_label(avatar, initial.c_str(), ui::tokens::lilac, ui::font_title()));
+        }
+        line(card, aoraton.account_label.empty() ? c().aoraton_account_title : aoraton.account_label.c_str(),
+             104, 18, kWidth - 124, ui::font_headline(), ui::tokens::text);
+        const bool connected = aoraton.connection == AoratonConnectionState::Connected;
+        const std::uint32_t link_color = connected ? ui::tokens::mint : ui::tokens::coral;
+        lv_obj_set_pos(make_dot(card, 10, link_color), 106, 67);
+        const std::string link = std::string(connected ? t().connected : t().disconnected) + " · " + c().aoraton_e2ee;
+        line(card, link.c_str(), 124, 58, kWidth - 144, ui::font_caption(), link_color);
+        int y = 112;
         const bool invite_error = aoraton.key_state == AoratonKeyState::NotMember ||
                                   aoraton.key_state == AoratonKeyState::InvalidInvite;
         const char* key_text = key_state_text();
@@ -1735,7 +1763,7 @@ struct AuraUi::Impl {
         lv_obj_set_clickable(paste, static_cast<bool>(callbacks.on_aoraton_paste_invite));
         lv_obj_add_event_cb(paste, paste_invite_event, LV_EVENT_CLICKED, this);
         // Back returns to the rooms; sign-out stays above the fold.
-        y += kRowPitch + 8;
+        y += kRowPitch;
         auto* sign_out = pill(list, c().aoraton_sign_out, ui::ButtonTone::Danger, kGutter, y, kWidth, unpair_event);
         ui::set_button_disabled(sign_out, !callbacks.on_aoraton_unpair);
         list_end(list, y + kButtonHeight + 16);
@@ -3276,6 +3304,7 @@ void AuraUi::apply(const AssistantSnapshot& snapshot) {
     if (snapshot.sequence == impl_->snapshot.sequence) return;
     const auto old_state = impl_->snapshot.state;
     const auto old_generation = impl_->snapshot.turn_generation;
+    const bool notifications_changed = snapshot.notification_count != impl_->snapshot.notification_count;
     impl_->snapshot = snapshot;
     // Only a real assistant transition pulls the user to the Assistant view; an
     // unrelated update (battery, notification) must not undo a Back navigation.
@@ -3291,7 +3320,8 @@ void AuraUi::apply(const AssistantSnapshot& snapshot) {
         impl_->render(UiView::Assistant, true);
     } else if (impl_->current_view == UiView::Home || impl_->current_view == UiView::Assistant ||
                impl_->current_view == UiView::Launcher || impl_->current_view == UiView::Settings ||
-               impl_->current_view == UiView::Notifications) {
+               impl_->current_view == UiView::Notifications ||
+               (notifications_changed && impl_->current_view == UiView::AlwaysOn)) {
         impl_->render(impl_->current_view);
     }
 }
@@ -3314,8 +3344,25 @@ void AuraUi::apply_audio(const AudioDiagnostics& diagnostics) {
 
 void AuraUi::apply_aoraton(const AoratonSnapshot& snapshot) {
     if (snapshot.sequence == impl_->aoraton.sequence) return;
-    const bool notifications_changed = snapshot.notifications.size() != impl_->aoraton.notifications.size();
+    const auto& old = impl_->aoraton;
+    // The list is capped, so a new message can keep the size the same.
+    const bool notifications_changed = snapshot.notifications.size() != old.notifications.size() ||
+        (!snapshot.notifications.empty() &&
+         snapshot.notifications.back().message_id != old.notifications.back().message_id);
+    const bool keys_unlocked = old.key_state == AoratonKeyState::Unlocking &&
+                               snapshot.key_state == AoratonKeyState::Ready && snapshot.key_count > 0;
     impl_->aoraton = snapshot;
+    if (keys_unlocked) {
+        char message[64];
+        std::snprintf(message, sizeof(message), impl_->c().aoraton_keys_unlocked_format,
+                      static_cast<unsigned>(snapshot.key_count));
+        // Done typing: back to where the keys were asked for.
+        const bool typing = impl_->current_view == UiView::AoratonUnlock;
+        if (typing) impl_->render(impl_->navigation.back());
+        impl_->show_toast(snapshot.key_count == 1 ? impl_->c().aoraton_keys_unlocked_one : message,
+                          ui::tokens::mint);
+        if (typing) return;
+    }
     if (impl_->current_view == UiView::AoratonUnlock) {
         impl_->update_unlock_status();
         return;
@@ -3326,7 +3373,8 @@ void AuraUi::apply_aoraton(const AoratonSnapshot& snapshot) {
         impl_->current_view == UiView::AoratonConversation ||
         impl_->current_view == UiView::AoratonConfirm ||
         (notifications_changed && (impl_->current_view == UiView::Home ||
-                                   impl_->current_view == UiView::Launcher))) {
+                                   impl_->current_view == UiView::Launcher ||
+                                   impl_->current_view == UiView::AlwaysOn))) {
         impl_->render(impl_->current_view);
     }
 }
@@ -3366,7 +3414,8 @@ void AuraUi::apply_weather(const WeatherSnapshot& snapshot) {
                           snapshot.state == WeatherState::Offline ? ui::tokens::magenta : ui::tokens::coral);
     }
     if (impl_->current_view == UiView::Weather || impl_->current_view == UiView::WeatherLocation ||
-        impl_->current_view == UiView::Settings || impl_->current_view == UiView::Home) {
+        impl_->current_view == UiView::Settings || impl_->current_view == UiView::Home ||
+        impl_->current_view == UiView::AlwaysOn) {
         impl_->render(impl_->current_view);
     }
 }

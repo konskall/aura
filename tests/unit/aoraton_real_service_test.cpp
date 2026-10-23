@@ -146,6 +146,21 @@ int main() {
     expect(service.snapshot().notifications.size() == 1, "incoming produces one deduplicated notification");
     expect(service.snapshot().notifications.front().preview.empty(), "notification preview is private by default");
 
+    AoratonEvent other_room;
+    other_room.type = AoratonEventType::IncomingMessage;
+    other_room.message = {"server-in-2", "v2.room-one", "Browser test", "second room", "2026-10-21T08:33:00.000Z",
+                          AoratonDirection::Incoming, AoratonDelivery::Received, "browser-client-2"};
+    push(mailbox, std::move(other_room), "second-room incoming queued");
+    service.tick(1);
+    expect(service.snapshot().notifications.size() == 2, "each room keeps its own notification");
+    expect(service.select_room("v2.room-two"), "notified room opens");
+    expect(service.snapshot().notifications.size() == 1 &&
+               service.snapshot().notifications.front().room_id == "v2.room-one",
+           "reading a room clears only that room's notifications");
+    expect(mailbox.pop_command(command) && command.type == AoratonCommandType::FetchRecentMessages &&
+               mailbox.pop_command(command) && command.type == AoratonCommandType::MarkRoomRead,
+           "opening the notified room marks it read");
+
     AoratonEvent locked_message;
     locked_message.type = AoratonEventType::IncomingMessage;
     locked_message.message = {"server-locked-1", "v2.room-locked", "Peer", "plaintext must be rejected", "",

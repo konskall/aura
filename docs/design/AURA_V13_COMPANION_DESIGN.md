@@ -35,7 +35,13 @@ The owner asked for every proposal from the v12 review: a real assistant (follow
 - **Notes:** typed or voice notes (WAV plus transcript), detail view with playback, two-tap delete. Stored locally (simulator runtime folder; device microSD).
 - **Today:** greeting by time of day, date, weather, next alarm, today's reminders, running timers, unread messages and phone notifications; tap a row to open it; read aloud when a voice exists. Opens by itself on the first wake each morning (05:00–11:59).
 - **Translation:** the device lies between two people; the top half is drawn upside down for the other person with their own microphone. Greek with English, German, French, Italian or Spanish; translations are spoken when a voice for that language exists (el and en on this PC).
-- **Display power:** active → dimmed (30 s) → always-on clock (or off). The always-on clock is dim, shows the next alarm and a notification dot, and moves a few pixels each minute against burn-in. Raise to wake and turn-over-to-mute come from the QMI8658 through `ImuGestureDetector`; the first touch on a dark screen only wakes it.
+- **Display power:** active → dimmed (30 s) → always-on clock (or off). The always-on clock is dim and moves a few pixels each minute against burn-in. Since 2026-10-23 it is an ambient screen, approved by the owner, showing:
+  - the weather: icon, temperature, city, and the day's high and low, labelled DEMO or cached when it is;
+  - a faint halo in the colour of the sky behind the clock;
+  - how many new messages there are and from which room, never their text;
+  - the next alarm.
+
+  It redraws at once when notifications or the weather change, and is otherwise never animated. Raise to wake and turn-over-to-mute come from the QMI8658 through `ImuGestureDetector`; the first touch on a dark screen only wakes it.
 - **Phone:** notifications list, detail and dismiss, incoming-call screen (answer/decline act on the phone). iPhone via ANCS on the device; DEMO injection in the simulator.
 - **Software update:** HTTPS manifest (`version`, `url`, `size`, `sha256`, `notes`), install only with Wi‑Fi and ≥30 % battery or charging, explicit confirmation, progress, verification, restart. The simulator source is DEMO and installs nothing.
 - **Wake word «Αύρα»:** shown as unavailable until a trained model exists (ESP-SR WakeNet custom word or a microWakeWord model). Continuous listening also costs battery on the 1000 mAh cell, so the side button stays the primary trigger.

@@ -924,7 +924,7 @@ int main(int argc, char** argv) {
         // Home captures use labelled DEMO weather instead.
         weather_model.clear_location();
         if (capture_scenario == "home" || capture_scenario == "ambient" || capture_scenario == "low-battery" ||
-            capture_scenario == "briefing") {
+            capture_scenario == "briefing" || capture_scenario == "always-on") {
             weather_model.fetch_succeeded(demo_weather_data());
         }
         apply_weather();
@@ -2115,6 +2115,20 @@ int main(int argc, char** argv) {
                empty_refused && interaction_counts.aoraton_unlock == unlock_before + 1 &&
                interaction_counts.aoraton_unlock_bytes == 8,
                std::to_string(interaction_counts.aoraton_unlock_bytes));
+        // The vault answers while the passphrase screen is open: back to the account.
+        const bool typing_passphrase = ui.view() == aura::UiView::AoratonUnlock;
+        for (const auto key_state : {aura::AoratonKeyState::Unlocking, aura::AoratonKeyState::Ready}) {
+            auto vault = *aoraton_capture_override;
+            vault.key_state = key_state;
+            vault.key_count = 3;
+            vault.sequence = aoraton.snapshot().sequence + 5000 + (++account_serial);
+            aoraton_capture_override = vault;
+            ui.apply_aoraton(vault);
+            pump(2);
+        }
+        record("aoraton.unlock_done", "vault-answer",
+               typing_passphrase && ui.view() == aura::UiView::AoratonPair,
+               std::to_string(static_cast<int>(ui.view())));
         reset_to(aura::UiView::AoratonPair);
         const int sign_out_before = interaction_counts.aoraton_sign_out;
         tap(240, 432);
@@ -2381,6 +2395,24 @@ int main(int argc, char** argv) {
                aura::state_name(controller.snapshot().state));
         controller.dispatch({aura::EventType::Reset});
         apply();
+
+        // A proposed message opens the Aoraton confirmation; the provider path
+        // then applies the reply, which must not cover that screen.
+        {
+            const std::string room = aoraton.snapshot().rooms.empty() ? std::string{} :
+                aoraton.snapshot().rooms.front().display_name;
+            controller.dispatch({aura::EventType::TurnStarted, "Στείλε μήνυμα · DEMO"});
+            companion.deliver_reply("DEMO • Θα σταλεί.\nACTION: {\"type\":\"message\",\"room\":\"" + room +
+                                    "\",\"text\":\"DEMO\"}");
+            apply();
+            pump(4);
+            const bool confirm_shown = ui.view() == aura::UiView::AoratonConfirm &&
+                                       aoraton.snapshot().awaiting_confirmation;
+            aoraton.cancel_send();
+            record("assistant.message_action", "provider-reply", confirm_shown, view_text());
+            controller.dispatch({aura::EventType::Reset});
+            apply();
+        }
 
         companion.memory().record("Τι ώρα είναι;", "DEMO • 18:24.", companion.now_ms());
         controller.dispatch({aura::EventType::TurnStarted, "Και αύριο; · DEMO"});

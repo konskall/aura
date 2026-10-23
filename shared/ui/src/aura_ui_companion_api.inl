@@ -97,6 +97,7 @@ void AuraUi::apply_phone(const PhoneSnapshot& snapshot) {
         case UiView::Home:
         case UiView::Launcher:
         case UiView::Briefing:
+        case UiView::AlwaysOn:
             if (count_changed) self.render(self.current_view);
             break;
         default: break;

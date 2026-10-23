@@ -228,6 +228,11 @@ bool RealAoratonService::select_room(const std::string& room_id) {
     if (!enqueue(std::move(read))) return false;
     snapshot_.selected_room_id = room_id;
     room->unread = 0;
+    // Reading the room answers its notifications; other rooms keep theirs.
+    auto& notifications = snapshot_.notifications;
+    notifications.erase(std::remove_if(notifications.begin(), notifications.end(),
+                                       [&](const AoratonNotification& item) { return item.room_id == room_id; }),
+                        notifications.end());
     snapshot_.last_error.clear();
     touch();
     return true;

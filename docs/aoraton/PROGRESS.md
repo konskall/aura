@@ -11,7 +11,7 @@ Design: `docs/design/AURA_AORATON_ACCOUNT_LOGIN_DESIGN.md`; plan: `docs/superpow
 | Shared account worker: sign-in, refresh rotation, 401 retry, revocation, rooms/overview, polling, notifications, sends (ack/reject/uncertain→reconciled), vault/invite keys, sign-out | TEST VERIFIED | `aura_aoraton_account_worker_tests` against an in-memory fake |
 | Windows platform: WinHTTP, loopback callback, DPAPI store, end to end | TEST VERIFIED | `aura_aoraton_account_smoke` against the loopback Node fake |
 | UI: sign-in, waiting, timeout hint, re-sign-in, account page, keys, invite paste, polling label | TEST VERIFIED | pointer checks `aoraton.sign_in/paste_invite/keys_row/unlock_submit/sign_out`; captures `aoraton-account-*` |
-| Real aoraton.com sign-in, keys, read and send | NOT RUN | Needs the owner: `scripts/setup-aoraton.ps1` (done locally), `run.bat`, sign in |
+| Real aoraton.com sign-in, keys, read and send | OWNER VERIFIED | 2026-10-23 owner run through `run.bat`; see `docs/VERIFICATION.md` |
 | ESP32 sign-in (via phone) | NOT STARTED | Shared worker is ready behind its four interfaces |
 
 ## v11 baseline
