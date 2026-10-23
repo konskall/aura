@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -31,10 +32,24 @@ public:
                               std::string& plaintext) = 0;
 };
 
+// Answering inco mentions in this device's own messages (aoraton_inco.hpp).
+struct AoratonIncoConfig {
+    // The owner's one-time opt-in: the question and the recent conversation
+    // leave end-to-end encryption for the edge function and Google's Gemini.
+    bool enabled{false};
+    // Minutes east of UTC at that moment (local time for inco, quota day).
+    std::function<int(std::int64_t utc_unix)> utc_offset_minutes;
+    // The city AURA knows (the saved weather city), or empty.
+    std::function<std::string()> location_city;
+    // One line per outcome: message ids and codes only, never any text.
+    std::function<void(const std::string&)> log;
+};
+
 struct AoratonAccountConfig {
     std::string base_url;
     std::string anon_key;
     std::string redirect_url;
+    AoratonIncoConfig inco;
 };
 
 struct AoratonSession {
@@ -61,6 +76,8 @@ struct AoratonRemoteRoom {
     std::string expires_at;
     bool e2ee{false};
     bool is_notes{false};
+    bool ai_enabled{false};
+    std::string ai_avatar_url;
 };
 
 struct AoratonOverview {
@@ -81,6 +98,13 @@ struct AoratonRemoteMessage {
     std::string type;
     std::string created_at;
     std::string client_msg_id;
+    // Only in inco's history fetch: who a reply answers, and a poll (its
+    // question and option texts are encrypted like a message body).
+    std::string reply_to_id;
+    std::string reply_to_username;
+    bool has_poll{false};
+    std::string poll_question;
+    std::vector<std::string> poll_options;
 };
 
 struct AoratonVaultMeta {
@@ -137,6 +161,8 @@ std::string aoraton_rooms_owned_path(const std::string& user_id);
 std::string aoraton_member_keys_path(const std::string& user_id);
 std::string aoraton_rooms_by_keys_path(const std::vector<std::string>& room_keys);
 std::string aoraton_messages_path(const std::string& room_key);
+// The newest 50 rows with replies and polls, for the conversation inco gets.
+std::string aoraton_inco_history_path(const std::string& room_key);
 std::string aoraton_overview_body(const std::vector<std::pair<std::string, std::string>>& room_since);
 std::string aoraton_insert_body(const std::string& room_key,
                                 const std::string& user_id,

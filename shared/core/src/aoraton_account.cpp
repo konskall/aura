@@ -213,6 +213,12 @@ std::string aoraton_messages_path(const std::string& room_key) {
            aoraton_url_encode(room_key) + "&order=created_at.desc,id.desc&limit=50";
 }
 
+std::string aoraton_inco_history_path(const std::string& room_key) {
+    return "/rest/v1/messages?select=id,room_key,uid,username,text,type,created_at,client_msg_id,reply_to,poll"
+           "&room_key=eq." +
+           aoraton_url_encode(room_key) + "&order=created_at.desc,id.desc&limit=50";
+}
+
 std::string aoraton_overview_body(const std::vector<std::pair<std::string, std::string>>& room_since) {
     std::string body = "{\"p_items\":[";
     for (std::size_t index = 0; index < room_since.size(); ++index) {
@@ -278,6 +284,8 @@ bool aoraton_parse_rooms(std::string_view json, std::vector<AoratonRemoteRoom>& 
         room.expires_at = member_text(row, "expires_at");
         if (const JsonValue* e2ee = row.find("e2ee")) room.e2ee = e2ee->as_bool(false);
         if (const JsonValue* notes = row.find("is_notes")) room.is_notes = notes->as_bool(false);
+        if (const JsonValue* ai = row.find("ai_enabled")) room.ai_enabled = ai->as_bool(false);
+        room.ai_avatar_url = member_text(row, "ai_avatar_url");
         parsed.push_back(std::move(room));
     }
     rooms = std::move(parsed);
@@ -337,6 +345,20 @@ bool aoraton_parse_messages(std::string_view json, std::vector<AoratonRemoteMess
         if (message.type.empty()) message.type = "text";
         message.created_at = member_text(row, "created_at");
         message.client_msg_id = member_text(row, "client_msg_id");
+        if (const JsonValue* reply = row.find("reply_to"); reply && reply->type() == JsonType::Object) {
+            message.reply_to_id = reply->string_at("id");
+            message.reply_to_username = utf8_truncate(reply->string_at("username"), 64);
+        }
+        if (const JsonValue* poll = row.find("poll"); poll && poll->type() == JsonType::Object) {
+            message.has_poll = true;
+            message.poll_question = poll->string_at("question");
+            if (const JsonValue* options = poll->find("options")) {
+                for (const auto& option : options->items()) {
+                    if (message.poll_options.size() == 16) break;
+                    message.poll_options.push_back(option.string_at("text"));
+                }
+            }
+        }
         parsed.push_back(std::move(message));
     }
     messages = std::move(parsed);

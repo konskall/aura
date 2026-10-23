@@ -11,6 +11,8 @@ export const USER_ID = 'user-1';
 export const ANON_KEY = 'anon-key-synthetic';
 export const ALPHA = 'v2.QUFBQUFBQUFBQUFBQUFBQUFB';
 export const BETA = 'demo_room_1234';
+export const INCO_UID = '00000000-0000-0000-0000-000000000000';
+export const INCO_ANSWER = 'DEMO inco: γεια σου';
 
 async function messageKey(rkByte) {
   const raw = new Uint8Array(32).fill(rkByte);
@@ -39,7 +41,7 @@ export async function startFakeSupabase() {
   const vault = JSON.parse(await readFile(new URL('../fixtures/aoraton_vault_vectors.json', import.meta.url), 'utf8'));
   const state = {
     generation: 0, access: '', refresh: '', challenge: '', redirect: '', seconds: 0, nextId: 0,
-    rows: [], log: [], logouts: 0,
+    rows: [], log: [], logouts: 0, incoRequests: [], incoInserts: [],
   };
   const rkFor = (roomKey) => (roomKey === ALPHA ? 0x11 : 0x22);
   const stamp = () => {
@@ -72,8 +74,10 @@ export async function startFakeSupabase() {
     response.end(body);
   };
   const rooms = [
-    { room_key: ALPHA, room_name: 'DEMO Alpha', display_name: null, e2ee: true, expires_at: null, created_by: USER_ID },
-    { room_key: BETA, room_name: 'DEMO Beta', display_name: null, e2ee: true, expires_at: null, created_by: 'u-other' },
+    { room_key: ALPHA, room_name: 'DEMO Alpha', display_name: null, e2ee: true, expires_at: null, created_by: USER_ID,
+      ai_enabled: true, ai_avatar_url: null },
+    { room_key: BETA, room_name: 'DEMO Beta', display_name: null, e2ee: true, expires_at: null, created_by: 'u-other',
+      ai_enabled: false, ai_avatar_url: null },
   ];
 
   const server = http.createServer(async (request, response) => {
@@ -131,8 +135,25 @@ export async function startFakeSupabase() {
       const key = (url.searchParams.get('room_key') ?? '').replace(/^eq\./, '');
       return json(response, 200, state.rows.filter((row) => row.room_key === key).slice(-50).reverse());
     }
+    if (request.method === 'POST' && url.pathname === '/functions/v1/inco-ai') {
+      state.incoRequests.push(JSON.parse(body));
+      // A short think, so the client's longer inco wait is exercised.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return json(response, 200, { text: `**${INCO_ANSWER}**`, sources: [] });
+    }
     if (request.method === 'POST' && url.pathname === '/rest/v1/messages') {
       const row = JSON.parse(body);
+      if (row.uid === INCO_UID) {
+        // RLS: inco's uid only in a room that enables inco.
+        const room = rooms.find((item) => item.room_key === row.room_key);
+        if (!room?.ai_enabled || request.headers.prefer !== 'return=representation') {
+          return json(response, 403, { message: 'row-level security' });
+        }
+        const stored = { ...row, id: `m-${++state.nextId}`, created_at: stamp() };
+        state.rows.push(stored);
+        state.incoInserts.push(stored);
+        return json(response, 201, [{ id: stored.id, created_at: stored.created_at }]);
+      }
       if (request.headers.prefer !== 'return=representation' || row.type !== 'text' || row.uid !== USER_ID) {
         return json(response, 400, { message: 'bad insert' });
       }

@@ -4,6 +4,7 @@
 #include "aura/text_util.hpp"
 #include "aura/windows_aoraton_crypto.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -54,6 +55,7 @@ class FakeSupabase final : public IAoratonHttp {
 public:
     struct Row {
         std::string id, room_key, uid, username, text, type, created_at, client_msg_id;
+        std::string extra;  // more JSON members (reply_to, poll)
     };
     enum class InsertMode { Ok, LostResponse, Reject };
 
@@ -147,11 +149,36 @@ public:
         }
         if (request.method == "POST" && path == "/rest/v1/rpc/room_overview") return {200, overview(request.body)};
         if (request.method == "GET" && path.rfind("/rest/v1/messages?", 0) == 0) return {200, messages(path)};
+        if (request.method == "POST" && path == "/functions/v1/inco-ai") {
+            inco_requests.push_back(request.body);
+            inco_timeouts.push_back(request.timeout_ms);
+            if (inco_replies.empty()) {
+                return {200, R"({"text":"**Είναι** 01:15.","sources":[{"title":"Ώρα","uri":"https://time.example/a"}]})"};
+            }
+            auto reply = inco_replies.front();
+            inco_replies.erase(inco_replies.begin());
+            return reply;
+        }
         if (request.method == "POST" && path == "/rest/v1/messages?select=id,created_at") {
             if (header(request, "Prefer") != "return=representation") return {400, "{}"};
             if (insert_mode == InsertMode::Reject) return {403, R"({"message":"denied"})"};
             JsonValue body;
             expect(parse_json(request.body, body), "insert body is JSON");
+            if (body.string_at("uid") == kAoratonIncoUid) {
+                // RLS: inco's uid only for a member, only where the room enables inco.
+                const auto room = std::find_if(rooms.begin(), rooms.end(),
+                                               [&](const Room& item) { return item.key == body.string_at("room_key"); });
+                if (room == rooms.end() || !room->ai) return {403, R"({"message":"row-level security"})"};
+                inco_inserts.push_back(request.body);
+                Row row{"m-" + std::to_string(++next_id), body.string_at("room_key"), kAoratonIncoUid,
+                        body.string_at("username"), body.string_at("text"), "text", stamp(), {}, {}};
+                if (const JsonValue* reply = body.find("reply_to")) {
+                    row.extra = R"("reply_to":{"id":")" + reply->string_at("id") + R"(","username":")" +
+                                json_escape(reply->string_at("username")) + R"("})";
+                }
+                rows.push_back(row);
+                return {201, R"([{"id":")" + row.id + R"(","created_at":")" + row.created_at + R"("}])"};
+            }
             expect(body.string_at("type") == "text" && body.string_at("uid") == kUser &&
                        body.find("avatar_url") && body.find("avatar_url")->is_null(),
                    "insert carries the web client's fields");
@@ -191,7 +218,9 @@ public:
             if (!owned && path.find("%22" + aoraton_url_encode(room.key) + "%22") == std::string::npos) continue;
             if (out.size() > 1) out += ",";
             out += R"({"room_key":")" + room.key + R"(","room_name":")" + json_escape(room.name) +
-                   R"(","display_name":null,"e2ee":true,"expires_at":null})";
+                   R"(","display_name":null,"e2ee":true,"expires_at":null,"ai_enabled":)" +
+                   (room.ai ? "true" : "false") + R"(,"ai_avatar_url":)" +
+                   (room.avatar.empty() ? std::string("null") : "\"" + room.avatar + "\"") + "}";
         }
         return out + "]";
     }
@@ -232,7 +261,8 @@ public:
             out += R"({"id":")" + row->id + R"(","room_key":")" + row->room_key + R"(","uid":")" + row->uid +
                    R"(","username":")" + json_escape(row->username) + R"(","text":")" + row->text +
                    R"(","type":")" + row->type + R"(","created_at":")" + row->created_at + R"(","client_msg_id":)" +
-                   (row->client_msg_id.empty() ? std::string("null") : "\"" + row->client_msg_id + "\"") + "}";
+                   (row->client_msg_id.empty() ? std::string("null") : "\"" + row->client_msg_id + "\"") +
+                   (row->extra.empty() ? std::string{} : "," + row->extra) + "}";
             ++count;
         }
         return out + "]";
@@ -242,10 +272,16 @@ public:
         std::string key;
         std::string name;
         bool owned;
+        bool ai{false};
+        std::string avatar;
     };
     WindowsAoratonCryptoV2 crypto;
     std::vector<Room> rooms;
     std::vector<Row> rows;
+    std::vector<std::string> inco_requests;
+    std::vector<std::uint32_t> inco_timeouts;
+    std::vector<AoratonHttpResponse> inco_replies;
+    std::vector<std::string> inco_inserts;
     std::string challenge;
     std::string access;
     std::string refresh;
@@ -318,13 +354,26 @@ public:
     int saves{0};
 };
 
+// inco's log lines and the city the platform knows, shared with the worker hooks.
+std::vector<std::string> g_inco_log;
+std::string g_city = "Αθήνα";
+
+AoratonIncoConfig inco_on() {
+    AoratonIncoConfig inco;
+    inco.enabled = true;
+    inco.utc_offset_minutes = [](std::int64_t) { return 180; };
+    inco.location_city = [] { return g_city; };
+    inco.log = [](const std::string& line) { g_inco_log.push_back(line); };
+    return inco;
+}
+
 struct Rig {
-    Rig()
+    explicit Rig(AoratonIncoConfig inco = {})
         : service(mailbox, AoratonRuntimeMode::Live, [this] {
               return aoraton_new_client_message_id(account);
           }),
-          worker(mailbox, {kBase, kAnon, "http://127.0.0.1:4779/aoraton/callback"}, server, account, messages, store,
-                 channel) {}
+          worker(mailbox, {kBase, kAnon, "http://127.0.0.1:4779/aoraton/callback", std::move(inco)}, server, account,
+                 messages, store, channel) {}
 
     void pump(int rounds = 6) {
         for (int index = 0; index < rounds; ++index) {
@@ -579,6 +628,134 @@ int main() {
         expect(rig.service.unlock_keys("anything"), "queued");
         rig.pump();
         expect(rig.service.snapshot().key_state == AoratonKeyState::NotConfigured, "vault_not_configured");
+    }
+
+    // inco: only this device's own stored @inco message, only where the room
+    // enables inco; the answer is encrypted and inserted as inco, in reply.
+    {
+        Rig rig(inco_on());
+        rig.server.rooms[0].ai = true;
+        rig.server.rooms[0].avatar = "https://cdn.example/inco.png";
+        rig.server.add(kAlpha, "u-maria", "Maria", "DEMO καλημέρα");
+        rig.sign_in();
+        expect(rig.service.unlock_keys(passphrase), "unlock queued");
+        rig.pump();
+        AoratonRoomKey alpha(filled(0x11));
+        const auto open = [&](const std::string& wire) {
+            std::string out;
+            AoratonCryptoError error = AoratonCryptoError::None;
+            expect(rig.server.crypto.decrypt_text(wire, alpha, out, error), "inco row decrypts with the room key");
+            return out;
+        };
+        const auto send = [&](const char* room, const std::string& text) {
+            expect(rig.service.prepare_send(room, text) && rig.service.confirm_send(), "send confirmed");
+            rig.pump();
+        };
+
+        const std::string question = "@inco τι ώρα είναι; " + std::string(120, 'x');
+        send(kAlpha, question);
+        expect(rig.server.inco_requests.size() == 1 && rig.server.inco_timeouts[0] >= 60000,
+               "own mention asks inco-ai once, with a long wait");
+        JsonValue request;
+        expect(parse_json(rig.server.inco_requests[0], request), "inco request is JSON");
+        const auto* history = request.find("history");
+        expect(request.string_at("roomKey") == kAlpha && request.string_at("triggerText") == question &&
+                   request.string_at("triggerUsername") == rig.server.last_insert_username &&
+                   request.string_at("clientDateTime").find("GMT+3") != std::string::npos,
+               "request names the room key, the question, its author and the local time");
+        expect(history && history->items().size() == 2 &&
+                   history->items()[0].string_at("text") == "Maria: DEMO καλημέρα" &&
+                   history->items()[1].string_at("text") == rig.server.last_insert_username + ": " + question,
+               "the conversation ends with the question");
+        expect(!request.find("roomName") && !request.find("maxChars") && !request.find("locationCity"),
+               "no room name and no LoRa budget leave the device");
+        expect(rig.server.inco_inserts.size() == 1, "one answer inserted");
+        const auto& asked = rig.server.rows[rig.server.rows.size() - 2];
+        JsonValue insert;
+        expect(parse_json(rig.server.inco_inserts[0], insert), "insert is JSON");
+        expect(insert.string_at("uid") == kAoratonIncoUid && insert.string_at("username") == "inco" &&
+                   insert.string_at("avatar_url") == "https://cdn.example/inco.png" &&
+                   open(insert.string_at("text")) == "Είναι 01:15." && !insert.find("client_msg_id"),
+               "answer inserted as inco, encrypted, markdown removed");
+        const auto* reply_to = insert.find("reply_to");
+        expect(reply_to && reply_to->string_at("id") == asked.id &&
+                   reply_to->string_at("username") == rig.server.last_insert_username &&
+                   open(reply_to->string_at("text")) == aoraton_inco_prefix(question, 100) &&
+                   !reply_to->find("isAttachment")->as_bool(true),
+               "the answer quotes the stored question");
+        expect(insert.find("grounding_metadata")->items().size() == 1, "sources kept");
+        const auto& shown = rig.service.snapshot().messages.back();
+        expect(shown.author == "inco" && shown.local_display_text == "Είναι 01:15." &&
+                   shown.direction == AoratonDirection::Incoming,
+               "the answer appears on AURA at once");
+        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        std::size_t copies = 0;
+        for (const auto& message : rig.service.snapshot().messages) copies += message.author == "inco";
+        expect(copies == 1 && rig.server.inco_requests.size() == 1, "the next poll neither duplicates nor re-asks");
+
+        send(kBeta, "@inco εδώ;");
+        send(kAlpha, "incoming νέα");
+        rig.server.add(kAlpha, kUser, "Owner in browser", "@inco από τον browser");
+        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        expect(rig.server.inco_requests.size() == 1,
+               "no inco room, no mention, or another device's message: never asked here");
+
+        rig.server.inco_replies.push_back({429, R"({"error":"RATE_LIMITED"})"});
+        send(kAlpha, "@inco ξανά");
+        expect(rig.server.inco_requests.size() == 2 && rig.server.inco_inserts.size() == 1,
+               "rate limited: no answer and no retry");
+        expect(!g_inco_log.empty() && g_inco_log.back().find("RATE_LIMITED (429)") != std::string::npos,
+               "the code is logged");
+
+        rig.server.inco_replies.push_back({200, R"({"needLocation":true})"});
+        rig.server.inco_replies.push_back({200, R"({"text":"Βροχή στην Αθήνα.","sources":[]})"});
+        send(kAlpha, "@inco θα βρέξει;");
+        JsonValue second;
+        expect(rig.server.inco_requests.size() == 4 && parse_json(rig.server.inco_requests[3], second) &&
+                   second.string_at("locationCity") == "Αθήνα" && !second.find("locationDenied"),
+               "location asked: the same request once more with the known city");
+        expect(rig.server.inco_inserts.size() == 2, "then answered");
+        g_city.clear();
+        rig.server.inco_replies.push_back({200, R"({"needLocation":true})"});
+        rig.server.inco_replies.push_back({200, R"({"text":"Ποια πόλη;"})"});
+        send(kAlpha, "@inco καιρός;");
+        JsonValue denied;
+        expect(rig.server.inco_requests.size() == 6 && parse_json(rig.server.inco_requests[5], denied) &&
+                   denied.find("locationDenied") && !denied.find("locationCity"),
+               "no city known: locationDenied");
+        g_city = "Αθήνα";
+
+        rig.server.inco_replies.push_back({200, R"({"text":"","sources":[]})"});
+        send(kAlpha, "@inco σιωπή");
+        expect(rig.server.inco_inserts.size() == 3, "an empty answer writes nothing");
+
+        rig.server.inco_replies.push_back({200, R"({"quota":true})"});
+        send(kAlpha, "@inco άλλο ένα");
+        JsonValue quota;
+        expect(rig.server.inco_inserts.size() == 4 && parse_json(rig.server.inco_inserts[3], quota) &&
+                   open(quota.string_at("text")) == kAoratonIncoQuotaText && !quota.find("reply_to"),
+               "quota: inco says so once");
+        expect(rig.server.inco_requests.size() == 8, "quota answer counted");
+        send(kAlpha, "@inco αύριο;");
+        expect(rig.server.inco_requests.size() == 8, "after the quota, not asked again the same day");
+
+        for (const auto& line : g_inco_log) {
+            expect(line.find("τι ώρα") == std::string::npos && line.find("01:15") == std::string::npos &&
+                       line.find("Αθήνα") == std::string::npos && line.find("at-") == std::string::npos,
+                   "the log has ids and codes only");
+        }
+    }
+
+    // inco stays off until the owner enables it.
+    {
+        Rig rig;
+        rig.server.rooms[0].ai = true;
+        rig.sign_in();
+        expect(rig.service.unlock_keys(passphrase), "unlock queued");
+        rig.pump();
+        expect(rig.service.prepare_send(kAlpha, "@inco γεια") && rig.service.confirm_send(), "send");
+        rig.pump();
+        expect(rig.server.inco_requests.empty() && rig.server.inco_inserts.empty(), "disabled: never asked");
     }
 
     std::cout << "aoraton account worker tests passed\n";

@@ -14,6 +14,9 @@ constexpr std::size_t kMaxSeenIds = 120;
 constexpr std::size_t kMaxPendingSends = 16;
 constexpr std::size_t kMaxNotifiedPerPoll = 8;
 constexpr std::size_t kCommandsPerStep = 8;
+// The edge function retries Gemini up to three times, 20 s each.
+constexpr std::uint32_t kIncoTimeoutMs = 75000;
+constexpr std::size_t kIncoQuoteChars = 100;
 
 void wipe(std::string& value) noexcept {
     volatile char* data = value.empty() ? nullptr : &value[0];
@@ -46,6 +49,27 @@ void remember(std::vector<std::string>& ids, const std::string& id) {
 
 bool contains(const std::vector<std::string>& ids, const std::string& id) {
     return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+// Wipes a plaintext copy on every way out of a scope.
+struct WipeOnExit {
+    std::string& value;
+    ~WipeOnExit() { wipe(value); }
+};
+
+// The edge function's documented failures, for the log line.
+std::string inco_failure(int status) {
+    switch (status) {
+        case 0: return "NETWORK";
+        case 400: return "BAD_REQUEST (400)";
+        case 401: return "AUTH_REQUIRED (401)";
+        case 403: return "NOT_A_MEMBER (403)";
+        case 429: return "RATE_LIMITED (429)";
+        case 500: return "SERVER_ERROR (500)";
+        case 502: return "AI_REQUEST_FAILED (502)";
+        case 503: return "AI_NOT_CONFIGURED (503)";
+        default: return "HTTP " + std::to_string(status);
+    }
 }
 
 }  // namespace
@@ -315,7 +339,8 @@ AoratonAccountWorker::RefreshResult AoratonAccountWorker::refresh_session() {
 AoratonAccountWorker::RestResult AoratonAccountWorker::rest(const std::string& method,
                                                             const std::string& path,
                                                             const std::string& body,
-                                                            const char* prefer) {
+                                                            const char* prefer,
+                                                            std::uint32_t timeout_ms) {
     RestResult result;
     if (!signed_in_) return result;
     if (session_.expires_at_unix - now_unix_ < 60) {
@@ -335,6 +360,7 @@ AoratonAccountWorker::RestResult AoratonAccountWorker::rest(const std::string& m
         if (!body.empty()) request.headers.push_back({"Content-Type", "application/json"});
         if (prefer) request.headers.push_back({"Prefer", prefer});
         request.body = body;
+        request.timeout_ms = timeout_ms;
         result.response = http_.send(request);
         for (auto& header : request.headers) wipe(header.second);
         wipe(request.body);
@@ -673,6 +699,14 @@ void AoratonAccountWorker::send_text(AoratonCommand& command) {
             return;
         }
     }
+    // A question for inco is kept only until its stored row is known; nothing
+    // else is ever kept after encryption.
+    std::string question;
+    WipeOnExit wipe_question{question};
+    const auto* remote = room_for(command.room_id);
+    if (config_.inco.enabled && remote && remote->ai_enabled && aoraton_mentions_inco(command.plaintext)) {
+        question = command.plaintext;
+    }
     command.clear_plaintext();
     AoratonEvent submitted;
     submitted.type = AoratonEventType::SendSubmitted;
@@ -719,6 +753,211 @@ void AoratonAccountWorker::send_text(AoratonCommand& command) {
     ack.server_message_id = id;
     ack.timestamp = created_at;
     emit(std::move(ack));
+    if (!question.empty()) answer_inco(command.room_id, id, username, question);
+}
+
+const AoratonRemoteRoom* AoratonAccountWorker::room_for(const std::string& room_key) const {
+    for (const auto& room : rooms_) {
+        if (room.room_key == room_key) return &room;
+    }
+    return nullptr;
+}
+
+void AoratonAccountWorker::inco_log(const std::string& line) const {
+    if (config_.inco.log) config_.inco.log("inco: " + line);
+}
+
+int AoratonAccountWorker::utc_offset_minutes() const {
+    return config_.inco.utc_offset_minutes ? config_.inco.utc_offset_minutes(now_unix_) : 0;
+}
+
+// As the web client does for the message its own device sent: ask the edge
+// function, then encrypt and insert the answer under inco's uid. One at a
+// time; failures are logged as codes and never retried.
+void AoratonAccountWorker::answer_inco(const std::string& room_key, const std::string& row_id,
+                                       const std::string& username, const std::string& question) {
+    const auto* room = room_for(room_key);
+    AoratonIncoCandidate candidate;
+    candidate.sent_here = true;
+    candidate.row_id = row_id;
+    candidate.uid = session_.user_id;
+    candidate.type = "text";
+    candidate.text = question;
+    WipeOnExit wipe_candidate{candidate.text};
+    candidate.room_ai_enabled = room && room->ai_enabled;
+    const int offset = utc_offset_minutes();
+    const std::string today = aoraton_inco_local_day(now_unix_, offset);
+    if (!aoraton_inco_should_answer(candidate, config_.inco.enabled, inco_busy_, inco_quota_day_ == today)) return;
+    inco_busy_ = true;
+    struct Idle {
+        bool& busy;
+        ~Idle() { busy = false; }
+    } idle{inco_busy_};
+
+    std::vector<AoratonIncoTurn> turns;
+    if (!inco_history(room_key, row_id, username, question, turns)) {
+        inco_log("HISTORY_UNAVAILABLE for " + row_id);
+        return;
+    }
+    const std::string when = aoraton_inco_client_date_time(now_unix_, offset);
+    AoratonIncoReply reply;
+    auto location = AoratonIncoLocation::Unasked;
+    std::string city;
+    bool failed = false;
+    for (int pass = 0; pass < 2 && !failed; ++pass) {
+        std::string body = aoraton_inco_request_body(room_key, turns, question, username, when, location, city);
+        auto result = rest("POST", "/functions/v1/inco-ai", body, nullptr, kIncoTimeoutMs);
+        wipe(body);
+        const int status = result.response.status;
+        const bool parsed = ok_status(status) && aoraton_parse_inco_reply(result.response.body, reply);
+        wipe(result.response.body);
+        failed = !parsed;
+        if (!ok_status(status)) {
+            const bool revoked = result.outcome == RestOutcome::Revoked && status == 0;
+            inco_log((revoked ? std::string("SESSION_REVOKED") : inco_failure(status)) + " for " + row_id);
+        } else if (!parsed) {
+            inco_log("BAD_RESPONSE for " + row_id);
+        } else if (reply.kind == AoratonIncoReplyKind::NeedLocation && pass == 0) {
+            // The model wants a place: ask once more, with the city AURA knows
+            // or saying that none was given.
+            city = config_.inco.location_city ? config_.inco.location_city() : std::string{};
+            location = city.empty() ? AoratonIncoLocation::Denied : AoratonIncoLocation::City;
+        } else {
+            break;
+        }
+    }
+    for (auto& turn : turns) wipe(turn.text);
+    if (failed) return;
+
+    switch (reply.kind) {
+        case AoratonIncoReplyKind::Text: {
+            const std::string text = aoraton_inco_plain_text(reply.text);
+            wipe(reply.text);
+            const auto* stored = key_for(room_key);
+            AoratonIncoQuote quote;
+            quote.id = row_id;
+            quote.username = username;
+            if (stored) {
+                AoratonRoomKey key(stored->rk);
+                AoratonCryptoError error = AoratonCryptoError::None;
+                std::string excerpt = aoraton_inco_prefix(question, kIncoQuoteChars);
+                const bool sealed = message_crypto_.encrypt_text(excerpt, key, quote.wire, error);
+                wipe(excerpt);
+                if (!sealed) {
+                    inco_log("ENCRYPTION_FAILED for " + row_id);
+                    return;
+                }
+            }
+            if (write_inco(room_key, text, &quote, reply.sources)) inco_log("answered " + row_id);
+            break;
+        }
+        case AoratonIncoReplyKind::Quota:
+            inco_quota_day_ = today;
+            inco_log("QUOTA_EXHAUSTED for " + row_id);
+            write_inco(room_key, kAoratonIncoQuotaText, nullptr, {});
+            break;
+        case AoratonIncoReplyKind::NeedLocation:
+        case AoratonIncoReplyKind::Empty:
+            if (reply.kind == AoratonIncoReplyKind::NeedLocation) inco_log("NO_ANSWER for " + row_id);
+            break;
+    }
+}
+
+// The newest rows up to and including the question, decrypted, as inco's turns.
+bool AoratonAccountWorker::inco_history(const std::string& room_key, const std::string& row_id,
+                                        const std::string& username, const std::string& question,
+                                        std::vector<AoratonIncoTurn>& turns) {
+    auto result = rest("GET", aoraton_inco_history_path(room_key), {});
+    std::vector<AoratonRemoteMessage> rows;
+    if (result.outcome != RestOutcome::Ok || !ok_status(result.response.status) ||
+        !aoraton_parse_messages(result.response.body, rows)) {
+        return false;
+    }
+    std::reverse(rows.begin(), rows.end());
+    std::vector<AoratonIncoRow> plain;
+    bool asked = false;
+    for (const auto& row : rows) {
+        if (row.room_key != room_key) continue;
+        AoratonIncoRow item;
+        item.id = row.id;
+        item.uid = row.uid;
+        item.username = row.username;
+        item.type = row.type;
+        if (!row.reply_to_id.empty()) item.reply_to_username = row.reply_to_username;
+        if (row.has_poll && decrypt(room_key, row.poll_question, item.poll_question)) {
+            item.has_poll = true;
+            for (const auto& option : row.poll_options) {
+                std::string text;
+                if (decrypt(room_key, option, text)) item.poll_options.push_back(std::move(text));
+            }
+        } else if (!row.text.empty() && !decrypt(room_key, row.text, item.text)) {
+            continue;  // unreadable here: left out rather than guessed
+        }
+        plain.push_back(std::move(item));
+        if (row.id == row_id) {
+            asked = true;
+            break;  // the question is the last turn; later rows are not part of it
+        }
+    }
+    if (!asked) {
+        AoratonIncoRow item;
+        item.id = row_id;
+        item.uid = session_.user_id;
+        item.username = username;
+        item.type = "text";
+        item.text = question;
+        plain.push_back(std::move(item));
+    }
+    turns = aoraton_inco_turns(plain);
+    for (auto& item : plain) {
+        wipe(item.text);
+        wipe(item.poll_question);
+        for (auto& option : item.poll_options) wipe(option);
+    }
+    return true;
+}
+
+// Encrypts and inserts an inco row with this account's session (RLS allows
+// inco's uid to members of rooms that enable it), then shows it at once.
+bool AoratonAccountWorker::write_inco(const std::string& room_key, const std::string& text,
+                                      const AoratonIncoQuote* quote, const std::vector<AoratonIncoSource>& sources) {
+    const auto* stored = key_for(room_key);
+    const auto* room = room_for(room_key);
+    if (!stored || !room) {
+        inco_log("ROOM_ACCESS_CHANGED");
+        return false;
+    }
+    std::string wire;
+    {
+        AoratonRoomKey key(stored->rk);
+        AoratonCryptoError error = AoratonCryptoError::None;
+        if (!message_crypto_.encrypt_text(text, key, wire, error)) {
+            inco_log("ENCRYPTION_FAILED");
+            return false;
+        }
+    }
+    auto result = rest("POST", "/rest/v1/messages?select=id,created_at",
+                       aoraton_inco_insert_body(room_key, aoraton_inco_avatar(room->ai_avatar_url), wire, quote, sources),
+                       "return=representation");
+    std::string id;
+    std::string created_at;
+    if (!ok_status(result.response.status) || !aoraton_parse_insert_ack(result.response.body, id, created_at)) {
+        inco_log("INSERT_REJECTED (" + inco_failure(result.response.status) + ")");
+        return false;
+    }
+    // Shown now rather than at the next poll; the poll's copy is the same id.
+    AoratonEvent event;
+    event.type = AoratonEventType::IncomingMessage;
+    event.message.id = id;
+    event.message.room_id = room_key;
+    event.message.author = "inco";
+    event.message.local_display_text = text;
+    event.message.received_at = created_at;
+    event.message.direction = AoratonDirection::Incoming;
+    event.message.delivery = AoratonDelivery::Received;
+    event.timestamp = now_iso();
+    emit(std::move(event));
+    return true;
 }
 
 void AoratonAccountWorker::unlock_vault(std::string& passphrase) {

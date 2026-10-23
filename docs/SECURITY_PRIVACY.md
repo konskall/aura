@@ -21,4 +21,23 @@ The Aoraton source audit was read-only. AURA did not copy GPL implementation or 
 - **Ending the session:** **Αποσύνδεση** erases the vault and ends the session on the server. Signing out on aoraton.com (global scope) also ends AURA's session, which is the remedy for a lost device.
 - **Automated tests** use a loopback fake of the Supabase endpoints and never contact the real project.
 
+**2026-10-24, owner request: inco answers** (`shared/core/src/aoraton_inco.cpp`). On aoraton the device that sent a message mentioning inco produces the answer itself, so AURA now does the same for its own messages. It does nothing unless the owner opts in once: `"inco_enabled": true` in the git-ignored `config/aoraton.local.json`, or `AURA_INCO_ENABLED=1`. It is off by default.
+
+What leaves end-to-end encryption:
+- **Sent to aoraton's `inco-ai` edge function, which passes it to Google Gemini:** the question, the room's last 24 readable messages (decrypted, 700 characters each), the local date and time, and, only if the model asks for a location, the saved weather city.
+- **Never sent:** the room name, or any LoRa budget.
+
+The answer is written back with the owner's session and RLS:
+- it is encrypted with the room key, as inco's uid, in reply to the question;
+- there is no service key and no client message id;
+- only https sources are kept.
+
+What triggers it:
+- AURA answers only its own message, after the insert has returned the stored row.
+- It never answers another device's or person's message (that device answers it), inco's own rows, or history from before start-up.
+- The room must have `ai_enabled`.
+- One answer at a time; failures are logged as a code and never retried.
+
+The log line carries message ids and codes only, never the question, the history or the answer.
+
 Telemetry is off. Runtime logs may contain request IDs, timing, status codes and error classes, but not private prompts or messages. Fictional fixtures are labeled `DEMO` and must never be presented as live facts.

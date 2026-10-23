@@ -32,6 +32,10 @@ If the browser stays on aoraton.com, add `http://127.0.0.1:4779/**` to Supabase 
 
 Rooms refresh every 10 s (polling, not realtime). Sending always goes through the confirmation screen. Without the config file, Aoraton shows DEMO rooms.
 
+**inco (opt-in).** On aoraton the device that sent a message mentioning inco answers it. To let AURA answer its own messages, add `"inco_enabled": true` to `config\aoraton.local.json`. This sends the question and the room's recent messages, decrypted, to Gemini through aoraton's `inco-ai` function.
+
+Then a message like «@inco τι ώρα είναι;» sent from AURA, in a room where inco is enabled, gets inco's reply in a few seconds. The reply can also be read on aoraton.com. The terminal shows `AURA inco: answered <id>`, or a code such as `RATE_LIMITED (429)`.
+
 ## Voice and companion features (v13)
 
 Speech stays on this PC. Install the local recogniser once (about 200 MB under the ignored `.tools\whisper`, SHA-256 pinned):

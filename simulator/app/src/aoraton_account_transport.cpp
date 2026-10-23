@@ -2,6 +2,8 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <ctime>
+#include <iostream>
 
 namespace aura::simulator {
 namespace {
@@ -19,6 +21,17 @@ std::int64_t steady_ms() {
 std::int64_t unix_seconds() {
     return std::chrono::duration_cast<std::chrono::seconds>(
                std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+// This PC's offset from UTC at `utc_unix`, daylight saving included.
+int local_utc_offset_minutes(std::int64_t utc_unix) {
+    const std::time_t when = static_cast<std::time_t>(utc_unix);
+    std::tm local{};
+    std::tm utc{};
+    if (localtime_s(&local, &when) != 0 || gmtime_s(&utc, &when) != 0) return 0;
+    int days = local.tm_yday - utc.tm_yday;
+    if (local.tm_year != utc.tm_year) days = local.tm_year > utc.tm_year ? 1 : -1;
+    return days * 1440 + (local.tm_hour - utc.tm_hour) * 60 + (local.tm_min - utc.tm_min);
 }
 
 }  // namespace
@@ -82,6 +95,7 @@ bool load_aoraton_transport_options(AoratonTransportOptions& options, std::strin
     const std::string store = environment("AURA_AORATON_STORE");
     options.store_path = store.empty() ? WindowsAoratonVault::default_path() : std::filesystem::path(store);
     options.fetch_instead_of_browser = environment("AURA_AORATON_BROWSER") == "fetch";
+    options.config.inco.enabled = environment("AURA_INCO_ENABLED") == "1";
     if (options.store_path.empty()) {
         error = "AORATON_STORE_UNAVAILABLE";
         return false;
@@ -89,8 +103,25 @@ bool load_aoraton_transport_options(AoratonTransportOptions& options, std::strin
     return true;
 }
 
+AoratonTransportOptions AoratonAccountTransport::with_inco_hooks(AoratonTransportOptions options,
+                                                                 AoratonAccountTransport* self) {
+    options.config.inco.utc_offset_minutes = local_utc_offset_minutes;
+    options.config.inco.location_city = [self] {
+        std::lock_guard<std::mutex> lock(self->city_mutex_);
+        return self->city_;
+    };
+    // Ids and codes only (the worker never passes text here).
+    options.config.inco.log = [](const std::string& line) { std::cerr << "AURA " << line << '\n'; };
+    return options;
+}
+
+void AoratonAccountTransport::set_location_city(std::string city) {
+    std::lock_guard<std::mutex> lock(city_mutex_);
+    city_ = std::move(city);
+}
+
 AoratonAccountTransport::AoratonAccountTransport(AoratonMailbox& mailbox, AoratonTransportOptions options)
-    : options_(std::move(options)),
+    : options_(with_inco_hooks(std::move(options), this)),
       store_(options_.store_path),
       channel_(options_.callback_port,
                options_.fetch_instead_of_browser

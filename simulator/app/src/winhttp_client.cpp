@@ -84,6 +84,10 @@ AoratonHttpResponse WinHttpClient::send(const AoratonHttpRequest& request) {
     if (!handle) return response;
     DWORD disable = WINHTTP_DISABLE_REDIRECTS;
     WinHttpSetOption(handle, WINHTTP_OPTION_DISABLE_FEATURE, &disable, sizeof(disable));
+    if (request.timeout_ms != 0) {
+        const int wait = static_cast<int>(request.timeout_ms);
+        WinHttpSetTimeouts(handle, 10000, 10000, wait, wait);
+    }
     std::wstring headers = L"Accept: application/json\r\nAccept-Encoding: identity\r\n";
     for (const auto& header : request.headers) {
         headers += widen_ascii(header.first) + L": " + widen_ascii(header.second) + L"\r\n";

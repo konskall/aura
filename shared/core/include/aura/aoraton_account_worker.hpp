@@ -2,6 +2,7 @@
 
 #include "aura/aoraton_account.hpp"
 #include "aura/aoraton_crypto.hpp"
+#include "aura/aoraton_inco.hpp"
 #include "aura/aoraton_real.hpp"
 
 #include <cstdint>
@@ -17,6 +18,9 @@ struct AoratonHttpRequest {
     std::string url;
     std::vector<std::pair<std::string, std::string>> headers;
     std::string body;
+    // How long to wait for the answer; 0 keeps the client's default. inco's
+    // edge function may retry Gemini for up to a minute.
+    std::uint32_t timeout_ms{0};
 };
 
 // status 0 means the request never got an HTTP answer (DNS, TLS, timeout).
@@ -66,8 +70,9 @@ public:
 };
 
 // Runs on one platform thread: `step` handles bounded mailbox commands, the
-// pending sign-in and the 10 s poll, blocking on HTTP as it goes. It never logs
-// and never puts a token, passphrase or room key into an event.
+// pending sign-in and the 10 s poll, blocking on HTTP as it goes. It never puts
+// a token, passphrase or room key into an event. Its only log is inco's
+// outcome line (ids and codes) through AoratonIncoConfig::log.
 class AoratonAccountWorker final {
 public:
     static constexpr std::int64_t kSignInTimeoutMs = 290000;
@@ -115,7 +120,7 @@ private:
     void finish_sign_in(AoratonSession session);
     RefreshResult refresh_session();
     RestResult rest(const std::string& method, const std::string& path, const std::string& body,
-                    const char* prefer = nullptr);
+                    const char* prefer = nullptr, std::uint32_t timeout_ms = 0);
     AoratonHttpResponse auth_post(const std::string& path, const std::string& body, bool bearer);
     void session_revoked();
     void connection_lost();
@@ -125,6 +130,15 @@ private:
     bool fetch_history(const std::string& room_key);
     void deliver_new_messages(const std::string& room_key);
     void send_text(AoratonCommand& command);
+    void answer_inco(const std::string& room_key, const std::string& row_id, const std::string& username,
+                     const std::string& question);
+    bool inco_history(const std::string& room_key, const std::string& row_id, const std::string& username,
+                      const std::string& question, std::vector<AoratonIncoTurn>& turns);
+    bool write_inco(const std::string& room_key, const std::string& text, const AoratonIncoQuote* quote,
+                    const std::vector<AoratonIncoSource>& sources);
+    void inco_log(const std::string& line) const;
+    int utc_offset_minutes() const;
+    const AoratonRemoteRoom* room_for(const std::string& room_key) const;
     void unlock_vault(std::string& passphrase);
     void add_invite(std::string& invite);
     void keys_changed(AoratonKeyState state);
@@ -158,6 +172,8 @@ private:
     std::vector<AoratonRemoteRoom> rooms_;
     std::map<std::string, RoomTrack> tracks_;
     std::vector<PendingSend> pending_sends_;
+    bool inco_busy_{false};
+    std::string inco_quota_day_;  // the local day inco ran out of questions
 };
 
 }  // namespace aura

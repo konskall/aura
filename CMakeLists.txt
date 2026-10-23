@@ -60,6 +60,7 @@ add_library(aura_core STATIC
     shared/core/src/json_reader.cpp
     shared/core/src/aoraton_account.cpp
     shared/core/src/aoraton_account_worker.cpp
+    shared/core/src/aoraton_inco.cpp
     shared/core/src/audio_service.cpp
     shared/core/src/assistant_state.cpp
     shared/core/src/device_status.cpp
@@ -204,6 +205,9 @@ if(BUILD_TESTING)
             AURA_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         target_link_libraries(aura_aoraton_account_tests PRIVATE aura_core bcrypt)
         add_test(NAME aura_aoraton_account_tests COMMAND aura_aoraton_account_tests)
+        add_executable(aura_aoraton_inco_tests tests/unit/aoraton_inco_test.cpp)
+        target_link_libraries(aura_aoraton_inco_tests PRIVATE aura_core)
+        add_test(NAME aura_aoraton_inco_tests COMMAND aura_aoraton_inco_tests)
         add_executable(aura_aoraton_account_worker_tests
             tests/unit/aoraton_account_worker_test.cpp
             simulator/app/src/windows_aoraton_crypto.cpp

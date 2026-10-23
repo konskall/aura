@@ -19,6 +19,7 @@ idf_component_register(
         "${AURA_ROOT}/shared/core/src/json_reader.cpp"
         "${AURA_ROOT}/shared/core/src/aoraton_account.cpp"
         "${AURA_ROOT}/shared/core/src/aoraton_account_worker.cpp"
+        "${AURA_ROOT}/shared/core/src/aoraton_inco.cpp"
         "${AURA_ROOT}/shared/core/src/audio_service.cpp"
         "${AURA_ROOT}/shared/core/src/assistant_state.cpp"
         "${AURA_ROOT}/shared/core/src/device_status.cpp"

@@ -298,6 +298,9 @@ int main(int argc, char** argv) {
                 *aoraton_mailbox, std::move(aoraton_options));
             std::cerr << "AURA Aoraton " << (runtime_mode == aura::AoratonRuntimeMode::IntegrationTest ? "TEST" : "LIVE")
                       << ": account sign-in through the PC browser\n";
+            if (aoraton_account_transport->inco_enabled()) {
+                std::cerr << "AURA inco: ON - this device answers its own @inco messages through inco-ai (Gemini)\n";
+            }
         } else {
             aoraton_service = std::make_unique<aura::RealAoratonService>(
                 *aoraton_mailbox, runtime_mode, aoraton_client_message_id);
@@ -404,7 +407,15 @@ int main(int argc, char** argv) {
     };
 
     auto apply = [&] { ui.apply(controller.snapshot()); };
-    auto apply_weather = [&] { ui.apply_weather(weather_model.snapshot()); };
+    auto apply_weather = [&] {
+        const auto& weather = weather_model.snapshot();
+        ui.apply_weather(weather);
+        // inco may ask where the owner is: the saved weather city answers.
+        if (aoraton_account_transport) {
+            aoraton_account_transport->set_location_city(weather.has_saved_location ? weather.saved_location.name
+                                                                                    : std::string{});
+        }
+    };
     auto same_weather_location = [](const aura::WeatherLocation& left, const aura::WeatherLocation& right) {
         return left.name == right.name && std::fabs(left.latitude - right.latitude) < 0.0001 &&
                std::fabs(left.longitude - right.longitude) < 0.0001;

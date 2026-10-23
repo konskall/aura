@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ALPHA, ANON_KEY, startFakeSupabase } from './aoraton_fake_supabase.mjs';
+import { ALPHA, ANON_KEY, INCO_ANSWER, INCO_UID, open, startFakeSupabase } from './aoraton_fake_supabase.mjs';
 
 const exe = process.argv[2];
 assert.ok(exe && existsSync(exe), 'smoke executable path is required');
@@ -31,6 +31,7 @@ const exitCode = await new Promise((resolve) => {
       AURA_AORATON_STORE: store,
       AURA_AORATON_SMOKE_REPORT: report,
       AURA_AORATON_SMOKE_PASSPHRASE_B64: Buffer.from(fake.passphrase, 'utf8').toString('base64url'),
+      AURA_INCO_ENABLED: '1',
     },
   });
   child.stdout.on('data', (chunk) => { output += chunk; });
@@ -48,12 +49,36 @@ try {
     { signed_in: true, rooms: 2, unlocked: true, sent: 'Acknowledged', incoming_notified: 1, store_written: true,
       signed_out: true });
   assert.ok(result.history >= 1, 'history fetched');
-  assert.equal(fake.state.lastSentPlaintext, 'DEMO από το AURA', 'the server received v2 ciphertext AURA encrypted');
-  assert.equal(fake.state.rows.filter((row) => row.room_key === ALPHA && row.uid === 'user-1').length, 1,
-    'exactly one send');
+  assert.equal(result.inco_answered, true, 'inco answered on AURA');
+  const question = '@inco DEMO ερώτηση';
+  const sent = fake.state.rows.filter((row) => row.room_key === ALPHA && row.uid === 'user-1');
+  assert.equal(sent.length, 2, 'exactly two sends (a message and the question)');
+  assert.equal(fake.state.lastSentPlaintext, question, 'the server received v2 ciphertext AURA encrypted');
+
+  assert.equal(fake.state.incoRequests.length, 1, 'inco-ai asked once');
+  const asked = fake.state.incoRequests[0];
+  assert.equal(asked.roomKey, ALPHA);
+  assert.equal(asked.triggerText, question);
+  assert.ok(!('roomName' in asked) && !('maxChars' in asked), 'no room name and no LoRa budget');
+  assert.ok(/ at \d\d:\d\d [AP]M (GMT|UTC)/.test(asked.clientDateTime), 'local date and time');
+  assert.equal(asked.history.at(-1).text, `${asked.triggerUsername}: ${question}`, 'the question is the last turn');
+  assert.ok(asked.history.some((turn) => turn.text === 'Maria: DEMO απάντηση από τη Μαρία'), 'the conversation');
+
+  assert.equal(fake.state.incoInserts.length, 1, 'one inco answer stored');
+  const answer = fake.state.incoInserts[0];
+  assert.equal(answer.uid, INCO_UID);
+  assert.equal(answer.username, 'inco');
+  assert.equal(answer.avatar_url, 'https://aoraton.com/inco-avatar.png');
+  assert.ok(!('client_msg_id' in answer), 'no client_msg_id');
+  assert.equal(await open(0x11, answer.text), INCO_ANSWER, 'answer encrypted with the room key, markdown removed');
+  assert.equal(answer.reply_to.id, sent[1].id, 'in reply to the stored question');
+  assert.equal(await open(0x11, answer.reply_to.text), question, 'the quoted question is encrypted');
+  assert.equal(answer.reply_to.isAttachment, false);
+  assert.ok(output.includes(`AURA inco: answered ${sent[1].id}`), 'the outcome is logged by id');
+
   assert.equal(fake.state.logouts, 1, 'sign-out told the server');
   assert.ok(!existsSync(store), 'sign-out erased the DPAPI store');
-  for (const secret of ['at-', 'rt-', 'code-1', fake.passphrase, 'DEMO από το AURA']) {
+  for (const secret of ['at-', 'rt-', 'code-1', fake.passphrase, 'DEMO από το AURA', 'ερώτηση', INCO_ANSWER]) {
     assert.ok(!output.includes(secret), 'no token, code, passphrase or message text in the program output');
   }
   console.log(`aoraton account smoke passed (${fake.state.log.length} requests to the loopback fake)`);

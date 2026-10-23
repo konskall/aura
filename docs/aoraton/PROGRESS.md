@@ -12,6 +12,7 @@ Design: `docs/design/AURA_AORATON_ACCOUNT_LOGIN_DESIGN.md`; plan: `docs/superpow
 | Windows platform: WinHTTP, loopback callback, DPAPI store, end to end | TEST VERIFIED | `aura_aoraton_account_smoke` against the loopback Node fake |
 | UI: sign-in, waiting, timeout hint, re-sign-in, account page, keys, invite paste, polling label | TEST VERIFIED | pointer checks `aoraton.sign_in/paste_invite/keys_row/unlock_submit/sign_out`; captures `aoraton-account-*` |
 | Real aoraton.com sign-in, keys, read and send | OWNER VERIFIED | 2026-10-23 owner run through `run.bat`; see `docs/VERIFICATION.md` |
+| inco answers to AURA's own @inco messages (opt-in) | TEST VERIFIED | `aura_aoraton_inco_tests`, `aura_aoraton_account_worker_tests`, `aura_aoraton_account_smoke`; live run on aoraton.com NOT RUN (owner) |
 | ESP32 sign-in (via phone) | NOT STARTED | Shared worker is ready behind its four interfaces |
 
 ## v11 baseline

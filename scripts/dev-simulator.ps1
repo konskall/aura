@@ -42,6 +42,9 @@ if (-not $Smoke -and -not $env:AURA_AORATON_MODE -and (Test-Path -LiteralPath $a
     $env:AURA_AORATON_URL = $aoraton.url
     $env:AURA_AORATON_ANON_KEY = $aoraton.anon_key
     $env:AURA_AORATON_MODE = 'live'
+    # Opt-in: "inco_enabled": true lets this device answer its own @inco messages.
+    # The question and recent messages then leave end-to-end encryption for Gemini.
+    if (-not $env:AURA_INCO_ENABLED -and $aoraton.inco_enabled -eq $true) { $env:AURA_INCO_ENABLED = '1' }
 }
 
 $bridge = $null
@@ -70,6 +73,11 @@ try {
     Write-Host "Provider: $Provider"
     if ($env:AURA_AORATON_MODE -eq 'live') {
         Write-Host 'Aoraton: your aoraton.com account (Aoraton > Sign in with Google)'
+        if ($env:AURA_INCO_ENABLED -eq '1') {
+            Write-Host 'inco: ON - AURA answers its own @inco messages (sent to Gemini through inco-ai)'
+        } else {
+            Write-Host 'inco: off (set "inco_enabled": true in config\aoraton.local.json to turn it on)'
+        }
     } else {
         Write-Host 'Aoraton: DEMO rooms (run scripts\setup-aoraton.ps1 to use your account)'
     }

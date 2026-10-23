@@ -91,8 +91,16 @@ int main() {
                                  snap.messages.back().direction == AoratonDirection::Outgoing;
                       }, 15000);
     const bool incoming = sent && wait_for([&] { return !snap.notifications.empty(); }, 30000);
+    // inco: this device's own @inco message is answered by this device.
+    const bool inco = incoming && service.prepare_send(kAlpha, "@inco DEMO ερώτηση") && service.confirm_send() &&
+                      wait_for([&] {
+                          for (const auto& message : snap.messages) {
+                              if (message.author == "inco" && !message.local_display_text.empty()) return true;
+                          }
+                          return false;
+                      }, 20000);
     const bool store_written = std::filesystem::exists(options.store_path);
-    const bool signed_out = incoming && service.unpair() &&
+    const bool signed_out = inco && service.unpair() &&
                             wait_for([&] {
                                 return snap.pairing == AoratonPairingState::NotPaired &&
                                        !std::filesystem::exists(options.store_path);
@@ -103,10 +111,12 @@ int main() {
     report << "{\"signed_in\":" << (signed_in ? "true" : "false") << ",\"rooms\":" << room_count
            << ",\"rooms_listed\":" << (rooms ? "true" : "false") << ",\"unlocked\":" << (unlocked ? "true" : "false")
            << ",\"history\":" << history_count << ",\"sent\":" << (sent ? "\"Acknowledged\"" : "null")
-           << ",\"incoming_notified\":" << (incoming ? 1 : 0) << ",\"store_written\":"
-           << (store_written ? "true" : "false") << ",\"signed_out\":" << (signed_out ? "true" : "false")
-           << ",\"last_error\":\"" << snap.last_error << "\"}\n";
-    const bool ok = signed_in && rooms && unlocked && history && sent && incoming && store_written && signed_out;
+           << ",\"incoming_notified\":" << (incoming ? 1 : 0) << ",\"inco_answered\":" << (inco ? "true" : "false")
+           << ",\"store_written\":" << (store_written ? "true" : "false")
+           << ",\"signed_out\":" << (signed_out ? "true" : "false") << ",\"last_error\":\"" << snap.last_error
+           << "\"}\n";
+    const bool ok = signed_in && rooms && unlocked && history && sent && incoming && inco && store_written &&
+                    signed_out;
     std::cout << (ok ? "aoraton account smoke ok" : "aoraton account smoke FAILED") << '\n';
     return ok ? 0 : 1;
 }

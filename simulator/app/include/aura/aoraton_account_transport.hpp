@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -40,6 +41,7 @@ struct AoratonTransportOptions {
 // Reads AURA_AORATON_URL and AURA_AORATON_ANON_KEY (set by dev-simulator.ps1
 // from the git-ignored config/aoraton.local.json). Only https URLs are taken,
 // or http://127.0.0.1 when AURA_AORATON_ALLOW_LOOPBACK=1 (the smoke test).
+// AURA_INCO_ENABLED=1 is the owner's opt-in for answering inco mentions.
 bool load_aoraton_transport_options(AoratonTransportOptions& options, std::string& error);
 
 // Runs the shared AoratonAccountWorker on one thread, stepping every 100 ms.
@@ -52,10 +54,16 @@ public:
 
     void start();
     void stop();
+    bool inco_enabled() const noexcept { return options_.config.inco.enabled; }
+    // From the UI thread: the saved weather city, for inco's location question.
+    void set_location_city(std::string city);
 
 private:
+    static AoratonTransportOptions with_inco_hooks(AoratonTransportOptions options, AoratonAccountTransport* self);
     void run();
 
+    std::mutex city_mutex_;
+    std::string city_;
     AoratonTransportOptions options_;
     WinHttpClient http_;
     WindowsAoratonAccountCrypto account_crypto_;
