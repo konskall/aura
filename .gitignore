@@ -1,0 +1,28 @@
+.tools/
+build/
+out/
+.cache/
+node_modules/
+bridge/runtime/
+simulator/runtime/*.log
+simulator/runtime/*.json
+simulator/runtime/*.pid
+simulator/runtime/companion/
+simulator/screenshots/*.bmp
+simulator/screenshots/*.png
+shared/assets/fonts/source/
+firmware/build/
+firmware/managed_components/
+firmware/dependencies.lock
+firmware/sdkconfig
+.env
+*.user
+*.suo
+*.tmp
+*.log
+*.pid
+__pycache__/
+*.pyc
+# Generated screenshots, motion frames, evidence sheets and pre-change source
+# archives (~580 MB). Regenerate with scripts/test.ps1; ledger: docs/VERIFICATION.md.
+artifacts/

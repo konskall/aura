@@ -1,0 +1,14 @@
+{
+  "source": "Synthetic clean-room WebCrypto vector; no production key or content",
+  "protocol": "Aoraton E2EE v2",
+  "room_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "iv_base64url": "oKGio6Slpqeoqaqr",
+  "plaintext_codepoints": ["393", "3b5", "3b9", "3b1", "20", "3c3", "3bf", "3c5", "20", "41", "55", "52", "41", "20", "1f44b", "a", "3ba", "3b1", "3c6", "3ad", "20", "65", "301"],
+  "plaintext_utf8_hex": "ce93ceb5ceb9ceb120cf83cebfcf85204155524120f09f918b0acebaceb1cf86cead2065cc81",
+  "wire": "v2:oKGio6Slpqeoqaqr:88QR8avMSZBFI1Q9FKfJPRK1uILPjmc1reJIqJwRxRnHrPg52Jyb8axi5UAP8Jz4byJFW00W",
+  "room_key_verifier": "s8zFw9nR0eZliujVhttf-njLfgjKxicQ-MExUTGIlwo",
+  "safety_material": "gBVf77cc-b0WQ3R768_v6ZmRhsxiNDQ9dKSSJeyAyK4",
+  "pin_room_input": "  Family Room  ",
+  "pin_input": " 0420 ",
+  "pin_verifier": "xx1mQSkgcocp0iVpzLGdxjJzKot3WAB4U2FgUMCh5m8"
+}

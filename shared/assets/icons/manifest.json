@@ -1,0 +1,534 @@
+{
+  "schema": "aura.icon-registry.v12",
+  "generatedAt": "2026-10-22",
+  "renderedSize": 64,
+  "activeSource": {
+    "family": "Lucide",
+    "version": "1.59.0",
+    "license": "ISC",
+    "reason": "Lawful fallback: no user-provided Lordicon asset export or PRO entitlement; free Lordicon assets must not be scraped or modified."
+  },
+  "lordiconLicense": "https://lordicon.com/licenses",
+  "roles": [
+    {
+      "role": "Home",
+      "source": "home.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/63-home"
+    },
+    {
+      "role": "Back",
+      "source": "arrow-left.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Forward",
+      "source": "arrow-right.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Menu",
+      "source": "menu.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Close",
+      "source": "x.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Apps",
+      "source": "layout-grid.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/1388-grid-bento"
+    },
+    {
+      "role": "Chevron",
+      "source": "chevron-right.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Refresh",
+      "source": "rotate-cw.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "More",
+      "source": "ellipsis.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Microphone",
+      "source": "mic.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/188-microphone"
+    },
+    {
+      "role": "MicMuted",
+      "source": "mic-off.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Chat",
+      "source": "message-circle.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Search",
+      "source": "search.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/19-magnifier"
+    },
+    {
+      "role": "Send",
+      "source": "send.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/4214-send-horizontal"
+    },
+    {
+      "role": "Cancel",
+      "source": "circle-x.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Thinking",
+      "source": "brain.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Copy",
+      "source": "copy.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Confirmation",
+      "source": "circle-check.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Voice",
+      "source": "audio-lines.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Play",
+      "source": "play.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Pause",
+      "source": "pause.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Stop",
+      "source": "square.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Speaker",
+      "source": "volume-2.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "VolumeDown",
+      "source": "volume-1.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "VolumeUp",
+      "source": "volume-2.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Muted",
+      "source": "volume-x.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "TestSound",
+      "source": "audio-waveform.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Record",
+      "source": "circle.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Message",
+      "source": "message-square.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/4198-message"
+    },
+    {
+      "role": "Inbox",
+      "source": "inbox.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/361-inbox"
+    },
+    {
+      "role": "Unread",
+      "source": "mail.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Notification",
+      "source": "bell.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Compose",
+      "source": "square-pen.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Reply",
+      "source": "reply.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Room",
+      "source": "users.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Lock",
+      "source": "lock.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Encrypted",
+      "source": "shield-check.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Connection",
+      "source": "link.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Wifi",
+      "source": "wifi.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/64-wifi"
+    },
+    {
+      "role": "WifiOff",
+      "source": "wifi-off.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Bluetooth",
+      "source": "bluetooth.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Battery",
+      "source": "battery-medium.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Charging",
+      "source": "battery-charging.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Display",
+      "source": "monitor.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Brightness",
+      "source": "sun.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Settings",
+      "source": "settings.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/39-cog"
+    },
+    {
+      "role": "Storage",
+      "source": "hard-drive.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Cpu",
+      "source": "cpu.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Memory",
+      "source": "memory-stick.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Weather",
+      "source": "cloud-sun.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Sun",
+      "source": "sun.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Cloud",
+      "source": "cloud.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "CloudRain",
+      "source": "cloud-rain.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "CloudDrizzle",
+      "source": "cloud-drizzle.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "CloudLightning",
+      "source": "cloud-lightning.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Snowflake",
+      "source": "snowflake.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Wind",
+      "source": "wind.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Droplet",
+      "source": "droplet.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Thermometer",
+      "source": "thermometer.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Clock",
+      "source": "clock-3.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Location",
+      "source": "map-pin.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/18-location-pin"
+    },
+    {
+      "role": "Calendar",
+      "source": "calendar-days.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/364-calendar-dots"
+    },
+    {
+      "role": "Reminder",
+      "source": "alarm-clock.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Timer",
+      "source": "timer.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Camera",
+      "source": "camera.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Tools",
+      "source": "wrench.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Warning",
+      "source": "triangle-alert.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/1140-warning-triangle"
+    },
+    {
+      "role": "Error",
+      "source": "circle-alert.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Success",
+      "source": "circle-check.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Retry",
+      "source": "rotate-cw.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Help",
+      "source": "circle-help.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Information",
+      "source": "info.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Offline",
+      "source": "cloud-off.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Audio",
+      "source": "music.svg",
+      "lordiconCandidate": "https://lordicon.com/icons/system/outline/1041-speaker"
+    },
+    {
+      "role": "Delete",
+      "source": "trash-2.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Visibility",
+      "source": "eye.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Power",
+      "source": "zap.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "List",
+      "source": "list.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "File",
+      "source": "file-text.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Edit",
+      "source": "pen-line.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Calculator",
+      "source": "calculator.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Image",
+      "source": "image.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Navigation",
+      "source": "navigation.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Globe",
+      "source": "globe-2.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "WifiLow",
+      "source": "wifi-low.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "WifiMedium",
+      "source": "wifi-high.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "VisibilityOff",
+      "source": "eye-off.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Sparkles",
+      "source": "sparkles.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "ChevronLeft",
+      "source": "chevron-left.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Check",
+      "source": "check.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Plus",
+      "source": "plus.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Languages",
+      "source": "languages.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Notebook",
+      "source": "notebook-pen.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Sunrise",
+      "source": "sunrise.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Smartphone",
+      "source": "smartphone.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Phone",
+      "source": "phone.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "PhoneOff",
+      "source": "phone-off.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Download",
+      "source": "download.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "BellRing",
+      "source": "bell-ring.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Moon",
+      "source": "moon.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Hand",
+      "source": "hand.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Flip",
+      "source": "flip-vertical.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Ear",
+      "source": "ear.svg",
+      "lordiconCandidate": null
+    },
+    {
+      "role": "Swap",
+      "source": "arrow-left-right.svg",
+      "lordiconCandidate": null
+    }
+  ]
+}

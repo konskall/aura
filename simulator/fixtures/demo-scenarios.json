@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "taygetus",
+      "label": "DEMO",
+      "prompt": "Πες μου για τον Ταΰγετο",
+      "source": "deterministic-local-fixture"
+    },
+    {
+      "id": "weather-no-live-source",
+      "label": "DEMO",
+      "prompt": "Τι καιρό κάνει;",
+      "source": "deterministic-local-fixture"
+    }
+  ]
+}
+

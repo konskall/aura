@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows-simulator:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install evidence validator dependency
+        run: python -m pip install pillow==12.2.0
+      - name: Bootstrap, build, and test native simulator
+        shell: powershell
+        run: .\scripts\setup-windows.ps1; .\scripts\test.ps1
+      - name: Upload actual LVGL smoke screenshot
+        uses: actions/upload-artifact@v5
+        with:
+          name: aura-lvgl-smoke
+          path: simulator/screenshots/aura-smoke.bmp
+
+  esp-idf-compile:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compile ESP32-S3 firmware scaffold
+        shell: bash
+        run: cd firmware && idf.py set-target esp32s3 && idf.py build
+
