@@ -2624,7 +2624,7 @@ struct AuraUi::Impl {
     }
 
     void render_wifi_status_card(lv_obj_t* parent, int y) {
-        char title[160];
+        char title[160] = {};
         std::string detail;
         std::uint32_t accent = ui::tokens::ice;
         ui::IconRole role = ui::IconRole::WifiOff;
