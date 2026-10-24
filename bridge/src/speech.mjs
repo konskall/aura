@@ -25,6 +25,20 @@ export const speechLimits = Object.freeze({
 
 const bytes = (value) => Buffer.byteLength(value, 'utf8');
 
+// large-v3-turbo gets Greek right where small does not ("αύριο", not "άυρω"),
+// so it is used whenever setup-voice.ps1 installed it.
+export const WHISPER_MODELS = Object.freeze(['ggml-large-v3-turbo-q5_0.bin', 'ggml-small-q5_1.bin']);
+
+// whisper's encoder cost grows with its audio context (1500 = 30 s). A
+// context sized to the clip plus a few seconds of margin keeps the full
+// accuracy at a fraction of the time; under ~9 s of context turbo starts to
+// mishear, so that is the floor, and 768 (15.4 s) covers the longest recording.
+export function audioContextFor(sampleCount) {
+  const seconds = Math.max(0, sampleCount) / 16000;
+  const needed = Math.ceil(((seconds + 3.5) * 50) / 64) * 64;
+  return Math.min(768, Math.max(448, needed));
+}
+
 function boundedEnvironment(source = process.env) {
   const names = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'LOCALAPPDATA',
     'APPDATA', 'PSModulePath'];
@@ -56,7 +70,7 @@ export function inspectWav(buffer) {
         return { ok: false, code: 'UNSUPPORTED_AUDIO' };
       }
       if (size / 2 < speechLimits.MIN_WAV_SAMPLES) return { ok: false, code: 'AUDIO_TOO_SHORT' };
-      return { ok: true };
+      return { ok: true, samples: size / 2 };
     }
     offset = body + size + (size & 1);
   }
@@ -115,15 +129,17 @@ function run(spawnImpl, command, args, { timeoutMs, signal }) {
 }
 
 export function createSpeechEngines(options = {}) {
+  const spawnImpl = options.spawnImpl ?? spawn;
+  const exists = options.exists ?? existsSync;
   const whisper = options.whisperPath ?? process.env.AURA_WHISPER_CLI ??
     path.join(repoRoot, '.tools', 'whisper', 'bin', 'whisper-cli.exe');
+  const models = path.join(repoRoot, '.tools', 'whisper', 'models');
   const model = options.modelPath ?? process.env.AURA_WHISPER_MODEL ??
-    path.join(repoRoot, '.tools', 'whisper', 'models', 'ggml-small-q5_1.bin');
+    WHISPER_MODELS.map((name) => path.join(models, name)).find((candidate) => exists(candidate)) ??
+    path.join(models, WHISPER_MODELS.at(-1));
   const powershell = options.powershell ?? 'powershell.exe';
   const scripts = options.scriptsDir ?? path.join(here, '..', 'scripts');
   const workdir = options.workdir ?? path.join(repoRoot, 'bridge', 'runtime', 'speech');
-  const spawnImpl = options.spawnImpl ?? spawn;
-  const exists = options.exists ?? existsSync;
   // Physical cores matter more than hyper-threads for the encoder.
   const threads = String(Math.max(1, Math.min(4, os.cpus().length)));
   const psArgs = (script, extra = []) =>
@@ -158,10 +174,10 @@ export function createSpeechEngines(options = {}) {
     const file = path.join(workdir, `stt-${randomBytes(8).toString('hex')}.wav`);
     try {
       await writeFile(file, wav);
-      // Greedy decoding and a 15 s audio context (the recording limit) keep a
-      // short question at a few seconds on a desktop CPU.
+      // Greedy decoding and an audio context sized to the clip keep a short
+      // question at a few seconds on a desktop CPU.
       const result = await run(spawnImpl, whisper, ['-m', model, '-f', file, '-l', lang, '-t', threads, '-bs', '1',
-        '-bo', '1', '-ac', '768', '-nt', '-np'], { timeoutMs: 60000, signal });
+        '-bo', '1', '-ac', String(audioContextFor(check.samples)), '-nt', '-np'], { timeoutMs: 60000, signal });
       if (result.aborted) return { ok: false, code: 'CANCELLED' };
       if (result.timedOut) return { ok: false, code: 'TIMEOUT' };
       if (result.missing) return { ok: false, code: 'STT_UNAVAILABLE' };

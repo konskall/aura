@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { cleanTranscript, createSpeechEngines, inspectWav } from '../src/speech.mjs';
+import { audioContextFor, cleanTranscript, createSpeechEngines, inspectWav, WHISPER_MODELS } from '../src/speech.mjs';
 
 function wav({ rate = 16000, channels = 1, bits = 16, samples = 8000 } = {}) {
   const data = samples * channels * (bits / 8);
@@ -47,11 +47,37 @@ function fakeSpawn(calls, behaviour) {
 }
 
 test('only 16 kHz mono 16-bit PCM WAV reaches the recogniser', () => {
-  assert.deepEqual(inspectWav(wav()), { ok: true });
+  assert.equal(inspectWav(wav()).ok, true);
   assert.equal(inspectWav(wav({ rate: 44100 })).code, 'UNSUPPORTED_AUDIO');
   assert.equal(inspectWav(wav({ channels: 2 })).code, 'UNSUPPORTED_AUDIO');
   assert.equal(inspectWav(wav({ samples: 100 })).code, 'AUDIO_TOO_SHORT');
   assert.equal(inspectWav(Buffer.from('not audio at all, really not audio at all.....')).code, 'INVALID_AUDIO');
+});
+
+test('the audio context follows the clip length within safe bounds', () => {
+  assert.equal(audioContextFor(4800), 448);
+  assert.equal(audioContextFor(16000 * 5), 448);
+  assert.equal(audioContextFor(16000 * 8), 576);
+  assert.equal(audioContextFor(16000 * 15), 768);
+  assert.equal(audioContextFor(16000 * 60), 768);
+});
+
+test('the turbo model is preferred and small is the fallback', async () => {
+  const workdir = await mkdtemp(path.join(os.tmpdir(), 'aura-speech-'));
+  try {
+    for (const [installed, expected] of [[WHISPER_MODELS, WHISPER_MODELS[0]], [[WHISPER_MODELS[1]], WHISPER_MODELS[1]]]) {
+      const calls = [];
+      const speech = createSpeechEngines({
+        whisperPath: 'whisper-cli.exe', workdir,
+        exists: (candidate) => candidate === 'whisper-cli.exe' || installed.some((name) => candidate.endsWith(name)),
+        spawnImpl: fakeSpawn(calls, async () => ({ stdout: ' Γεια.\n' })),
+      });
+      await speech.transcribe({ wav: wav(), lang: 'el' });
+      assert.ok(calls[0].args[1].endsWith(expected), `uses ${expected}`);
+    }
+  } finally {
+    await rm(workdir, { recursive: true, force: true });
+  }
 });
 
 test('transcripts drop whisper markers and control characters', () => {
@@ -72,6 +98,7 @@ test('recognition runs whisper with an argument array and removes the audio file
     assert.equal(calls[0].options.shell, false);
     assert.deepEqual(calls[0].args.slice(0, 2), ['-m', 'model.bin']);
     assert.equal(calls[0].args[calls[0].args.indexOf('-l') + 1], 'el');
+    assert.equal(calls[0].args[calls[0].args.indexOf('-ac') + 1], '448', 'a short clip gets the smallest safe context');
     const audio = calls[0].args[calls[0].args.indexOf('-f') + 1];
     assert.equal(existsSync(audio), false, 'the temporary WAV is removed');
     assert.equal((await speech.transcribe({ wav: wav(), lang: 'xx' })).code, 'INVALID_LANGUAGE');

@@ -2,8 +2,9 @@
 param([switch]$Force)
 
 # Installs local, offline speech recognition for the simulator under the
-# ignored .tools folder: the whisper.cpp v1.9.2 CPU build and the multilingual
-# "small" model (q5_1). Both downloads are pinned by SHA-256. Remove
+# ignored .tools folder: the whisper.cpp v1.9.2 CPU build, the multilingual
+# "large-v3-turbo" model (q5_0, used for its much better Greek) and "small"
+# (q5_1, the fallback). Every download is pinned by SHA-256. Remove
 # .tools\whisper to uninstall. Nothing outside the repository is changed.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -26,6 +27,11 @@ $items = @(
         Name = 'ggml-small-q5_1.bin'
         Url = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin'
         Sha256 = 'ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb'
+    },
+    @{
+        Name = 'ggml-large-v3-turbo-q5_0.bin'
+        Url = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin'
+        Sha256 = '394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2'
     }
 )
 
@@ -49,6 +55,7 @@ function Get-Pinned([hashtable]$item) {
 
 $archive = Get-Pinned $items[0]
 $model = Get-Pinned $items[1]
+$turbo = Get-Pinned $items[2]
 
 # A fresh extraction into its own folder, then only the CLI and its DLLs.
 $staging = Join-Path $root 'staging'
@@ -63,6 +70,7 @@ Get-ChildItem -LiteralPath $cli.DirectoryName -File |
     Copy-Item -Destination $bin
 Remove-Item -LiteralPath $staging -Recurse -Force
 Copy-Item -LiteralPath $model -Destination (Join-Path $models 'ggml-small-q5_1.bin') -Force
+Copy-Item -LiteralPath $turbo -Destination (Join-Path $models 'ggml-large-v3-turbo-q5_0.bin') -Force
 
 # whisper logs its backend to stderr; Windows PowerShell must not treat that as an error.
 $ErrorActionPreference = 'Continue'
@@ -70,4 +78,4 @@ $ErrorActionPreference = 'Continue'
 $code = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
 if ($code -ne 0) { throw "whisper-cli.exe does not run (exit $code)." }
-Write-Host "Local speech recognition ready: $bin (model ggml-small-q5_1, $([math]::Round((Get-Item $model).Length / 1MB)) MB)."
+Write-Host "Local speech recognition ready: $bin (model ggml-large-v3-turbo-q5_0, $([math]::Round((Get-Item $turbo).Length / 1MB)) MB; fallback ggml-small-q5_1)."

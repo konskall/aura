@@ -38,7 +38,7 @@ Then a message like «@inco τι ώρα είναι;» sent from AURA, in a room 
 
 ## Voice and companion features (v13)
 
-Speech stays on this PC. Install the local recogniser once (about 200 MB under the ignored `.tools\whisper`, SHA-256 pinned):
+Speech stays on this PC. Install the local recogniser once (about 800 MB under the ignored `.tools\whisper`, SHA-256 pinned). It uses whisper `large-v3-turbo`, which gets Greek right (about 8–9 s for a short question on an i7-4790K), and falls back to `small` (faster but error-prone) when turbo is missing:
 
 ```powershell
 .\scripts\setup-voice.ps1
