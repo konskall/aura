@@ -115,8 +115,8 @@ extern "C" void app_main(void) {
     // the loop below touches the same models only under that lock as well.
     if (bsp_display_lock(0)) {
         aura::AuraUiCallbacks callbacks;
-        callbacks.on_home = [] { controller.dispatch({aura::EventType::Reset}); };
-        callbacks.on_notifications_clear = [] { controller.dispatch({aura::EventType::NotificationsCleared}); };
+        callbacks.on_home = [] { controller.dispatch({aura::EventType::Reset, {}, 0}); };
+        callbacks.on_notifications_clear = [] { controller.dispatch({aura::EventType::NotificationsCleared, {}, 0}); };
         callbacks.on_audio_test = [] { audio.play_test_tone(); };
         callbacks.on_audio_wav = [] { audio.play_wav("/sdcard/aura/test.wav"); };
         callbacks.on_audio_pause_resume = [] {

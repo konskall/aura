@@ -822,7 +822,7 @@
             lv_obj_set_size(button, 136, 84);
             lv_obj_set_pos(button, kGutter + (index % 3) * 148, 104 + (index / 3) * 92);
             char number[8];
-            std::snprintf(number, sizeof(number), "%u", minutes == 60U ? 1U : minutes);
+            std::snprintf(number, sizeof(number), "%u", static_cast<unsigned>(minutes == 60U ? 1U : minutes));
             auto* value = ui::make_label(button, number, ui::tokens::text, ui::font_title());
             lv_obj_align(value, LV_ALIGN_CENTER, 0, -12);
             auto* unit = ui::make_label(button, minutes == 60U ? c().unit_hour :
@@ -1071,7 +1071,8 @@
                 std::string detail = note_stamp(note.created_minute);
                 if (voice_note) {
                     char length[16];
-                    std::snprintf(length, sizeof(length), "%u:%02u", note.audio_ms / 60000U, (note.audio_ms / 1000U) % 60U);
+                    std::snprintf(length, sizeof(length), "%u:%02u", static_cast<unsigned>(note.audio_ms / 60000U),
+                                  static_cast<unsigned>((note.audio_ms / 1000U) % 60U));
                     detail += detail.empty() ? length : std::string(" · ") + length;
                     if (note.transcript == NoteTranscript::Pending) detail += std::string(" · ") + c().transcript_pending;
                     if (note.transcript == NoteTranscript::Failed) detail += std::string(" · ") + c().transcript_failed;
@@ -1156,7 +1157,8 @@
         lv_obj_set_pos(record_ring, 140, 92);
         state_symbol(120, 144, ui::IconRole::Microphone, processing ? ui::tokens::lilac : ui::tokens::coral);
         char elapsed[16];
-        std::snprintf(elapsed, sizeof(elapsed), "%u:%02u", voice.elapsed_ms / 60000U, (voice.elapsed_ms / 1000U) % 60U);
+        std::snprintf(elapsed, sizeof(elapsed), "%u:%02u", static_cast<unsigned>(voice.elapsed_ms / 60000U),
+                      static_cast<unsigned>((voice.elapsed_ms / 1000U) % 60U));
         record_time = label(content, elapsed, 0, 300, ui::tokens::display_width, ui::font_headline(), ui::tokens::text,
                             LV_TEXT_ALIGN_CENTER);
         line(content, processing ? c().transcript_pending : c().recording_detail, kGutter, 340, kWidth,
@@ -1174,8 +1176,8 @@
         }
         if (record_time) {
             char elapsed[16];
-            std::snprintf(elapsed, sizeof(elapsed), "%u:%02u", voice.elapsed_ms / 60000U,
-                          (voice.elapsed_ms / 1000U) % 60U);
+            std::snprintf(elapsed, sizeof(elapsed), "%u:%02u", static_cast<unsigned>(voice.elapsed_ms / 60000U),
+                          static_cast<unsigned>((voice.elapsed_ms / 1000U) % 60U));
             set_text_if_changed(record_time, elapsed);
         }
     }

@@ -158,7 +158,8 @@ void Esp32Companion::finish_note() {
     const auto wav = recorder_.finish_wav();
     recording_note_ = false;
     char name[48];
-    std::snprintf(name, sizeof(name), "note-%lld-%u.wav", static_cast<long long>(now_minute()), ++note_counter_);
+    std::snprintf(name, sizeof(name), "note-%lld-%u.wav", static_cast<long long>(now_minute()),
+                  static_cast<unsigned>(++note_counter_));
     std::uint32_t id = 0;
     if (store_.write_note_audio(name, wav) && notes_.add_voice(name, elapsed, now_minute(), &id) == NoteResult::Ok) {
         // No recogniser on the device yet: the note keeps its audio only.

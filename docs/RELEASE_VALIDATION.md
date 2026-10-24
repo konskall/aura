@@ -23,7 +23,7 @@
 
 ## Not verified
 
-- ESP-IDF firmware compile: `idf.py`/activated ESP-IDF 5.5.5 environment is unavailable.
+- ESP-IDF firmware compile: passes with ESP-IDF 5.5.5 (2026-10-24). Activate it with `. C:\Users\polis\esp\v5.5.5\esp-idf\export.ps1`, then run `.\scripts\build-firmware.ps1`. Not yet flashed or validated on the board.
 - Physical display/touch calibration, ESP32-S3 frame rate/heap/PSRAM/DMA/power, AXP2101 telemetry, microphone capture, ES8311 output, speaker presence and GPIO46 electrical behavior: NEEDS HARDWARE.
 - Production Aoraton transport/E2EE interoperability and Greek TTS: intentionally disabled/not run.
 

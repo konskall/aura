@@ -23,7 +23,8 @@
 - [ ] Train a wake-word model for «Αύρα» (ESP-SR WakeNet or microWakeWord) and measure its battery cost.
 - [ ] Decide the OTA hosting and signing (secure boot or signed images) before the first field update.
 
-- [ ] Install/activate ESP-IDF 5.5.5 and compile the firmware; resolve only evidence-backed BSP/API drift.
+- [x] Install/activate ESP-IDF 5.5.5 and compile the firmware; resolve only evidence-backed BSP/API drift (2026-10-24: clean build; see VERIFICATION).
+- [ ] Flash the board and validate display, touch, audio, Wi‑Fi, IMU, BLE and microSD on hardware.
 - [ ] On board arrival, execute display/touch/PMIC/SD/RTC/IMU/audio/heap/frame-time validation.
 - [ ] Confirm safe GPIO46 mute/boot behavior and run rapid-cycle/long-play audio tests.
 - [ ] Add bounded streaming audio and optional Greek TTS without bypassing PCM diagnostics.

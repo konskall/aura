@@ -199,7 +199,11 @@ int gap_event(ble_gap_event* event, void*) {
                 advertise();
                 return 0;
             }
-            link = Link{link.own_address_type};
+            {
+                const auto own_address_type = link.own_address_type;
+                link = Link{};
+                link.own_address_type = own_address_type;
+            }
             link.connection = event->connect.conn_handle;
             publish_link(PhoneLinkState::Pairing, PhonePlatform::Unknown);
             ble_gap_security_initiate(link.connection);

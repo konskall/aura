@@ -53,5 +53,7 @@ idf_component_register(
 )
 
 target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_17)
+# The generated LVGL fonts include "lvgl.h" (the ESP-IDF component layout) only with this set.
+target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)
 # ESP-IDF 5.5 compiles C++ as gnu++2b with -Werror. The shared sources are kept
 # clean for that mode; scripts/check-firmware-flags.ps1 verifies it on Windows.
