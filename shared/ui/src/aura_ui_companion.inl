@@ -1467,12 +1467,22 @@
         const bool has_weather = lit && weather.has_data && sky.valid();
         const std::uint32_t tint = has_weather && sky.is_day ? weather_condition_accent(sky.condition) :
                                                                ui::tokens::indigo;
+        const int total = notification_total();
+        const auto alarm = next_alarm(clock);
+        // The rows stack from the weather down; the whole block is centred on
+        // the screen whichever rows are present.
+        const int weather_height = has_weather ? 90 : 0;
+        int block_height = weather_height + 118;  // clock and date
+        if (total > 0) block_height += 62;
+        if (alarm) block_height += total > 0 ? 40 : 62;
+        const int top = ui::tokens::display_height / 2 - block_height / 2;
         // A faint halo in the colour of the sky behind the clock: eight thin
         // steps read as one soft glow, and only its core rises above black.
         if (lit) {
             for (int size = 420; size >= 140; size -= 40) {
                 auto* halo = make_dot(content, size, tint, 7);
-                lv_obj_set_pos(halo, 240 + dx - size / 2, 214 + dy - size / 2);
+                lv_obj_set_pos(halo, ui::tokens::display_width / 2 + dx - size / 2,
+                               ui::tokens::display_height / 2 + dy - size / 2);
             }
         }
         // The whole screen wakes the device; that first touch does nothing else.
@@ -1487,7 +1497,7 @@
         constexpr std::uint32_t kDim = 0x6F7A8C;
         constexpr std::uint32_t kFaint = 0x535D6D;
         if (has_weather) {
-            auto* row = centered_row(72, 10);
+            auto* row = centered_row(top, 10);
             if (auto* icon = icon_view(row, weather_condition_icon(sky.condition), 34, tint)) {
                 lv_obj_set_style_opa(icon, LV_OPA_70, 0);
             }
@@ -1505,20 +1515,23 @@
             } else if (sky.origin == WeatherDataOrigin::Cache || sky.stale) {
                 detail += std::string(" · ") + v().weather_cached;
             }
-            line(content, detail.c_str(), kGutter + dx, 116 + dy, kWidth, ui::font_caption(), kFaint,
+            line(content, detail.c_str(), kGutter + dx, top + 44 + dy, kWidth, ui::font_caption(), kFaint,
                  LV_TEXT_ALIGN_CENTER);
         }
+        const int clock_y = top + weather_height;
         if (status.clock_valid) {
             char time[12];
             std::snprintf(time, sizeof(time), "%02d:%02d", status.hour, status.minute);
-            label(content, time, dx, 162 + dy, ui::tokens::display_width, ui::font_clock(), kDim, LV_TEXT_ALIGN_CENTER);
+            label(content, time, dx, clock_y + dy, ui::tokens::display_width, ui::font_clock(), kDim,
+                  LV_TEXT_ALIGN_CENTER);
         }
         const auto date = date_text();
         if (!date.empty()) {
-            line(content, date.c_str(), kGutter + dx, 254 + dy, kWidth, ui::font_caption(), kDim, LV_TEXT_ALIGN_CENTER);
+            line(content, date.c_str(), kGutter + dx, clock_y + 92 + dy, kWidth, ui::font_caption(), kDim,
+                 LV_TEXT_ALIGN_CENTER);
         }
-        int y = 312;
-        if (const int total = notification_total(); total > 0) {
+        int y = clock_y + 150;
+        if (total > 0) {
             auto* row = centered_row(y, 10);
             make_dot(row, 10, ui::tokens::pink, LV_OPA_80);
             char count[24];
@@ -1531,7 +1544,7 @@
             lv_obj_set_style_max_width(note, 340, 0);
             y += 40;
         }
-        if (const auto alarm = next_alarm(clock)) {
+        if (alarm) {
             auto* row = centered_row(y, 8);
             icon_view(row, ui::IconRole::Reminder, 24, kFaint);
             char time[8];
@@ -1791,7 +1804,7 @@
     // Full-screen moments carry no status chrome.
     static bool immersive(UiView view) {
         return view == UiView::AlwaysOn || view == UiView::Translate || view == UiView::ClockAlert ||
-               view == UiView::PhoneCall;
+               view == UiView::PhoneCall || view == UiView::PowerOff || view == UiView::Boot;
     }
 
     void companion_tick() {

@@ -59,10 +59,13 @@ The apps grid now holds Ρολόι, Σημειώσεις, Μετάφραση and
 - Listening records the PC microphone when the bridge and the local recogniser are available (see above). Otherwise it shows a labelled synthetic input signal and `Ολοκλήρωση` turns it into the fixed sample prompt (`Πες μου κάτι σύντομο.`), so the turn still reaches a real provider answer.
 - `Esc`: cancel the active assistant state.
 - `F12`: save the actual SDL renderer to `simulator/screenshots/aura-latest.bmp`.
-- Home `Ήχος`: open real Windows audio controls and play a tone or bundled WAV.
+- `Ρυθμίσεις → Ήχος`: volume, mute, the new-message sound, spoken replies and a test sound. The choices are kept in the ignored `simulator/runtime/companion/sound.txt`. The alarm rings even when muted. The speaker test tone and the bundled WAV are in `Σύστημα → Διαγνωστικά`.
+- `Ρυθμίσεις → Σύστημα`: software update, diagnostics, and restart, power off and factory reset, each confirmed first. In the simulator a restart happens in place: the window stays open, and the conversation, playback and recording are dropped behind a short start-up screen. Power off leaves a black screen; press and hold it to start again. Factory reset erases alarms, reminders, notes and their recordings, sound and display settings, the weather city and cache, the saved Wi‑Fi, the phone link and the Aoraton sign-in with its keys, then restarts. It never changes the PC's own Wi‑Fi.
+- Back returns a list to where it was scrolled.
 - Home `Aoraton`: open fictional local `DEMO` rooms, conversation, compose and confirmation screens.
 - Home `Εργαλεία`: open the compact launcher for Assistant, Aoraton, Audio and Notifications; Settings remains available from the gear control.
-- The centered `DEV` marker appears only when the simulator explicitly enables developer mode.
+- The `DEV` marker is off in normal runs; only the status-matrix captures show it.
+- A normal run starts with no notifications; captures and tests start with one labelled `DEMO` notification.
 
 The browser control panel injects assistant, connectivity, audio and Aoraton scenarios through an ignored UTF-8 event log. It is deterministic development infrastructure, not production IPC.
 

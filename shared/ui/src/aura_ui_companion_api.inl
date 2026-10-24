@@ -18,7 +18,7 @@ void AuraUi::apply_clock(const ClockSnapshot& snapshot) {
         return;
     }
     if (!snapshot.alert && self.current_view == UiView::ClockAlert) {
-        self.render(self.navigation.back());
+        self.render_back(self.navigation.back());
         return;
     }
     if (structural) {
@@ -83,7 +83,7 @@ void AuraUi::apply_phone(const PhoneSnapshot& snapshot) {
         return;
     }
     if (!snapshot.incoming_call && self.current_view == UiView::PhoneCall) {
-        self.render(self.navigation.back());
+        self.render_back(self.navigation.back());
         return;
     }
     switch (self.current_view) {

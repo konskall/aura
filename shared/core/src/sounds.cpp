@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <iterator>
+#include <sstream>
 
 namespace aura {
 namespace {
@@ -108,6 +110,42 @@ bool MessageChimeGate::observe(std::vector<std::string> ids, std::uint64_t now_m
     chimed_ = true;
     last_chime_ms_ = now_ms;
     return true;
+}
+
+std::string serialize_sound_settings(const SoundSettings& settings) {
+    char volume[16];
+    std::snprintf(volume, sizeof(volume), "%.2f", static_cast<double>(std::clamp(settings.volume, 0.0F, 1.0F)));
+    std::string text = "aura-sound 1\n";
+    text += std::string("volume=") + volume + "\n";
+    text += std::string("muted=") + (settings.muted ? "1" : "0") + "\n";
+    text += std::string("chime=") + (settings.message_chime ? "1" : "0") + "\n";
+    text += std::string("spoken=") + (settings.spoken_replies ? "1" : "0") + "\n";
+    return text;
+}
+
+SoundSettings parse_sound_settings(const std::string& data) {
+    SoundSettings settings;
+    std::istringstream input(data);
+    std::string line;
+    if (!std::getline(input, line) || line != "aura-sound 1") return settings;
+    while (std::getline(input, line)) {
+        const auto equals = line.find('=');
+        if (equals == std::string::npos) continue;
+        const auto key = line.substr(0, equals);
+        const auto value = line.substr(equals + 1);
+        if (key == "volume") {
+            char* end = nullptr;
+            const float parsed = std::strtof(value.c_str(), &end);
+            if (end != value.c_str() && *end == '\0' && parsed >= 0.0F && parsed <= 1.0F) settings.volume = parsed;
+            continue;
+        }
+        if (value != "0" && value != "1") continue;
+        const bool on = value == "1";
+        if (key == "muted") settings.muted = on;
+        else if (key == "chime") settings.message_chime = on;
+        else if (key == "spoken") settings.spoken_replies = on;
+    }
+    return settings;
 }
 
 }  // namespace aura

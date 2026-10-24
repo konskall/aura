@@ -378,6 +378,8 @@ int main(int argc, char** argv) {
         int wifi_scan{0};
         int wifi_connect{0};
         int wifi_forget{0};
+        int system_action{0};
+        int sound_preview{0};
         int aoraton_unlock{0};
         int aoraton_unlock_bytes{0};
         int aoraton_paste{0};
@@ -859,7 +861,42 @@ int main(int argc, char** argv) {
         sync_device_link();
         apply_wifi();
     };
+    // Settings > System. The simulator restarts in place: the window stays,
+    // the state a real restart would lose is dropped, and the boot screen shows.
+    ui_callbacks.on_system_action = [&](aura::SystemAction action) {
+        ++interaction_counts.system_action;
+        if (action == aura::SystemAction::PowerOff) {
+            companion.set_powered_off(true);
+            ui.power_off();
+            return;
+        }
+        if (action == aura::SystemAction::FactoryReset) {
+            // Captures and tests never touch the files of a real run.
+            if (!deterministic_run) weather_store.clear_location();
+            weather_model.clear_location();
+            apply_weather();
+            wifi_model.forget_saved_network();
+            if (wifi_host.host_connected) {
+                wifi_model.set_link(true, wifi_host.host_ssid, wifi_host.host_rssi_dbm, {}, aura::WifiOrigin::Host);
+            }
+            sync_device_link();
+            apply_wifi();
+            aoraton.unpair();
+            ui.reset_preferences();
+            companion.factory_reset();
+        } else {
+            companion.soft_restart();
+        }
+        ui.boot();
+    };
     companion.install(ui_callbacks);
+    {
+        auto preview = ui_callbacks.on_sound_preview;
+        ui_callbacks.on_sound_preview = [&interaction_counts, preview] {
+            ++interaction_counts.sound_preview;
+            preview();
+        };
+    }
     {
         auto translate_record = ui_callbacks.on_translate_record;
         ui_callbacks.on_translate_record = [&interaction_counts, translate_record](aura::TranslateSide side) {
@@ -868,7 +905,6 @@ int main(int argc, char** argv) {
         };
     }
     ui.create(display, std::move(ui_callbacks));
-    ui.set_developer_mode(true);
     select_provider(live_provider);
     ui.set_provider_live(live_provider);
     std::time_t initial_time = std::time(nullptr);
@@ -894,9 +930,9 @@ int main(int argc, char** argv) {
     device_status.set_power(78, false, aura::StatusOrigin::Simulated);
     device_status.set_connection(true, aura::StatusOrigin::Simulated, 3);
     device_status.set_bluetooth(false, aura::StatusOrigin::Simulated);
-    // The desktop build shows one labelled sample notification; a device
-    // starts with none.
-    controller.dispatch({aura::EventType::NotificationReceived, "DEMO"});
+    // Captures and tests start with one labelled sample notification; a normal
+    // run, like the device, starts with none.
+    if (deterministic_run) controller.dispatch({aura::EventType::NotificationReceived, "DEMO"});
     if (deterministic_run) {
         seed_demo_wifi();
     } else {
@@ -1000,6 +1036,9 @@ int main(int argc, char** argv) {
         } else if (capture_scenario == "cards" || capture_scenario == "search") ui.show(aura::UiView::Cards);
         else if (capture_scenario == "settings") ui.show(aura::UiView::Settings);
         else if (capture_scenario == "diagnostics") ui.show(aura::UiView::Diagnostics);
+        else if (capture_scenario == "system") ui.show(aura::UiView::System);
+        else if (capture_scenario == "power-off") ui.power_off();
+        else if (capture_scenario == "boot") ui.boot();
         else if (capture_scenario == "notifications") ui.show(aura::UiView::Notifications);
         else if (capture_scenario == "offline") {
             controller.dispatch({aura::EventType::ProviderUnavailable, "PROVIDER_UNAVAILABLE"});
@@ -1717,7 +1756,7 @@ int main(int argc, char** argv) {
             {"settings.weather", 3, 0, aura::UiView::WeatherLocation},
             {"settings.audio", 4, 296, aura::UiView::Audio},
             {"settings.status", 5, 296, aura::UiView::Battery},
-            {"settings.diagnostics", 6, 296, aura::UiView::Diagnostics},
+            {"settings.system", 6, 296, aura::UiView::System},
         };
         for (const auto& route : setting_routes) {
             for (const auto& point : row_points(settings_row_y(route.index, route.scroll))) {
@@ -1988,30 +2027,118 @@ int main(int argc, char** argv) {
                interaction_counts.notifications_clear == clear_before + 1 && controller.snapshot().notification_count == 0,
                std::to_string(controller.snapshot().notification_count));
 
+        // Sound: the volume slider (y 211), then switch rows on a 96 px pitch.
         reset_to(aura::UiView::Audio);
-        const int tone_before = interaction_counts.audio_tone;
-        tap(128, 144);
-        record("audio.tone", "button-center", interaction_counts.audio_tone == tone_before + 1,
-               aura::audio_state_name(audio.diagnostics().state));
-        const int wav_before = interaction_counts.audio_wav;
-        tap(352, 144);
-        record("audio.wav", "button-center", interaction_counts.audio_wav == wav_before + 1,
-               aura::audio_state_name(audio.diagnostics().state));
-        const int pause_before = interaction_counts.audio_pause;
-        tap(124, 388);
-        record("audio.play_pause", "button-center", interaction_counts.audio_pause == pause_before + 1,
-               aura::audio_state_name(audio.diagnostics().state));
-        const int stop_before = interaction_counts.audio_stop;
-        tap(240, 388);
-        record("audio.stop", "button-center", interaction_counts.audio_stop == stop_before + 1,
-               aura::audio_state_name(audio.diagnostics().state));
-        const bool muted_before = audio.diagnostics().muted;
-        tap(356, 388);
-        record("audio.mute", "button-center", audio.diagnostics().muted != muted_before,
-               audio.diagnostics().muted ? "muted" : "unmuted");
-        drag(120, 452, 400, 452);
+        drag(60, 211, 430, 211);
         record("audio.volume", "slider-drag", audio.diagnostics().volume > 0.75F,
                std::to_string(audio.diagnostics().volume));
+        reset_to(aura::UiView::Audio);
+        const bool muted_before = audio.diagnostics().muted;
+        tap(220, 290);
+        record("audio.mute", "row-center", audio.diagnostics().muted != muted_before,
+               audio.diagnostics().muted ? "muted" : "unmuted");
+        tap(220, 290);
+        reset_to(aura::UiView::Audio);
+        const bool chime_before = companion.sound().message_chime;
+        tap(220, 386);
+        record("audio.chime", "row-center", companion.sound().message_chime != chime_before,
+               companion.sound().message_chime ? "on" : "off");
+        tap(220, 386);
+        reset_to(aura::UiView::Audio);
+        scroll_view_to(150);
+        const bool spoken_before = companion.sound().spoken_replies;
+        tap(220, 332);
+        record("audio.spoken", "row-center", companion.sound().spoken_replies != spoken_before,
+               companion.sound().spoken_replies ? "on" : "off");
+        tap(220, 332);
+        reset_to(aura::UiView::Audio);
+        scroll_view_to(150);
+        const int preview_before = interaction_counts.sound_preview;
+        tap(240, 432);
+        record("audio.preview", "button-center", interaction_counts.sound_preview == preview_before + 1,
+               aura::audio_state_name(audio.diagnostics().state));
+
+        // Diagnostics keeps the speaker checks: a test tone and the demo WAV.
+        reset_to(aura::UiView::Diagnostics);
+        lv_obj_update_layout(ui.root());
+        if (auto* tone = find_sized_clickable(ui.root(), (432 - 40 - 12) / 2, 80)) {
+            lv_obj_scroll_to_view_recursive(tone, LV_ANIM_OFF);
+            pump(3);
+            lv_area_t area{};
+            lv_obj_get_coords(tone, &area);
+            const int tone_before = interaction_counts.audio_tone;
+            tap((area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2);
+            record("diagnostics.tone", "button-center", interaction_counts.audio_tone == tone_before + 1,
+                   aura::audio_state_name(audio.diagnostics().state));
+            lv_obj_get_coords(lv_obj_get_child(lv_obj_get_parent(tone), 1), &area);
+            const int wav_before = interaction_counts.audio_wav;
+            tap((area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2);
+            record("diagnostics.wav", "button-center", interaction_counts.audio_wav == wav_before + 1,
+                   aura::audio_state_name(audio.diagnostics().state));
+        } else {
+            record("diagnostics.tone", "button-center", false, "not found");
+        }
+        audio.stop();
+
+        // System: software, diagnostics, then power actions that ask first.
+        // Rows at list y 0 and 96; after the "Power" caption, restart 240,
+        // power off 336, factory reset 432.
+        auto wait_for_home = [&] {
+            for (int round = 0; round < 40 && ui.view() != aura::UiView::Home; ++round) pump(9);
+        };
+        reset_to(aura::UiView::System);
+        tap(220, settings_row_y(0, 0));
+        record("system.update", "row-center", ui.view() == aura::UiView::Update,
+               std::to_string(static_cast<int>(ui.view())));
+        reset_to(aura::UiView::System);
+        tap(220, settings_row_y(1, 0));
+        record("system.diagnostics", "row-center", ui.view() == aura::UiView::Diagnostics,
+               std::to_string(static_cast<int>(ui.view())));
+        reset_to(aura::UiView::System);
+        tap(220, 380);
+        const bool restart_asks = ui.view() == aura::UiView::SystemConfirm;
+        const int restart_before = interaction_counts.system_action;
+        tap(352, 420);
+        const bool booting = ui.view() == aura::UiView::Boot;
+        wait_for_home();
+        record("system.restart", "confirm",
+               restart_asks && booting && interaction_counts.system_action == restart_before + 1 &&
+               ui.view() == aura::UiView::Home, std::to_string(static_cast<int>(ui.view())));
+        reset_to(aura::UiView::System);
+        scroll_view_to(120);
+        tap(220, 356);
+        const bool power_asks = ui.view() == aura::UiView::SystemConfirm;
+        tap(352, 420);
+        const bool off = ui.view() == aura::UiView::PowerOff;
+        tap(240, 240);
+        const bool tap_ignored = ui.view() == aura::UiView::PowerOff;
+        long_press(240, 240);
+        const bool powering_on = ui.view() == aura::UiView::Boot;
+        wait_for_home();
+        record("system.power", "off-then-hold",
+               power_asks && off && tap_ignored && powering_on && ui.view() == aura::UiView::Home,
+               std::to_string(static_cast<int>(ui.view())));
+        reset_to(aura::UiView::System);
+        scroll_view_to(120);
+        tap(220, 452);
+        const bool reset_asks = ui.view() == aura::UiView::SystemConfirm;
+        const int reset_before = interaction_counts.system_action;
+        tap(128, 420);
+        record("system.reset_cancel", "cancel",
+               reset_asks && ui.view() == aura::UiView::System && interaction_counts.system_action == reset_before,
+               std::to_string(static_cast<int>(ui.view())));
+
+        // Back returns to a list where it was left.
+        reset_to(aura::UiView::Settings);
+        scroll_view_to(296);
+        tap(220, settings_row_y(6, 296));
+        const bool opened_system = ui.view() == aura::UiView::System;
+        tap(56, 56);
+        lv_obj_update_layout(ui.root());
+        auto* settings_list = find_scrollable(ui.root());
+        const int kept = settings_list ? static_cast<int>(lv_obj_get_scroll_y(settings_list)) : -1;
+        record("nav.back_keeps_scroll", "header-back",
+               opened_system && ui.view() == aura::UiView::Settings && kept == 296, std::to_string(kept));
 
         controller.dispatch({aura::EventType::Reset});
         controller.dispatch({aura::EventType::TurnStarted, text.capture_speaking_prompt});

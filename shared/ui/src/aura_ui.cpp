@@ -48,6 +48,9 @@ constexpr lv_opa_t kTint = 56;
 constexpr int kHaloCenterX = ui::tokens::HERO_RECT.x + ui::tokens::HERO_RECT.width / 2;
 constexpr int kHaloCenterY = ui::tokens::HERO_RECT.y + ui::tokens::HERO_RECT.height / 2;
 constexpr int kMeterCenterY = 292;
+// Centre of the weather hero halo inside its 190 px scene.
+constexpr int kWeatherHaloCenterX = 94;
+constexpr int kWeatherHaloCenterY = 79;
 
 void set_text_if_changed(lv_obj_t* label, const char* text) {
     const char* current = lv_label_get_text(label);
@@ -99,6 +102,7 @@ struct AuraUi::Impl {
     lv_obj_t* status_network_button{};
     lv_obj_t* status_bluetooth{};
     lv_obj_t* status_developer{};
+    lv_obj_t* status_muted{};
     lv_obj_t* status_alert{};
     lv_obj_t* status_battery{};
     lv_obj_t* status_battery_glyph{};
@@ -173,6 +177,15 @@ struct AuraUi::Impl {
     UiView current_view{UiView::Home};
     bool live_provider{false};
     bool developer_mode{false};
+    // Where each list was scrolled when it was left; used only when going back.
+    std::vector<std::pair<UiView, int32_t>> scroll_memory;
+    bool restore_scroll{false};
+    SoundSettings sound{};
+    lv_obj_t* sound_volume_label{};
+    SystemAction pending_system{SystemAction::Restart};
+    bool powered_off{false};
+    std::uint32_t boot_remaining_ms{0};
+    lv_obj_t* boot_spinner{};
     bool reduced_motion{false};
     bool capture_mode{false};
     bool input_simulated{false};
@@ -229,7 +242,7 @@ struct AuraUi::Impl {
             render(UiView::WeatherLocation);
             return;
         }
-        render(navigation.back());
+        render_back(navigation.back());
     }
 
     // Long-pressing the back button goes straight home.
@@ -701,7 +714,7 @@ struct AuraUi::Impl {
             return;
         }
         if (wifi_password_area) lv_textarea_set_text(wifi_password_area, "");
-        render(navigation.back());
+        render_back(navigation.back());
     }
 
     static void wifi_visibility_event(lv_event_t* event) {
@@ -728,7 +741,7 @@ struct AuraUi::Impl {
         self->wifi_forget_armed = false;
         if (self->callbacks.on_wifi_forget) self->callbacks.on_wifi_forget();
         self->show_toast(self->t().wifi_toast_forgotten, ui::tokens::mint);
-        self->render(self->navigation.back());
+        self->render_back(self->navigation.back());
     }
 
     static void network_settings_event(lv_event_t* event) {
@@ -751,6 +764,7 @@ struct AuraUi::Impl {
     }
 
     void show_toast(const char* text, std::uint32_t accent) {
+        if (powered_off || boot_remaining_ms > 0) return;
         if (!toast) {
             toast = lv_obj_create(screen);
             ui::reset(toast);
@@ -819,8 +833,10 @@ struct AuraUi::Impl {
             case UiView::PhoneLink:
             case UiView::DisplaySettings:
             case UiView::Update:
+            case UiView::System:
+            case UiView::SystemConfirm:
                 lv_indev_wait_release(lv_indev_active());
-                self->render(self->navigation.back());
+                self->render_back(self->navigation.back());
                 break;
             default: break;
         }
@@ -1259,6 +1275,7 @@ struct AuraUi::Impl {
         lv_obj_center(status_network);
 
         status_bluetooth = icon_view(status_left, ui::IconRole::Bluetooth, 24, ui::tokens::text_secondary);
+        status_muted = icon_view(status_left, ui::IconRole::Muted, 24, ui::tokens::text_secondary);
         status_developer = ui::make_tag(status_left, t().developer_badge, ui::tokens::amber);
 
         status_right = lv_obj_create(status_bar);
@@ -2186,7 +2203,10 @@ struct AuraUi::Impl {
         lv_obj_set_overflow_visible(weather_scene, false);
         lv_obj_set_style_clip_corner(weather_scene, true, 0);
         weather_halo = make_dot(weather_scene, 138, accent, LV_OPA_20);
-        lv_obj_set_pos(weather_halo, 25, 10);
+        lv_obj_set_pos(weather_halo, kWeatherHaloCenterX - 69, kWeatherHaloCenterY - 69);
+        // The halo breathes and the sun turns about their own centres.
+        lv_obj_set_style_transform_pivot_x(weather_halo, 69, 0);
+        lv_obj_set_style_transform_pivot_y(weather_halo, 69, 0);
 
         const bool night = !data.is_day;
         const bool precipitation = data.condition == WeatherCondition::Rain ||
@@ -2207,7 +2227,9 @@ struct AuraUi::Impl {
         } else {
             const int size = data.condition == WeatherCondition::Clear ? 82 : 76;
             weather_icon = icon_view(weather_scene, weather_condition_icon(data.condition), size, accent);
-            lv_obj_set_pos(weather_icon, 70, 52);
+            lv_obj_set_pos(weather_icon, kWeatherHaloCenterX - size / 2, kWeatherHaloCenterY - size / 2);
+            lv_obj_set_style_transform_pivot_x(weather_icon, size / 2, 0);
+            lv_obj_set_style_transform_pivot_y(weather_icon, size / 2, 0);
         }
         if (data.condition == WeatherCondition::Cloudy || data.condition == WeatherCondition::PartlyCloudy ||
             data.condition == WeatherCondition::Fog || precipitation || snow) {
@@ -2582,7 +2604,7 @@ struct AuraUi::Impl {
         y += kRowPitch;
         settings_row(list, y, v().status_title, nullptr, ui::IconRole::Battery, ui::tokens::mint, UiView::Battery);
         y += kRowPitch;
-        settings_row(list, y, v().system, nullptr, ui::IconRole::Cpu, ui::tokens::blue, UiView::Diagnostics);
+        settings_row(list, y, v().system, nullptr, ui::IconRole::Cpu, ui::tokens::blue, UiView::System);
         y += kRowPitch;
         y = render_settings_companion(list, y);
         list_end(list, y, 8);
@@ -2804,51 +2826,6 @@ struct AuraUi::Impl {
         }
     }
 
-    void render_audio() {
-        make_header(v().sound);
-        pill(content, v().audio_test, ui::ButtonTone::Primary, kGutter, 104, kHalfWidth, audio_test_event);
-        pill(content, v().demo_wav, ui::ButtonTone::Secondary, kGutter + kHalfWidth + 16, 104, kHalfWidth,
-             audio_wav_event);
-        // Two lines of state; the backend name lives in Diagnostics.
-        audio_state_label = label(content, t().audio_ready_hint, kGutter, 196, kWidth, ui::font_body(),
-                                  ui::tokens::text, LV_TEXT_ALIGN_CENTER);
-        lv_obj_set_height(audio_state_label, lv_font_get_line_height(ui::font_body()) * 2 + 4);
-        lv_label_set_long_mode(audio_state_label, LV_LABEL_LONG_DOT);
-        create_meter(content);
-
-        audio_progress_bar = lv_bar_create(content);
-        lv_obj_set_size(audio_progress_bar, 352, 6);
-        lv_obj_set_pos(audio_progress_bar, 64, 326);
-        lv_bar_set_range(audio_progress_bar, 0, 1000);
-        lv_obj_set_style_bg_color(audio_progress_bar, ui::color(ui::tokens::surface_high), LV_PART_MAIN);
-        lv_obj_set_style_bg_color(audio_progress_bar, ui::color(ui::tokens::blue), LV_PART_INDICATOR);
-        lv_obj_set_style_radius(audio_progress_bar, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-        lv_obj_set_style_radius(audio_progress_bar, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
-
-        round_button(content, 80, 344, 88,
-                     audio.state == AudioState::Playing ? ui::IconRole::Pause : ui::IconRole::Play,
-                     ui::tokens::blue, audio_pause_event);
-        round_button(content, 196, 344, 88, ui::IconRole::Stop, ui::tokens::coral, audio_stop_event);
-        round_button(content, 312, 344, 88,
-                     audio.muted ? ui::IconRole::Muted : ui::IconRole::VolumeUp,
-                     ui::tokens::mint, audio_mute_event);
-
-        auto* volume_icon = icon_view(content, ui::IconRole::VolumeUp, 28, ui::tokens::text_secondary);
-        lv_obj_set_pos(volume_icon, kGutter, 438);
-        auto* volume = lv_slider_create(content);
-        lv_obj_set_size(volume, 344, 10);
-        lv_obj_set_pos(volume, 84, 447);
-        lv_slider_set_range(volume, 0, 100);
-        lv_slider_set_value(volume, static_cast<int>(audio.volume * 100.0F), LV_ANIM_OFF);
-        lv_obj_set_style_bg_color(volume, ui::color(ui::tokens::surface_high), LV_PART_MAIN);
-        lv_obj_set_style_bg_color(volume, ui::color(ui::tokens::ice), LV_PART_INDICATOR);
-        lv_obj_set_style_bg_color(volume, ui::color(ui::tokens::text), LV_PART_KNOB);
-        lv_obj_set_style_pad_all(volume, 6, LV_PART_KNOB);
-        lv_obj_set_ext_click_area(volume, 16);
-        lv_obj_add_event_cb(volume, audio_volume_event, LV_EVENT_VALUE_CHANGED, this);
-        update_audio_widgets();
-    }
-
     void render_battery() {
         make_header(v().status_short);
         const bool low = status.power_known && status.battery_percent <= 20 && !status.charging;
@@ -2946,6 +2923,20 @@ struct AuraUi::Impl {
         lv_obj_set_width(device_text, lv_pct(100));
         auto* storage = ui::make_label(device, t().storage_demo, ui::tokens::text_tertiary, ui::font_caption());
         lv_obj_set_width(storage, lv_pct(100));
+        // Speaker checks for development: a test tone and the bundled WAV.
+        auto* speaker = column_card(ui::tokens::pink, false);
+        auto* speaker_title = ui::make_label(speaker, t().audio_settings, ui::tokens::pink, ui::font_headline());
+        lv_obj_set_width(speaker_title, lv_pct(100));
+        audio_state_label = ui::make_label(speaker, "", ui::tokens::text_secondary, ui::font_caption());
+        lv_obj_set_width(audio_state_label, lv_pct(100));
+        auto* buttons = lv_obj_create(speaker);
+        ui::reset(buttons);
+        lv_obj_set_size(buttons, lv_pct(100), kButtonHeight);
+        constexpr int kSpeakerButton = (kWidth - 40 - 12) / 2;
+        pill(buttons, v().audio_test, ui::ButtonTone::Secondary, 0, 0, kSpeakerButton, diagnostics_tone_event);
+        pill(buttons, v().demo_wav, ui::ButtonTone::Secondary, kSpeakerButton + 12, 0, kSpeakerButton,
+             diagnostics_wav_event);
+        update_audio_widgets();
     }
 
     void update_audio_widgets() {
@@ -2971,6 +2962,7 @@ struct AuraUi::Impl {
             set_text_if_changed(audio_state_label, state_text);
         }
         if (audio_hint_label) set_text_if_changed(audio_hint_label, audio.backend.c_str());
+        update_volume_label();
     }
 
     void render_unavailable(const char* title) {
@@ -3047,7 +3039,8 @@ struct AuraUi::Impl {
         if (weather_icon) {
             const bool drifting = weather.data.condition == WeatherCondition::PartlyCloudy ||
                 weather.data.condition == WeatherCondition::Cloudy || weather.data.condition == WeatherCondition::Fog;
-            const int base_x = !weather.data.is_day && weather.data.condition == WeatherCondition::Clear ? 62 : 70;
+            const int base_x = !weather.data.is_day && weather.data.condition == WeatherCondition::Clear ? 62 :
+                kWeatherHaloCenterX - static_cast<int>(lv_obj_get_width(weather_icon)) / 2;
             lv_obj_set_x(weather_icon, base_x + (drifting ? static_cast<int>(std::sin(seconds * 0.9F) * 5.0F) : 0));
             lv_obj_set_style_transform_rotation(weather_icon,
                 weather.data.condition == WeatherCondition::Clear && weather.data.is_day ?
@@ -3107,6 +3100,8 @@ struct AuraUi::Impl {
         state_label = nullptr;
         answer_label = nullptr;
         audio_state_label = nullptr;
+        sound_volume_label = nullptr;
+        boot_spinner = nullptr;
         audio_hint_label = nullptr;
         audio_progress_bar = nullptr;
         audio_meter.fill(nullptr);
@@ -3144,11 +3139,30 @@ struct AuraUi::Impl {
         render(view);
     }
 
+    // Going back reopens a list where it was left, not at its top.
+    void render_back(UiView view) {
+        restore_scroll = true;
+        render(view);
+    }
+
+    int32_t& remembered_scroll(UiView view) {
+        for (auto& entry : scroll_memory) {
+            if (entry.first == view) return entry.second;
+        }
+        scroll_memory.emplace_back(view, 0);
+        return scroll_memory.back().second;
+    }
+
     // Data refreshes re-render the visible view (e.g. every second while a pairing
     // countdown runs); only a view change or an explicit state change fades in.
     void render(UiView view, bool fade = false) {
+        if (blocked_by_power(view)) return;
         const bool refresh = view == current_view;
-        const int32_t saved_scroll = refresh && primary_scroller ? lv_obj_get_scroll_y(primary_scroller) : 0;
+        const bool restoring = restore_scroll && !refresh;
+        restore_scroll = false;
+        if (!refresh && primary_scroller) remembered_scroll(current_view) = lv_obj_get_scroll_y(primary_scroller);
+        const int32_t saved_scroll = refresh && primary_scroller ? lv_obj_get_scroll_y(primary_scroller) :
+                                     (restoring ? remembered_scroll(view) : 0);
         fade = fade || !refresh;
         // Leaving the city picker always reopens it on its presets.
         if (!refresh && view != UiView::WeatherLocation) weather_typing = false;
@@ -3202,8 +3216,12 @@ struct AuraUi::Impl {
             case UiView::PhoneLink:
             case UiView::DisplaySettings:
             case UiView::Update: render_companion(view); break;
+            case UiView::System: render_system(); break;
+            case UiView::SystemConfirm: render_system_confirm(); break;
+            case UiView::PowerOff: render_power_off(); break;
+            case UiView::Boot: render_boot(); break;
         }
-        if (refresh && primary_scroller && saved_scroll > 0) {
+        if ((refresh || restoring) && primary_scroller && saved_scroll > 0) {
             lv_obj_update_layout(primary_scroller);
             const int32_t limit = lv_obj_get_scroll_y(primary_scroller) + lv_obj_get_scroll_bottom(primary_scroller);
             lv_obj_scroll_to_y(primary_scroller, std::max<int32_t>(0, std::min(saved_scroll, limit)), LV_ANIM_OFF);
@@ -3245,6 +3263,7 @@ struct AuraUi::Impl {
         lv_obj_set_hidden(status_alert, home || !(status.connection_known && !status.online));
         lv_obj_set_hidden(status_bluetooth, !(status.bluetooth_known && status.bluetooth_enabled));
         lv_obj_set_hidden(status_developer, !developer_mode);
+        lv_obj_set_hidden(status_muted, !audio.muted);
         lv_obj_set_hidden(status_charging, !(status.power_known && status.charging));
         const bool show_battery = home || low;
         lv_obj_set_hidden(status_battery, !show_battery);
@@ -3265,6 +3284,7 @@ struct AuraUi::Impl {
     }
 
 #include "aura_ui_companion.inl"
+#include "aura_ui_system.inl"
 };
 
 AuraUi::AuraUi() : impl_(std::make_unique<Impl>()) {}
@@ -3326,13 +3346,49 @@ void AuraUi::apply(const AssistantSnapshot& snapshot) {
     }
 }
 
+void AuraUi::apply_sound(const SoundSettings& settings) {
+    const bool changed = settings.message_chime != impl_->sound.message_chime ||
+                         settings.spoken_replies != impl_->sound.spoken_replies;
+    impl_->sound = settings;
+    if (changed && impl_->current_view == UiView::Audio) impl_->render(UiView::Audio);
+}
+
+void AuraUi::power_off() {
+    impl_->boot_remaining_ms = 0;
+    impl_->navigation.reset();
+    impl_->render(UiView::PowerOff);
+    impl_->powered_off = true;
+    if (impl_->toast) lv_obj_set_hidden(impl_->toast, true);
+}
+
+void AuraUi::boot() {
+    impl_->powered_off = false;
+    impl_->navigation.reset();
+    impl_->boot_remaining_ms = 1800;
+    impl_->render(UiView::Boot, true);
+    if (impl_->toast) lv_obj_set_hidden(impl_->toast, true);
+}
+
+void AuraUi::reset_preferences() {
+    impl_->reduced_motion = false;
+    impl_->motion.set_reduced(false);
+    impl_->scroll_memory.clear();
+}
+
 void AuraUi::apply_audio(const AudioDiagnostics& diagnostics) {
     const bool structural_change = diagnostics.state != impl_->audio.state ||
         diagnostics.muted != impl_->audio.muted ||
         diagnostics.device_available != impl_->audio.device_available ||
         diagnostics.error_code != impl_->audio.error_code;
+    const bool mute_changed = diagnostics.muted != impl_->audio.muted;
     impl_->audio = diagnostics;
-    if (impl_->current_view == UiView::Audio) {
+    if (mute_changed) impl_->update_status();
+    if (impl_->current_view == UiView::Battery) {
+        // The mute button there names the state it switches to.
+        if (structural_change) impl_->render(UiView::Battery);
+    } else if (impl_->current_view == UiView::Diagnostics) {
+        impl_->update_audio_widgets();
+    } else if (impl_->current_view == UiView::Audio) {
         if (structural_change) impl_->render(UiView::Audio);
         else impl_->update_audio_widgets();
     } else if (impl_->current_view == UiView::Assistant &&
@@ -3461,6 +3517,7 @@ void AuraUi::tick(std::uint32_t elapsed_ms) {
         impl_->update_motion(delta);
         impl_->update_weather_motion(delta);
         impl_->companion_tick();
+        impl_->system_tick(delta);
         if (impl_->wifi_spinner && !impl_->capture_mode && !impl_->reduced_motion) {
             lv_arc_set_rotation(impl_->wifi_spinner, static_cast<int32_t>((impl_->phase_ms / 4U) % 360U));
         }

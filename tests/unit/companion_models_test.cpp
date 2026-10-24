@@ -516,6 +516,21 @@ void sound_tests() {
     expect(gate.observe({"a2", "a3", "p7"}, 20000, false), "a phone notification chimes too");
     expect(!gate.observe({"a2", "a3", "p7", "a4"}, 21000, false), "a burst chimes at most once every few seconds");
     expect(gate.observe({"a5"}, 30000, false), "the next message after the pause chimes again");
+
+    SoundSettings chosen;
+    chosen.volume = 0.8F;
+    chosen.muted = true;
+    chosen.message_chime = false;
+    chosen.spoken_replies = false;
+    const auto restored = parse_sound_settings(serialize_sound_settings(chosen));
+    expect(std::fabs(restored.volume - 0.8F) < 0.01F && restored.muted && !restored.message_chime &&
+           !restored.spoken_replies, "sound settings survive a restart");
+    const SoundSettings defaults;
+    const auto garbage = parse_sound_settings("aura-sound 1\nvolume=7\nmuted=yes\nchime=0\nother=1\n");
+    expect(garbage.volume == defaults.volume && !garbage.muted && !garbage.message_chime && garbage.spoken_replies,
+           "bad sound values keep their defaults");
+    const auto foreign = parse_sound_settings("volume=0.1\n");
+    expect(foreign.volume == defaults.volume && foreign.message_chime, "a file without the header is ignored");
 }
 
 int main() {

@@ -211,6 +211,13 @@ void CompanionRuntime::install(AuraUiCallbacks& callbacks) {
         }
         if (ota_.begin_download()) update_started_ms_ = now_ms();
     };
+    callbacks.on_sound_settings = [this](const SoundSettings& settings) {
+        sound_.message_chime = settings.message_chime;
+        sound_.spoken_replies = settings.spoken_replies;
+    };
+    callbacks.on_sound_preview = [this] {
+        if (!ctx_.audio->diagnostics().muted) ctx_.audio->play_pcm(make_message_chime());
+    };
     callbacks.on_update_restart = [this] {
         // DEMO source: nothing was downloaded or written.
         ota_.reset();
@@ -259,7 +266,7 @@ void CompanionRuntime::deliver_reply(const std::string& raw) {
     extras_.pending_action = action;
     bump_extras();
     if (action) controller.dispatch({EventType::RequireConfirmation, assistant_action_name(action->type)});
-    if (voice_turn_) speak(text, "el");
+    if (voice_turn_ && sound_.spoken_replies) speak(text, "el");
     voice_turn_ = false;
 }
 
@@ -301,7 +308,7 @@ void CompanionRuntime::chime_for_new_messages(std::uint64_t now, AudioState audi
     for (int index = 1; index <= demo; ++index) ids.push_back("d" + std::to_string(index));
     // Quiet: face down or muted, while something plays or rings, or while the
     // microphone is open (the chime would be recorded).
-    const bool quiet = display_.snapshot().muted_by_flip || ctx_.audio->diagnostics().muted ||
+    const bool quiet = !sound_.message_chime || display_.snapshot().muted_by_flip || ctx_.audio->diagnostics().muted ||
                        audio_state == AudioState::Playing || clock_.snapshot().alert || job_ != VoiceJob::None;
     if (message_chime_.observe(std::move(ids), now, quiet)) ctx_.audio->play_pcm(make_message_chime());
 }
@@ -553,7 +560,7 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
         refresh_capabilities();
     }
 
-    if (!ctx_.deterministic) {
+    if (!ctx_.deterministic && !powered_off_) {
         // Any touch or key resets the screen timeout.
         const auto inactive = lv_display_get_inactive_time(nullptr);
         if (inactive < last_inactive_ms_) display_.user_activity(now);
@@ -623,6 +630,63 @@ void CompanionRuntime::apply() {
     ui.apply_phone(phone_.snapshot());
     ui.apply_update(ota_.snapshot());
     ui.apply_assistant_extras(extras_);
+    ui.apply_sound(sound_);
+}
+
+void CompanionRuntime::set_powered_off(bool off) {
+    if (off) {
+        if (job_ != VoiceJob::None) cancel_voice();
+        ctx_.audio->stop();
+    } else {
+        // The screen comes back active, and what arrived while off is not "new".
+        display_.user_activity(now_ms());
+        message_chime_ = MessageChimeGate{};
+    }
+    powered_off_ = off;
+}
+
+void CompanionRuntime::soft_restart() {
+    if (job_ != VoiceJob::None) cancel_voice();
+    ctx_.audio->stop();
+    memory_.clear();
+    extras_.pending_action.reset();
+    extras_.memory_turns = 0;
+    bump_extras();
+    translation_.clear();
+    ctx_.controller->dispatch({EventType::Reset});
+    set_powered_off(false);
+}
+
+void CompanionRuntime::factory_reset() {
+    for (const auto& timer : std::vector<TimerItem>(clock_.snapshot().timers)) clock_.cancel_timer(timer.id);
+    clock_.dismiss_alert();
+    clock_.restore("aura-clock 1\n");
+    for (const auto& note : notes_.snapshot().notes) {
+        if (!note.audio_file.empty() && !ctx_.deterministic) {
+            std::error_code error;
+            std::filesystem::remove(std::filesystem::path(ctx_.store_dir) / "notes" / note.audio_file, error);
+        }
+    }
+    notes_.restore("aura-notes 1\n");
+    sound_ = SoundSettings{};
+    ctx_.audio->set_volume(sound_.volume);
+    ctx_.audio->set_muted(sound_.muted);
+    display_.set_settings(DisplaySettings{});
+    pair_ready_ms_ = 0;
+    phone_.set_link(PhoneLinkState::NotPaired, PhonePlatform::Unknown, {});
+    for (const auto& item : std::vector<PhoneNotification>(phone_.snapshot().notifications)) phone_.remove(item.uid);
+    ota_.reset();
+    last_briefing_day_ = -1;
+    if (!ctx_.deterministic) {
+        const std::filesystem::path root(ctx_.store_dir);
+        std::error_code error;
+        for (const char* name : {"clock.txt", "notes.txt", "sound.txt"}) std::filesystem::remove(root / name, error);
+        saved_clock_sequence_ = clock_.snapshot().sequence;
+        saved_clock_text_ = clock_.serialize();
+        saved_notes_sequence_ = notes_.snapshot().sequence;
+        saved_sound_text_ = serialize_sound_settings(sound_);
+    }
+    soft_restart();
 }
 
 void CompanionRuntime::set_clock(const LocalDateTime& now) {
@@ -751,9 +815,16 @@ void CompanionRuntime::load_stores() {
     saved_clock_sequence_ = clock_.snapshot().sequence;
     saved_clock_text_ = clock_.serialize();
     saved_notes_sequence_ = notes_.snapshot().sequence;
+    const auto sound_data = read_file(root / "sound.txt");
+    if (!sound_data.empty()) {
+        sound_ = parse_sound_settings(sound_data);
+        ctx_.audio->set_volume(sound_.volume);
+        ctx_.audio->set_muted(sound_.muted);
+    }
+    saved_sound_text_ = serialize_sound_settings(sound_);
 }
 
-// Only alarms, reminders and notes are stored, in the ignored runtime folder.
+// Alarms, reminders, notes and sound settings are stored, in the ignored runtime folder.
 void CompanionRuntime::save_stores() {
     const std::filesystem::path root(ctx_.store_dir);
     // Running timers bump the sequence every second; only real changes are written.
@@ -768,6 +839,14 @@ void CompanionRuntime::save_stores() {
     if (notes_.snapshot().sequence != saved_notes_sequence_) {
         write_file(root / "notes.txt", notes_.serialize());
         saved_notes_sequence_ = notes_.snapshot().sequence;
+    }
+    const auto audio = ctx_.audio->diagnostics();
+    sound_.volume = audio.volume;
+    sound_.muted = audio.muted;
+    auto sound_text = serialize_sound_settings(sound_);
+    if (sound_text != saved_sound_text_) {
+        write_file(root / "sound.txt", sound_text);
+        saved_sound_text_ = std::move(sound_text);
     }
 }
 

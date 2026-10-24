@@ -10,6 +10,7 @@
 #include "aura/notes.hpp"
 #include "aura/ota_update.hpp"
 #include "aura/phone_link.hpp"
+#include "aura/sounds.hpp"
 #include "aura/translation.hpp"
 #include "aura/voice.hpp"
 #include "aura/weather.hpp"
@@ -74,7 +75,16 @@ enum class UiView {
     Update,
     // aoraton.com account
     AoratonUnlock,
+    // System: device information and power
+    System,
+    SystemConfirm,
+    PowerOff,
+    Boot,
 };
+
+// Power actions from Settings > System. PowerOn comes from a long press on the
+// switched-off screen.
+enum class SystemAction { Restart, PowerOff, PowerOn, FactoryReset };
 
 // What this platform can do right now; the UI never offers the rest.
 struct CompanionCapabilities {
@@ -167,6 +177,9 @@ struct AuraUiCallbacks {
     std::function<void()> on_update_check;
     std::function<void()> on_update_install;
     std::function<void()> on_update_restart;
+    std::function<void(const SoundSettings& settings)> on_sound_settings;
+    std::function<void()> on_sound_preview;
+    std::function<void(SystemAction action)> on_system_action;
 };
 
 class AuraUi {
@@ -191,6 +204,14 @@ public:
     void apply_update(const UpdateSnapshot& snapshot);
     void apply_display(const DisplaySnapshot& snapshot);
     void apply_assistant_extras(const AssistantExtras& extras);
+    // Chime and spoken-reply choices; volume and mute come with apply_audio.
+    void apply_sound(const SoundSettings& settings);
+    // A dark, switched-off screen; a long press asks the platform to power on.
+    void power_off();
+    // The start-up screen, then Home. Nothing else is shown until it ends.
+    void boot();
+    // Forgets the choices the UI keeps itself (factory reset).
+    void reset_preferences();
     void set_capabilities(const CompanionCapabilities& capabilities);
     // Opens "Today" (the platform does so once each morning).
     void open_briefing();

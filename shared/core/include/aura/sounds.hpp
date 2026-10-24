@@ -36,4 +36,16 @@ private:
     std::uint64_t last_chime_ms_{0};
 };
 
+// The owner's sound choices. The alarm ignores mute: it always rings.
+struct SoundSettings {
+    float volume{0.55F};
+    bool muted{false};
+    bool message_chime{true};   // a chime for new messages and notifications
+    bool spoken_replies{true};  // read answers aloud after a spoken question
+};
+
+// One "key=value" line each; unknown keys and bad values keep the defaults.
+std::string serialize_sound_settings(const SoundSettings& settings);
+SoundSettings parse_sound_settings(const std::string& data);
+
 }  // namespace aura

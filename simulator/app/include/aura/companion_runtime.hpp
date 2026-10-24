@@ -85,6 +85,16 @@ public:
     const AssistantExtras& extras() const noexcept { return extras_; }
     void set_capabilities(const CompanionCapabilities& capabilities);
     std::uint64_t now_ms() const noexcept;
+    const SoundSettings& sound() const noexcept { return sound_; }
+
+    // Settings > System. Off: no alarms, chimes or screen changes until power on.
+    void set_powered_off(bool off);
+    // What a restart forgets: the conversation, playback, recording and a
+    // pending action. Stored data stays.
+    void soft_restart();
+    // Erases alarms, reminders, notes, sound and display settings, the phone
+    // link and their files, then restarts.
+    void factory_reset();
 
 private:
     enum class VoiceJob { None, Assistant, Note, Translate };
@@ -165,6 +175,9 @@ private:
     std::uint64_t saved_notes_sequence_{0};
     std::string saved_clock_text_;
     bool hold_transcribing_{false};
+    SoundSettings sound_{};
+    std::string saved_sound_text_;
+    bool powered_off_{false};
 };
 
 }  // namespace aura::simulator

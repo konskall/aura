@@ -215,6 +215,36 @@ struct CompanionStrings {
     const char* aoraton_keys_unlocked_one;
     const char* aoraton_keys_unlocked_format;  // %u
     const char* aoraton_e2ee;
+
+    // Sound and System settings
+    const char* sound_volume;
+    const char* sound_mute;
+    const char* sound_mute_detail;
+    const char* sound_chime;
+    const char* sound_chime_detail;
+    const char* sound_spoken;
+    const char* sound_spoken_detail;
+    const char* sound_preview;
+    const char* sound_alarm_note;
+    const char* system_title;
+    const char* system_software;
+    const char* system_software_format;  // %s
+    const char* system_update;
+    const char* system_diagnostics;
+    const char* system_diagnostics_detail;
+    const char* system_power;
+    const char* system_restart;
+    const char* system_power_off;
+    const char* system_factory_reset;
+    const char* system_factory_reset_detail;
+    const char* system_restart_question;
+    const char* system_restart_detail;
+    const char* system_power_off_question;
+    const char* system_power_off_detail;
+    const char* system_reset_question;
+    const char* system_reset_detail;
+    const char* system_reset_confirm;
+    const char* system_starting;
 };
 
 const CompanionStrings& companion_el_gr() noexcept;
