@@ -17,6 +17,13 @@ int main() {
     MockAoratonService service;
     expect(service.snapshot().connection == AoratonConnectionState::Connected, "mock connects");
     expect(service.snapshot().rooms.size() == 2, "fictional room fixtures loaded");
+    service.set_interface_language(InterfaceLanguage::English);
+    expect(service.snapshot().rooms.front().display_name == "Family • DEMO" &&
+               service.snapshot().messages.front().local_display_text == "We will be there at 19:30.",
+           "mock room and message fixtures follow the English interface");
+    service.set_interface_language(InterfaceLanguage::Greek);
+    expect(service.snapshot().rooms.front().display_name == "Οικογένεια • DEMO",
+           "mock fixtures switch back to Greek without replacing the service");
     expect(service.select_room("demo-family"), "room selection");
     expect(service.snapshot().rooms.front().unread == 0, "opening clears unread");
     expect(service.inject_incoming("demo-lab", "Νέο δοκιμαστικό μήνυμα."), "incoming accepted");

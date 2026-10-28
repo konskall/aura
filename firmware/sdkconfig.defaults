@@ -13,6 +13,9 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_LV_USE_QRCODE=y
+# LVGL's default break characters without ':', so a time ("19:30") never wraps
+# at its colon; the simulator's lv_conf.h uses the same list.
+CONFIG_LV_TXT_BREAK_CHARS=" ,.;-_)]}"
 # Required by the Aoraton E2EE v2 codec (mbedtls_hkdf); ESP-IDF defaults it to n.
 CONFIG_MBEDTLS_HKDF_C=y
 # v13 companion: iPhone notifications over BLE (NimBLE, peripheral with a GATT client, bonds in NVS).

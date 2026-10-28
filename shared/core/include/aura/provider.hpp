@@ -1,10 +1,15 @@
 #pragma once
 
 #include <future>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "aura/language.hpp"
+
 namespace aura {
+
+class AssistantStreamMailbox;
 
 struct AssistantReply {
     bool ok{false};
@@ -25,8 +30,15 @@ struct TurnRequest {
     std::vector<ConversationTurn> history;  // oldest first
     std::string context;                    // device facts: data, never instructions
     TurnMode mode{TurnMode::Chat};
+    InterfaceLanguage interface_language{InterfaceLanguage::Greek};
+    // Explicit, locally detected user intent. Only providers with a real
+    // search tool may accept it; ordinary chat remains offline-grounded.
+    bool web_search{false};
     std::string source_language;            // Translate: ISO 639-1 codes
     std::string target_language;
+    // Optional token stream. Providers publish from their worker; the owner
+    // consumes it on the UI thread. The final future remains authoritative.
+    std::shared_ptr<AssistantStreamMailbox> stream;
 };
 
 class IAssistantProvider {

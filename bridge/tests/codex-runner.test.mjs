@@ -22,6 +22,12 @@ test('fake subprocess returns UTF-8 Greek text', async () => {
   assert.match(result.text, /Δοκιμαστική/);
 });
 
+test('an explicitly marked turn enables the Codex web-search tool', async () => {
+  const result = await runner().runTurn({ prompt: 'Ψάξε για πίτσα στη Σπάρτη', webSearch: true });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /web search/);
+});
+
 test('prompt limit is enforced before spawn', async () => {
   const result = await runner().runTurn({ prompt: 'α'.repeat(3000) });
   assert.deepEqual(result, { ok: false, code: 'PROMPT_TOO_LARGE' });
@@ -48,4 +54,3 @@ test('oversized and failed output are normalized', async () => {
 test('health probes executable and login status', async () => {
   assert.deepEqual(await runner().health(), { installed: true, loggedIn: true });
 });
-

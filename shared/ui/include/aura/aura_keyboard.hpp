@@ -14,6 +14,7 @@ enum class KeyboardProfile {
 // character entry, backspace and OK (LV_EVENT_READY on the text area) use
 // LVGL's keyboard behaviour. Pressed keys show an enlarged pop-over because a
 // key on the 2.16" panel is only about 3.5 mm wide.
-lv_obj_t* create_keyboard(lv_obj_t* parent, lv_obj_t* textarea, KeyboardProfile profile);
+lv_obj_t* create_keyboard(lv_obj_t* parent, lv_obj_t* textarea, KeyboardProfile profile,
+                          bool greek_first = true);
 
 }  // namespace aura::ui

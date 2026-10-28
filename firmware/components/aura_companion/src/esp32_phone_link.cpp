@@ -37,14 +37,19 @@ struct Link {
     std::uint16_t connection{BLE_HS_CONN_HANDLE_NONE};
     std::uint16_t service_end{0};
     std::uint16_t notification_source{0};
+    std::uint16_t notification_source_cccd{0};
     std::uint16_t control_point{0};
     std::uint16_t data_source{0};
+    std::uint16_t data_source_cccd{0};
+    bool pairable{false};
     bool request_in_flight{false};
+    std::vector<std::uint16_t> characteristic_definitions;
     std::vector<std::uint32_t> fetch_queue;
     std::vector<ancs::NotificationSourceEvent> known;
     ancs::AttributeAssembler assembler;
 };
 Link link;
+std::recursive_mutex link_mutex;
 
 void publish_link(PhoneLinkState state, PhonePlatform platform) {
     PhoneEvent event;
@@ -57,6 +62,7 @@ void publish_link(PhoneLinkState state, PhonePlatform platform) {
 int gap_event(ble_gap_event* event, void* argument);
 
 void advertise() {
+    std::lock_guard<std::recursive_mutex> guard(link_mutex);
     // Flags, the name, and a 128-bit service solicitation for ANCS, which makes
     // an iPhone offer AURA its notifications after pairing.
     std::uint8_t data[31]{};
@@ -77,12 +83,15 @@ void advertise() {
     }
     ble_gap_adv_params parameters{};
     parameters.conn_mode = BLE_GAP_CONN_MODE_UND;
-    parameters.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    // A bonded phone can reconnect while AURA is non-discoverable. General
+    // discoverability is enabled only after the owner taps Pair.
+    parameters.disc_mode = link.pairable ? BLE_GAP_DISC_MODE_GEN : BLE_GAP_DISC_MODE_NON;
     const int result = ble_gap_adv_start(link.own_address_type, nullptr, BLE_HS_FOREVER, &parameters, gap_event, nullptr);
     if (result != 0 && result != BLE_HS_EALREADY) ESP_LOGW(kTag, "advertising failed: %d", result);
 }
 
 void request_next_attributes() {
+    std::lock_guard<std::recursive_mutex> guard(link_mutex);
     if (link.request_in_flight || link.fetch_queue.empty() || link.control_point == 0) return;
     const auto uid = link.fetch_queue.front();
     link.fetch_queue.erase(link.fetch_queue.begin());
@@ -95,6 +104,7 @@ void request_next_attributes() {
 }
 
 void on_notification_source(const std::uint8_t* data, std::size_t size) {
+    std::lock_guard<std::recursive_mutex> guard(link_mutex);
     const auto event = ancs::parse_notification_source(data, size);
     if (!event) return;
     auto& known = link.known;
@@ -116,6 +126,7 @@ void on_notification_source(const std::uint8_t* data, std::size_t size) {
 }
 
 void on_data_source(const std::uint8_t* data, std::size_t size) {
+    std::lock_guard<std::recursive_mutex> guard(link_mutex);
     const auto result = link.assembler.push(data, size);
     if (result == ancs::AttributeAssembler::Result::NeedMore) return;
     link.request_in_flight = false;
@@ -140,6 +151,7 @@ void on_data_source(const std::uint8_t* data, std::size_t size) {
 }
 
 int on_subscribed(std::uint16_t, const ble_gatt_error* error, ble_gatt_attr*, void* argument) {
+    std::lock_guard<std::recursive_mutex> guard(link_mutex);
     if (error->status != 0) {
         ESP_LOGW(kTag, "ANCS subscription failed: %d", error->status);
         return 0;
@@ -147,7 +159,7 @@ int on_subscribed(std::uint16_t, const ble_gatt_error* error, ble_gatt_attr*, vo
     // Data Source first (argument 0), then Notification Source (argument 1).
     if (argument == nullptr) {
         const std::uint8_t enable[] = {0x01, 0x00};
-        ble_gattc_write_flat(link.connection, static_cast<std::uint16_t>(link.notification_source + 1), enable,
+        ble_gattc_write_flat(link.connection, link.notification_source_cccd, enable,
                              sizeof(enable), on_subscribed, reinterpret_cast<void*>(1));
     } else {
         publish_link(PhoneLinkState::Connected, PhonePlatform::Iphone);
@@ -156,7 +168,9 @@ int on_subscribed(std::uint16_t, const ble_gatt_error* error, ble_gatt_attr*, vo
 }
 
 int on_characteristic(std::uint16_t, const ble_gatt_error* error, const ble_gatt_chr* characteristic, void*) {
+    std::lock_guard<std::recursive_mutex> guard(link_mutex);
     if (error->status == 0 && characteristic) {
+        link.characteristic_definitions.push_back(characteristic->def_handle);
         if (ble_uuid_cmp(&characteristic->uuid.u, &kNotificationSource.u) == 0) {
             link.notification_source = characteristic->val_handle;
         } else if (ble_uuid_cmp(&characteristic->uuid.u, &kControlPoint.u) == 0) {
@@ -171,15 +185,74 @@ int on_characteristic(std::uint16_t, const ble_gatt_error* error, const ble_gatt
         publish_link(PhoneLinkState::Connected, PhonePlatform::Unknown);
         return 0;
     }
-    // The client configuration descriptor directly follows each value handle
-    // on iOS (NEEDS HARDWARE confirmation; a descriptor discovery is the fallback).
-    const std::uint8_t enable[] = {0x01, 0x00};
-    ble_gattc_write_flat(link.connection, static_cast<std::uint16_t>(link.data_source + 1), enable, sizeof(enable),
-                         on_subscribed, nullptr);
+    const auto descriptor_end = [](std::uint16_t value_handle) {
+        std::uint16_t end = link.service_end;
+        for (const auto definition : link.characteristic_definitions) {
+            if (definition > value_handle) end = std::min<std::uint16_t>(end, definition - 1);
+        }
+        return end;
+    };
+    const auto end = descriptor_end(link.data_source);
+    if (link.data_source + 1 > end ||
+        ble_gattc_disc_all_dscs(link.connection, static_cast<std::uint16_t>(link.data_source + 1), end,
+                                [](std::uint16_t, const ble_gatt_error* descriptor_error,
+                                   std::uint16_t, const ble_gatt_dsc* descriptor, void*) {
+                                    std::lock_guard<std::recursive_mutex> descriptor_guard(link_mutex);
+                                    if (descriptor_error->status == 0 && descriptor &&
+                                        ble_uuid_u16(&descriptor->uuid.u) == BLE_GATT_DSC_CLT_CFG_UUID16) {
+                                        link.data_source_cccd = descriptor->handle;
+                                        return 0;
+                                    }
+                                    if (descriptor_error->status != BLE_HS_EDONE) return 0;
+                                    if (link.data_source_cccd == 0) {
+                                        ESP_LOGW(kTag, "ANCS Data Source CCCD not found");
+                                        publish_link(PhoneLinkState::Connected, PhonePlatform::Unknown);
+                                        return 0;
+                                    }
+                                    std::uint16_t notification_end = link.service_end;
+                                    for (const auto definition : link.characteristic_definitions) {
+                                        if (definition > link.notification_source) {
+                                            notification_end = std::min<std::uint16_t>(notification_end,
+                                                                                      definition - 1);
+                                        }
+                                    }
+                                    if (link.notification_source + 1 > notification_end) {
+                                        publish_link(PhoneLinkState::Connected, PhonePlatform::Unknown);
+                                        return 0;
+                                    }
+                                    ble_gattc_disc_all_dscs(
+                                        link.connection, static_cast<std::uint16_t>(link.notification_source + 1),
+                                        notification_end,
+                                        [](std::uint16_t, const ble_gatt_error* notification_error,
+                                           std::uint16_t, const ble_gatt_dsc* notification_descriptor, void*) {
+                                            std::lock_guard<std::recursive_mutex> notification_guard(link_mutex);
+                                            if (notification_error->status == 0 && notification_descriptor &&
+                                                ble_uuid_u16(&notification_descriptor->uuid.u) ==
+                                                    BLE_GATT_DSC_CLT_CFG_UUID16) {
+                                                link.notification_source_cccd = notification_descriptor->handle;
+                                                return 0;
+                                            }
+                                            if (notification_error->status != BLE_HS_EDONE) return 0;
+                                            if (link.notification_source_cccd == 0) {
+                                                ESP_LOGW(kTag, "ANCS Notification Source CCCD not found");
+                                                publish_link(PhoneLinkState::Connected, PhonePlatform::Unknown);
+                                                return 0;
+                                            }
+                                            const std::uint8_t enable[] = {0x01, 0x00};
+                                            ble_gattc_write_flat(link.connection, link.data_source_cccd, enable,
+                                                                 sizeof(enable), on_subscribed, nullptr);
+                                            return 0;
+                                        }, nullptr);
+                                    return 0;
+                                }, nullptr) != 0) {
+        ESP_LOGW(kTag, "ANCS descriptor discovery could not start");
+        publish_link(PhoneLinkState::Connected, PhonePlatform::Unknown);
+    }
     return 0;
 }
 
 int on_service(std::uint16_t connection, const ble_gatt_error* error, const ble_gatt_svc* service, void*) {
+    std::lock_guard<std::recursive_mutex> guard(link_mutex);
     if (error->status == 0 && service) {
         link.service_end = service->end_handle;
         ble_gattc_disc_all_chrs(connection, service->start_handle, service->end_handle, on_characteristic, nullptr);
@@ -193,6 +266,7 @@ int on_service(std::uint16_t connection, const ble_gatt_error* error, const ble_
 }
 
 int gap_event(ble_gap_event* event, void*) {
+    std::lock_guard<std::recursive_mutex> guard(link_mutex);
     switch (event->type) {
         case BLE_GAP_EVENT_CONNECT:
             if (event->connect.status != 0) {
@@ -201,8 +275,10 @@ int gap_event(ble_gap_event* event, void*) {
             }
             {
                 const auto own_address_type = link.own_address_type;
+                const auto pairable = link.pairable;
                 link = Link{};
                 link.own_address_type = own_address_type;
+                link.pairable = pairable;
             }
             link.connection = event->connect.conn_handle;
             publish_link(PhoneLinkState::Pairing, PhonePlatform::Unknown);
@@ -243,6 +319,7 @@ int gap_event(ble_gap_event* event, void*) {
 }
 
 void on_sync() {
+    std::lock_guard<std::recursive_mutex> guard(link_mutex);
     ble_hs_util_ensure_addr(0);
     ble_hs_id_infer_auto(0, &link.own_address_type);
     publish_link(PhoneLinkState::NotPaired, PhonePlatform::Unknown);
@@ -285,19 +362,27 @@ bool Esp32PhoneLink::start() {
 
 void Esp32PhoneLink::set_pairable(bool pairable) {
     if (!started_) return;
-    if (pairable && link.connection == BLE_HS_CONN_HANDLE_NONE) advertise();
-    if (!pairable) ble_gap_adv_stop();
+    std::lock_guard<std::recursive_mutex> guard(link_mutex);
+    link.pairable = pairable;
+    if (link.connection == BLE_HS_CONN_HANDLE_NONE) {
+        ble_gap_adv_stop();
+        advertise();
+    }
 }
 
 void Esp32PhoneLink::forget() {
     if (!started_) return;
+    std::lock_guard<std::recursive_mutex> guard(link_mutex);
     if (link.connection != BLE_HS_CONN_HANDLE_NONE) ble_gap_terminate(link.connection, BLE_ERR_REM_USER_CONN_TERM);
     ble_store_clear();
+    link.pairable = false;
     publish_link(PhoneLinkState::NotPaired, PhonePlatform::Unknown);
 }
 
 void Esp32PhoneLink::perform_action(std::uint32_t uid, bool positive) {
-    if (!started_ || link.connection == BLE_HS_CONN_HANDLE_NONE || link.control_point == 0) return;
+    if (!started_) return;
+    std::lock_guard<std::recursive_mutex> guard(link_mutex);
+    if (link.connection == BLE_HS_CONN_HANDLE_NONE || link.control_point == 0) return;
     const auto command = ancs::perform_action(uid, positive);
     ble_gattc_write_flat(link.connection, link.control_point, command.data(), static_cast<std::uint16_t>(command.size()),
                          nullptr, nullptr);
@@ -305,7 +390,18 @@ void Esp32PhoneLink::perform_action(std::uint32_t uid, bool positive) {
 
 void Esp32PhoneLink::push(PhoneEvent event) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (events_.size() < 64) events_.push_back(std::move(event));
+    if (events_.size() >= 64) {
+        const auto disposable = std::find_if(events_.begin(), events_.end(), [](const PhoneEvent& queued) {
+            return queued.kind == PhoneEvent::Kind::Upsert;
+        });
+        events_.erase(disposable != events_.end() ? disposable : events_.begin());
+        ++dropped_events_;
+        if (dropped_events_ == 1 || (dropped_events_ & (dropped_events_ - 1)) == 0) {
+            ESP_LOGW(kTag, "phone event queue saturated; coalesced %lu events",
+                     static_cast<unsigned long>(dropped_events_));
+        }
+    }
+    events_.push_back(std::move(event));
 }
 
 bool Esp32PhoneLink::poll(PhoneEvent& event) {

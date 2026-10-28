@@ -230,8 +230,33 @@ std::string utf8_truncate(std::string_view text, std::size_t max_bytes) {
 }
 
 std::string sanitize_text(std::string_view text, std::size_t max_bytes, bool keep_newlines) {
+    const auto output = sanitize_fragment(text, keep_newlines);
+    const auto first = output.find_first_not_of(" \n");
+    if (first == std::string::npos) return {};
+    const auto last = output.find_last_not_of(" \n");
+    return utf8_truncate(std::string_view(output).substr(first, last - first + 1), max_bytes);
+}
+
+std::size_t complete_utf8_prefix(std::string_view bytes) noexcept {
+    std::size_t index = bytes.size();
+    std::size_t continuation = 0;
+    while (index > 0 && continuation < 3 && (static_cast<unsigned char>(bytes[index - 1]) & 0xC0) == 0x80) {
+        --index;
+        ++continuation;
+    }
+    if (index == 0) return bytes.size();
+    const auto lead = static_cast<unsigned char>(bytes[index - 1]);
+    std::size_t length = 0;
+    if ((lead & 0xE0) == 0xC0) length = 2;
+    else if ((lead & 0xF0) == 0xE0) length = 3;
+    else if ((lead & 0xF8) == 0xF0) length = 4;
+    else return bytes.size();
+    return continuation + 1 < length ? index - 1 : bytes.size();
+}
+
+std::string sanitize_fragment(std::string_view text, bool keep_newlines) {
     std::string output;
-    output.reserve(std::min(text.size(), max_bytes + 4));
+    output.reserve(text.size());
     std::size_t position = 0;
     while (position < text.size()) {
         std::uint32_t code = 0;
@@ -247,10 +272,7 @@ std::string sanitize_text(std::string_view text, std::size_t max_bytes, bool kee
         if ((code >= 0x202A && code <= 0x202E) || (code >= 0x2066 && code <= 0x2069)) continue;
         append_utf8(output, code);
     }
-    const auto first = output.find_first_not_of(" \n");
-    if (first == std::string::npos) return {};
-    const auto last = output.find_last_not_of(" \n");
-    return utf8_truncate(std::string_view(output).substr(first, last - first + 1), max_bytes);
+    return output;
 }
 
 std::string fold_text(std::string_view text) {
@@ -270,6 +292,73 @@ std::string fold_text(std::string_view text) {
 bool folded_contains_any(std::string_view folded, std::initializer_list<std::string_view> needles) {
     for (const auto needle : needles) {
         if (!needle.empty() && folded.find(needle) != std::string_view::npos) return true;
+    }
+    return false;
+}
+
+namespace {
+
+// Letters (Latin, Greek, Cyrillic) and digits; punctuation such as the Greek
+// question mark, the ano teleia and guillemets separates words.
+bool word_code_point(std::uint32_t code) {
+    if ((code >= 'a' && code <= 'z') || (code >= 'A' && code <= 'Z') || (code >= '0' && code <= '9')) return true;
+    if (code == 0x037E || code == 0x0387 || code == 0x00D7 || code == 0x00F7) return false;
+    return (code >= 0x00C0 && code <= 0x024F) || (code >= 0x0370 && code <= 0x03FF) ||
+           (code >= 0x0400 && code <= 0x04FF) || (code >= 0x1F00 && code <= 0x1FFF);
+}
+
+}  // namespace
+
+std::vector<std::string> folded_words(std::string_view folded) {
+    std::vector<std::string> words;
+    std::string word;
+    std::size_t position = 0;
+    while (position < folded.size()) {
+        const std::size_t start = position;
+        std::uint32_t code = 0;
+        if (!next_code_point(folded, position, code)) continue;
+        if (word_code_point(code)) {
+            word.append(folded.substr(start, position - start));
+            continue;
+        }
+        const bool inside_number = (code == '.' || code == ',') && !word.empty() && word.back() >= '0' &&
+                                   word.back() <= '9' && position < folded.size() && folded[position] >= '0' &&
+                                   folded[position] <= '9';
+        if (inside_number) {
+            word.push_back(static_cast<char>(code));
+        } else if (!word.empty()) {
+            words.push_back(std::move(word));
+            word.clear();
+        }
+    }
+    if (!word.empty()) words.push_back(std::move(word));
+    return words;
+}
+
+bool folded_has_word(const std::vector<std::string>& words, std::initializer_list<std::string_view> needles) {
+    for (const auto& word : words) {
+        for (const auto needle : needles) {
+            if (word == needle) return true;
+        }
+    }
+    return false;
+}
+
+bool folded_has_word_prefix(const std::vector<std::string>& words, std::initializer_list<std::string_view> stems) {
+    for (const auto& word : words) {
+        for (const auto stem : stems) {
+            if (!stem.empty() && word.compare(0, stem.size(), stem) == 0) return true;
+        }
+    }
+    return false;
+}
+
+bool folded_contains_phrase(std::string_view folded, std::string_view phrase) {
+    const auto words = folded_words(folded);
+    const auto wanted = folded_words(phrase);
+    if (wanted.empty() || wanted.size() > words.size()) return false;
+    for (std::size_t start = 0; start + wanted.size() <= words.size(); ++start) {
+        if (std::equal(wanted.begin(), wanted.end(), words.begin() + static_cast<std::ptrdiff_t>(start))) return true;
     }
     return false;
 }

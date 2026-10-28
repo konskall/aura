@@ -41,6 +41,7 @@ private:
     bool started_{false};
     std::mutex mutex_;
     std::vector<PhoneEvent> events_;
+    std::uint32_t dropped_events_{0};
 };
 
 }  // namespace aura::firmware

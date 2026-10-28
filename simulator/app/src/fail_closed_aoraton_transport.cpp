@@ -30,6 +30,11 @@ std::size_t FailClosedAoratonTransport::poll(std::size_t maximum_commands) {
                 event.type = AoratonEventType::Failure;
                 event.error = "AORATON_TEST_BACKEND_NOT_CONFIGURED";
                 break;
+            case AoratonCommandType::UnlockVault:
+            case AoratonCommandType::AddInviteKey:
+                event.type = AoratonEventType::Failure;
+                event.error = "AORATON_KEY_BACKEND_NOT_CONFIGURED";
+                break;
             case AoratonCommandType::Disconnect:
                 event.type = AoratonEventType::ConnectionChanged;
                 event.connection = AoratonConnectionState::Disconnected;

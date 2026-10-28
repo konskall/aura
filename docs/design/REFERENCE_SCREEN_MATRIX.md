@@ -19,7 +19,7 @@
 | 15 | r3 c3 | Demo preview and disabled shutter | Optional camera contract | `Camera` | States that the board has no camera; shutter disabled |
 | 16 | r3 c4 | Violet offline symbol, retry | Provider unavailable | `Assistant: Offline` | Retry dispatches the real recovery event |
 | 17 | r3 c5 | Mint gauge, charge label, quick controls | Battery snapshot | `Battery` | Runtime estimate omitted; simulator value marked DEMO |
-| 18 | r3 c6 | Four voice rows, selected default | Provider capability view | `VoiceSettings` | Unavailable voices are visibly disabled |
+| 18 | r3 c6 | Athina/Nestoras rows, selected profile, preview | Validated TTS profile and provider capability | `VoiceSettings` | Preview is disabled when speech output is unavailable; neural service needs Internet |
 
 Additional retained views: long-answer reader, Aoraton conversation, Greek compose keyboard, explicit send confirmation, diagnostics, error recovery and audio-provider states.
 

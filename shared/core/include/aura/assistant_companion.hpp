@@ -2,7 +2,9 @@
 
 #include "aura/clock_services.hpp"
 #include "aura/device_status.hpp"
+#include "aura/fuel_prices.hpp"
 #include "aura/notes.hpp"
+#include "aura/organizer.hpp"
 #include "aura/phone_link.hpp"
 #include "aura/provider.hpp"
 #include "aura/weather.hpp"
@@ -10,6 +12,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace aura {
@@ -37,8 +40,10 @@ private:
 struct DeviceContextInput {
     const DeviceStatusSnapshot* status{};
     const WeatherSnapshot* weather{};
+    const FuelPriceSnapshot* fuel{};
     const ClockServicesModel* clock{};
     const NotesModel* notes{};
+    const OrganizerModel* organizer{};
     const PhoneNotificationModel* phone{};
     int unread_messages{0};
     std::string question;
@@ -48,7 +53,24 @@ struct DeviceContextInput {
 // Notes and phone notifications are added only when the question asks for them.
 std::string build_device_context(const DeviceContextInput& input);
 
-enum class AssistantActionType { None, Timer, Alarm, Reminder, Note, Message };
+// Narrow Greek/English intent detector. It never performs I/O; it only marks
+// a turn so a capable gateway may enable its real web-search tool.
+bool question_requests_web_search(std::string_view question);
+
+enum class AssistantActionType {
+    None,
+    Timer,
+    Alarm,
+    Reminder,
+    Note,
+    Task,
+    Shopping,
+    CalendarEvent,
+    Volume,
+    Brightness,
+    Mute,
+    Message,
+};
 
 // An action the model proposed. It is untrusted: parsed strictly, bounded,
 // and executed only after the owner confirms it on the device.
@@ -63,6 +85,9 @@ struct AssistantAction {
     std::string label;   // Timer, Alarm
     std::string text;    // Reminder, Note, Message
     std::string room;    // Message
+    std::int64_t start_minute{0};  // CalendarEvent
+    std::uint32_t duration_minutes{60};
+    int value{0};        // Volume/Brightness percentage, Mute: 0 or 1
 };
 
 struct ParsedAnswer {

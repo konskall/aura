@@ -1,5 +1,7 @@
 #include "aura/weather.hpp"
 
+#include "aura/text_util.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -32,13 +34,6 @@ std::string trim(std::string value) {
     return value;
 }
 
-bool contains_any(std::string_view value, const std::initializer_list<std::string_view>& needles) {
-    for (const auto needle : needles) {
-        if (value.find(needle) != std::string_view::npos) return true;
-    }
-    return false;
-}
-
 std::string suffix_after(std::string_view value, const std::initializer_list<std::string_view>& markers) {
     for (const auto marker : markers) {
         const auto position = value.find(marker);
@@ -50,6 +45,21 @@ std::string suffix_after(std::string_view value, const std::initializer_list<std
 }
 
 }  // namespace
+
+bool weather_refresh_interval_valid(WeatherRefreshInterval interval) noexcept {
+    switch (interval) {
+        case WeatherRefreshInterval::Minutes15:
+        case WeatherRefreshInterval::Minutes30:
+        case WeatherRefreshInterval::Hour1:
+        case WeatherRefreshInterval::Hours3: return true;
+    }
+    return false;
+}
+
+std::uint32_t weather_refresh_interval_minutes(WeatherRefreshInterval interval) noexcept {
+    return weather_refresh_interval_valid(interval) ? static_cast<std::uint32_t>(interval) :
+                                                      static_cast<std::uint32_t>(kDefaultWeatherRefreshInterval);
+}
 
 bool WeatherLocation::valid() const noexcept {
     return printable_utf8_text(name, kNameLimit) && printable_utf8_text(region, kMetadataLimit, true) &&
@@ -154,11 +164,21 @@ bool WeatherModel::restore_cache(const WeatherData& data) {
     return true;
 }
 
+bool WeatherModel::set_refresh_interval(WeatherRefreshInterval interval) {
+    if (!weather_refresh_interval_valid(interval)) return false;
+    if (snapshot_.refresh_interval == interval) return true;
+    snapshot_.refresh_interval = interval;
+    ++snapshot_.sequence;
+    return true;
+}
+
 void WeatherModel::clear_location() {
     // Keep the sequence monotonic: the UI skips sequences it has applied.
     const auto sequence = snapshot_.sequence;
+    const auto refresh_interval = snapshot_.refresh_interval;
     snapshot_ = {};
     snapshot_.state = WeatherState::Unconfigured;
+    snapshot_.refresh_interval = refresh_interval;
     snapshot_.sequence = sequence + 1;
 }
 
@@ -258,14 +278,22 @@ WeatherCondition weather_condition_from_wmo(int code) noexcept {
 }
 
 WeatherIntent analyze_weather_intent(std::string_view text) {
-    const bool change = contains_any(text, {"άλλαξε", "Άλλαξε", "αλλαγή", "Αλλαγή", "change", "Change"});
-    const bool weather = contains_any(text, {"καιρ", "Καιρ", "πρόγνω", "Πρόγνω", "θερμοκρασ", "Θερμοκρασ",
-                                             "βρέξ", "Βρέξ", "weather", "Weather", "forecast", "Forecast",
-                                             "temperature", "Temperature"}) ||
-                         (change && contains_any(text, {"πόλη", "Πόλη", "city", "City"}));
-    if (!weather) return {};
+    const auto words = folded_words(fold_text(text));
+    const bool change = folded_has_word(words, {"αλλαξε", "αλλαγη", "change"});
     auto city = suffix_after(text, {"πόλη σε ", "Πόλη σε ", "στην ", "στη ", "στο ", "σε ",
                                     "city to ", "in ", "for "});
+    // Word starts, so "καιρός" counts and "ευκαιρία" does not.
+    const bool forecast = folded_has_word_prefix(words, {"καιρ", "προγνωσ", "βρεξ", "βρεχ", "βροχ", "χιον"}) ||
+                          folded_has_word(words, {"weather", "forecast", "rain", "raining", "snow", "snowing"});
+    // A temperature is weather only with a time or a place ("έξω", "αύριο",
+    // "στη Σπάρτη"); "η θερμοκρασία βρασμού του νερού" is for the assistant.
+    const bool temperature =
+        (folded_has_word_prefix(words, {"θερμοκρασ"}) || folded_has_word(words, {"temperature"})) &&
+        (!city.empty() || folded_has_word(words, {"εξω", "σημερα", "αυριο", "μεθαυριο", "τωρα", "αποψε",
+                                                   "outside", "today", "tomorrow", "now", "tonight"}));
+    const bool weather = forecast || temperature ||
+                         (change && folded_has_word(words, {"πολη", "city"}));
+    if (!weather) return {};
     if (change) return {WeatherIntentKind::ChangeCity, std::move(city)};
     if (!city.empty()) return {WeatherIntentKind::QueryCity, std::move(city)};
     return {WeatherIntentKind::ShowSaved, {}};

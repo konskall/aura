@@ -441,6 +441,16 @@ WeatherFetchResult forecast_error(std::string code, bool offline = false) {
     return result;
 }
 
+bool inferred_daylight(const std::string& iso_time) {
+    const auto separator = iso_time.find('T');
+    if (separator == std::string::npos || separator + 3 > iso_time.size()) return true;
+    const char a = iso_time[separator + 1];
+    const char b = iso_time[separator + 2];
+    if (a < '0' || a > '2' || b < '0' || b > '9') return true;
+    const int hour = (a - '0') * 10 + (b - '0');
+    return hour >= 7 && hour < 19;
+}
+
 }  // namespace
 
 WeatherGeocodingResult parse_open_meteo_geocoding(const std::string& json) {
@@ -557,6 +567,7 @@ WeatherFetchResult parse_open_meteo_forecast(const std::string& json,
     const auto* hourly_temp = object_member(hourly, "temperature_2m", JsonValue::Type::Array);
     const auto* hourly_code = object_member(hourly, "weather_code", JsonValue::Type::Array);
     const auto* hourly_rain = object_member(hourly, "precipitation_probability", JsonValue::Type::Array);
+    const auto* hourly_day = object_member(hourly, "is_day", JsonValue::Type::Array);
     if (!hourly_time || !hourly_temp || !hourly_code) return forecast_error("INVALID_WEATHER_RESPONSE");
     const std::size_t available = std::min({hourly_time->array.size(), hourly_temp->array.size(), hourly_code->array.size()});
     std::size_t start = 0;
@@ -569,9 +580,12 @@ WeatherFetchResult parse_open_meteo_forecast(const std::string& json,
         const int normalized_code = static_cast<int>(std::lround(hour_code));
         const int rain_probability = hourly_rain ? static_cast<int>(std::lround(
             array_number(hourly_rain, index, 0.0))) : 0;
+        const bool hour_is_day = hourly_day && index < hourly_day->array.size() ?
+            array_number(hourly_day, index, inferred_daylight(time) ? 1.0 : 0.0) >= 0.5 :
+            inferred_daylight(time);
         data.hourly[data.hourly_count++] = {time, static_cast<float>(value),
                                              weather_condition_from_wmo(normalized_code), normalized_code,
-                                             std::clamp(rain_probability, 0, 100)};
+                                             std::clamp(rain_probability, 0, 100), hour_is_day};
     }
     if (hourly_rain && start < hourly_rain->array.size()) {
         data.rain_probability_percent = std::clamp(static_cast<int>(std::lround(
@@ -664,10 +678,12 @@ WeatherFetchResult parse_tlesdetector_weather(const std::string& json,
         if (time.empty() || !number_member(&item, "temperatureC", value) ||
             !number_member(&item, "weatherCode", hour_code)) continue;
         number_member(&item, "precipitationProbability", rain);
+        bool hour_is_day = inferred_daylight(time);
+        boolean_member(&item, "isDay", hour_is_day);
         const int normalized_code = static_cast<int>(std::lround(hour_code));
         data.hourly[data.hourly_count++] = {
             time, static_cast<float>(value), weather_condition_from_wmo(normalized_code),
-            normalized_code, std::clamp(static_cast<int>(std::lround(rain)), 0, 100),
+            normalized_code, std::clamp(static_cast<int>(std::lround(rain)), 0, 100), hour_is_day,
         };
     }
     if (data.hourly_count > 0) {
@@ -790,12 +806,15 @@ bool apply_tlesdetector_opportunities(const std::string& json, WeatherData& data
     return true;
 }
 
-std::future<WeatherGeocodingResult> OpenMeteoWeatherService::search(std::string query) {
+std::future<WeatherGeocodingResult> OpenMeteoWeatherService::search(std::string query, std::string language) {
     const auto generation = ++generation_;
-    return std::async(std::launch::async, [this, generation, query = std::move(query)] {
+    return std::async(std::launch::async,
+        [this, generation, query = std::move(query), language = std::move(language)] {
 #ifdef _WIN32
         if (query.size() < 2 || query.size() > 96) return geocoding_error("INVALID_CITY_QUERY");
-        const std::string path = "/v1/search?name=" + url_encode(query) + "&count=5&language=el&format=json";
+        const std::string locale = language == "en" ? "en" : "el";
+        const std::string path = "/v1/search?name=" + url_encode(query) + "&count=5&language=" + locale +
+                                 "&format=json";
         const auto http = https_get(L"geocoding-api.open-meteo.com", path);
         if (generation_.load() != generation) return geocoding_error("CANCELLED");
         if (http.transport_error || http.status == 0) return geocoding_error("NETWORK_UNAVAILABLE", true);
@@ -844,7 +863,7 @@ std::future<WeatherFetchResult> OpenMeteoWeatherService::fetch(WeatherLocation l
              << "/v1/forecast?latitude=" << location.latitude
              << "&longitude=" << location.longitude
              << "&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,wind_speed_10m,wind_gusts_10m,dew_point_2m,pressure_msl,visibility,uv_index,cloud_cover,precipitation"
-             << "&hourly=temperature_2m,weather_code,precipitation_probability"
+             << "&hourly=temperature_2m,weather_code,precipitation_probability,is_day"
              << "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
              << "&timezone=auto&forecast_days=5";
         const auto http = https_get(L"api.open-meteo.com", path.str());

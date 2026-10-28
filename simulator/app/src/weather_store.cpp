@@ -186,6 +186,12 @@ std::filesystem::path WeatherStore::cache_path() const {
     return path;
 }
 
+std::filesystem::path WeatherStore::settings_path() const {
+    auto path = base_path_;
+    path += ".settings";
+    return path;
+}
+
 std::optional<WeatherLocation> WeatherStore::load_location() const {
     const auto values = read_values(location_path(), "AURA_WEATHER_LOCATION_V1");
     if (values.empty()) return std::nullopt;
@@ -268,12 +274,13 @@ std::optional<WeatherData> WeatherStore::load_cache() const {
         const auto found = values.find("hourly" + std::to_string(index));
         if (found == values.end()) break;
         const auto parts = split(found->second, '|');
-        if (parts.size() != 3 && parts.size() != 5) return std::nullopt;
+        if (parts.size() != 3 && parts.size() != 5 && parts.size() != 6) return std::nullopt;
         try {
             data.hourly[data.hourly_count++] = {parts[0], std::stof(parts[1]),
                 static_cast<WeatherCondition>(std::stoi(parts[2])),
-                parts.size() == 5 ? std::stoi(parts[3]) : -1,
-                parts.size() == 5 ? std::stoi(parts[4]) : 0};
+                parts.size() >= 5 ? std::stoi(parts[3]) : -1,
+                parts.size() >= 5 ? std::stoi(parts[4]) : 0,
+                parts.size() == 6 ? std::stoi(parts[5]) != 0 : true};
         } catch (...) { return std::nullopt; }
     }
     for (std::size_t index = 0; index < kWeatherDailyCapacity; ++index) {
@@ -292,6 +299,14 @@ std::optional<WeatherData> WeatherStore::load_cache() const {
     data.stale = true;
     if (!data.valid()) return std::nullopt;
     return data;
+}
+
+WeatherRefreshInterval WeatherStore::load_refresh_interval() const {
+    const auto values = read_values(settings_path(), "AURA_WEATHER_SETTINGS_V1");
+    int minutes = 0;
+    if (!parse_int(values, "refresh_minutes", minutes)) return kDefaultWeatherRefreshInterval;
+    const auto interval = static_cast<WeatherRefreshInterval>(minutes);
+    return weather_refresh_interval_valid(interval) ? interval : kDefaultWeatherRefreshInterval;
 }
 
 bool WeatherStore::save_location(const WeatherLocation& location) const {
@@ -346,7 +361,8 @@ bool WeatherStore::save_cache(const WeatherData& data) const {
             std::to_string(data.hourly[index].temperature_c) + '|' +
             std::to_string(static_cast<int>(data.hourly[index].condition)) + '|' +
             std::to_string(data.hourly[index].weather_code) + '|' +
-            std::to_string(data.hourly[index].rain_probability_percent)) << '\n';
+            std::to_string(data.hourly[index].rain_probability_percent) + '|' +
+            std::to_string(data.hourly[index].is_day ? 1 : 0)) << '\n';
     }
     for (std::size_t index = 0; index < data.daily_count; ++index) {
         output << "daily" << index << '=' << encode(data.daily[index].date + '|' +
@@ -359,6 +375,14 @@ bool WeatherStore::save_cache(const WeatherData& data) const {
     return atomic_write(cache_path(), output.str());
 }
 
+bool WeatherStore::save_refresh_interval(WeatherRefreshInterval interval) const {
+    if (!weather_refresh_interval_valid(interval)) return false;
+    std::ostringstream output;
+    output << "AURA_WEATHER_SETTINGS_V1\n"
+           << "refresh_minutes=" << weather_refresh_interval_minutes(interval) << '\n';
+    return atomic_write(settings_path(), output.str());
+}
+
 bool WeatherStore::clear_location() const {
     std::error_code error;
     const bool removed_location = !std::filesystem::exists(location_path()) ||
@@ -367,6 +391,11 @@ bool WeatherStore::clear_location() const {
     const bool removed_cache = !std::filesystem::exists(cache_path()) ||
                                std::filesystem::remove(cache_path(), error);
     return removed_location && removed_cache;
+}
+
+bool WeatherStore::clear_settings() const {
+    std::error_code error;
+    return !std::filesystem::exists(settings_path()) || std::filesystem::remove(settings_path(), error);
 }
 
 }  // namespace aura::simulator

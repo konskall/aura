@@ -27,6 +27,12 @@ int main() {
     expect(controller.dispatch({EventType::Cancel}), "cancel responding turn");
     expect(controller.snapshot().turn_generation > generation, "cancel invalidates stale reply");
     expect(!controller.dispatch({EventType::EndRecording}), "invalid transition rejected");
+    AssistantController quiet_controller;
+    expect(quiet_controller.dispatch({EventType::WakeDetected}) &&
+           quiet_controller.dispatch({EventType::BeginRecording}) &&
+           quiet_controller.dispatch({EventType::ListeningExpired}) &&
+           quiet_controller.snapshot().state == AssistantState::Idle,
+           "an empty automatic listening window returns to idle");
     expect(controller.dispatch({EventType::BatteryChanged, {}, 140}), "battery event accepted");
     expect(controller.snapshot().battery_percent == 100, "battery bounded");
     expect(controller.dispatch({EventType::NotificationReceived, "DEMO"}), "notification accepted");
@@ -41,6 +47,12 @@ int main() {
     expect(controller.dispatch({EventType::WifiChanged, {}, 1}), "wifi restore accepted");
     expect(controller.dispatch({EventType::TurnStarted, "δοκιμή"}), "answered turn starts");
     expect(controller.dispatch({EventType::FinalResult, "Τελική απάντηση."}), "answer delivered");
+    const auto delivered_answer = controller.snapshot().answer_text;
+    expect(controller.dispatch({EventType::WakeDetected}) && controller.dispatch({EventType::BeginRecording}) &&
+           controller.dispatch({EventType::ListeningExpired}) &&
+           controller.snapshot().state == AssistantState::Responding &&
+           controller.snapshot().answer_text == delivered_answer,
+           "a silent follow-up preserves the completed answer");
     expect(controller.dispatch({EventType::WifiChanged, {}, 0}), "late wifi loss accepted");
     expect(controller.snapshot().state == AssistantState::Responding &&
            controller.snapshot().answer_text == "Τελική απάντηση.",

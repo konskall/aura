@@ -1,7 +1,9 @@
 #include "aura/display_power.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cmath>
+#include <sstream>
 
 namespace aura {
 namespace {
@@ -27,6 +29,50 @@ constexpr std::array<std::array<int, 2>, 8> kShift{{
 }};
 
 }  // namespace
+
+std::string serialize_display_settings(const DisplaySettings& settings) {
+    std::string text = "aura-display 1\n";
+    text += std::string("always_on=") + (settings.always_on ? "1\n" : "0\n");
+    text += std::string("raise_to_wake=") + (settings.raise_to_wake ? "1\n" : "0\n");
+    text += std::string("flip_to_mute=") + (settings.flip_to_mute ? "1\n" : "0\n");
+    text += "active_brightness_percent=" + std::to_string(std::clamp(settings.active_brightness_percent, 5, 100)) + "\n";
+    text += "timeout_ms=" + std::to_string(std::clamp<std::uint32_t>(settings.timeout_ms, 5000, 300000)) + "\n";
+    text += "dim_ms=" + std::to_string(std::clamp<std::uint32_t>(settings.dim_ms, 1000, 60000)) + "\n";
+    return text;
+}
+
+DisplaySettings parse_display_settings(const std::string& data) {
+    DisplaySettings settings;
+    std::istringstream input(data);
+    std::string line;
+    if (!std::getline(input, line) || line != "aura-display 1") return settings;
+    while (std::getline(input, line)) {
+        const auto equals = line.find('=');
+        if (equals == std::string::npos) continue;
+        const auto key = line.substr(0, equals);
+        const auto value = line.substr(equals + 1);
+        if (key == "always_on" || key == "raise_to_wake" || key == "flip_to_mute") {
+            if (value != "0" && value != "1") continue;
+            const bool enabled = value == "1";
+            if (key == "always_on") settings.always_on = enabled;
+            else if (key == "raise_to_wake") settings.raise_to_wake = enabled;
+            else settings.flip_to_mute = enabled;
+            continue;
+        }
+        std::uint32_t parsed = 0;
+        bool valid = !value.empty();
+        for (const char ch : value) {
+            if (ch < '0' || ch > '9' || parsed > 1000000U) { valid = false; break; }
+            parsed = parsed * 10U + static_cast<std::uint32_t>(ch - '0');
+        }
+        if (!valid) continue;
+        if (key == "active_brightness_percent" && parsed >= 5 && parsed <= 100) {
+            settings.active_brightness_percent = static_cast<int>(parsed);
+        } else if (key == "timeout_ms" && parsed >= 5000 && parsed <= 300000) settings.timeout_ms = parsed;
+        else if (key == "dim_ms" && parsed >= 1000 && parsed <= 60000) settings.dim_ms = parsed;
+    }
+    return settings;
+}
 
 ImuGesture ImuGestureDetector::push(const ImuSample& sample) {
     const std::uint32_t now = sample.t_ms;
@@ -98,6 +144,9 @@ void ImuGestureDetector::reset() noexcept { *this = ImuGestureDetector{}; }
 
 void DisplayPowerModel::set_settings(const DisplaySettings& settings) {
     snapshot_.settings = settings;
+    snapshot_.settings.active_brightness_percent =
+        std::clamp(snapshot_.settings.active_brightness_percent, 5, 100);
+    snapshot_.brightness_percent = brightness_for(snapshot_.mode);
     if (!settings.always_on && snapshot_.mode == DisplayMode::AlwaysOn) set_mode(DisplayMode::Off);
     if (!settings.flip_to_mute) snapshot_.muted_by_flip = false;
     changed();
@@ -172,15 +221,23 @@ void DisplayPowerModel::set_minute(std::int64_t minute_index) {
     if (snapshot_.mode == DisplayMode::AlwaysOn) changed();
 }
 
+// Dimming never brightens: the dimmed screen is 40% of the owner's level (at
+// most 30%) and the always-on clock 20% of it (at most 12%).
+int DisplayPowerModel::brightness_for(DisplayMode mode) const noexcept {
+    const int active = snapshot_.settings.active_brightness_percent;
+    switch (mode) {
+        case DisplayMode::Active: return active;
+        case DisplayMode::Dimmed: return std::clamp(active * 2 / 5, 1, 30);
+        case DisplayMode::AlwaysOn: return std::clamp(active / 5, 1, 12);
+        case DisplayMode::Off: return 0;
+    }
+    return 0;
+}
+
 void DisplayPowerModel::set_mode(DisplayMode mode) {
     if (snapshot_.mode == mode) return;
     snapshot_.mode = mode;
-    switch (mode) {
-        case DisplayMode::Active: snapshot_.brightness_percent = 100; break;
-        case DisplayMode::Dimmed: snapshot_.brightness_percent = 30; break;
-        case DisplayMode::AlwaysOn: snapshot_.brightness_percent = 12; break;
-        case DisplayMode::Off: snapshot_.brightness_percent = 0; break;
-    }
+    snapshot_.brightness_percent = brightness_for(mode);
     changed();
 }
 

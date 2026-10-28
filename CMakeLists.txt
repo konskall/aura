@@ -43,13 +43,20 @@ target_compile_definitions(lvgl PUBLIC LV_CONF_INCLUDE_SIMPLE LV_LVGL_H_INCLUDE_
 target_link_libraries(lvgl PRIVATE SDL2::SDL2-static)
 
 add_library(aura_core STATIC
+    shared/core/src/app_layout.cpp
     shared/core/src/aoraton.cpp
     shared/core/src/assistant_companion.cpp
     shared/core/src/briefing.cpp
     shared/core/src/clock_services.cpp
     shared/core/src/display_power.cpp
     shared/core/src/sounds.cpp
+    shared/core/src/radio.cpp
+    shared/core/src/mp3_decoder.cpp
+    shared/core/src/greek_calendar.cpp
+    shared/core/src/fuel_prices.cpp
     shared/core/src/notes.cpp
+    shared/core/src/organizer.cpp
+    shared/core/src/offline_commands.cpp
     shared/core/src/ota_update.cpp
     shared/core/src/phone_link.cpp
     shared/core/src/text_util.cpp
@@ -63,6 +70,7 @@ add_library(aura_core STATIC
     shared/core/src/aoraton_inco.cpp
     shared/core/src/audio_service.cpp
     shared/core/src/assistant_state.cpp
+    shared/core/src/assistant_stream.cpp
     shared/core/src/device_status.cpp
     shared/core/src/motion_model.cpp
     shared/core/src/mock_provider.cpp
@@ -113,6 +121,9 @@ add_executable(aura_simulator
     simulator/app/src/open_meteo_weather_service.cpp
     simulator/app/src/weather_store.cpp
     simulator/app/src/windows_audio_backend.cpp
+    simulator/app/src/windows_fuel_service.cpp
+    simulator/app/src/windows_ancs_service.cpp
+    simulator/app/src/windows_radio_service.cpp
     simulator/app/src/windows_aoraton_crypto.cpp
     simulator/app/src/windows_aoraton_vault.cpp
     simulator/app/src/windows_wifi_service.cpp
@@ -125,7 +136,7 @@ target_include_directories(aura_simulator PRIVATE simulator/app/include)
 target_compile_definitions(aura_simulator PRIVATE LV_CONF_INCLUDE_SIMPLE LV_LVGL_H_INCLUDE_SIMPLE SDL_MAIN_HANDLED)
 target_link_libraries(aura_simulator PRIVATE aura_ui lvgl SDL2::SDL2-static)
 if(WIN32)
-    target_link_libraries(aura_simulator PRIVATE winhttp ws2_32 shell32 bcrypt crypt32 wlanapi)
+    target_link_libraries(aura_simulator PRIVATE winhttp ws2_32 shell32 bcrypt crypt32 wlanapi bluetoothapis setupapi)
     target_link_options(aura_simulator PRIVATE -mconsole)
 endif()
 
@@ -140,6 +151,9 @@ if(BUILD_TESTING)
     add_executable(aura_core_tests tests/unit/assistant_state_test.cpp)
     target_link_libraries(aura_core_tests PRIVATE aura_core)
     add_test(NAME aura_core_tests COMMAND aura_core_tests)
+    add_executable(aura_assistant_stream_tests tests/unit/assistant_stream_test.cpp)
+    target_link_libraries(aura_assistant_stream_tests PRIVATE aura_core)
+    add_test(NAME aura_assistant_stream_tests COMMAND aura_assistant_stream_tests)
     add_executable(aura_audio_tests tests/unit/audio_service_test.cpp)
     target_link_libraries(aura_audio_tests PRIVATE aura_core)
     add_test(NAME aura_audio_tests COMMAND aura_audio_tests)
@@ -168,9 +182,64 @@ if(BUILD_TESTING)
     add_executable(aura_wifi_tests tests/unit/wifi_test.cpp)
     target_link_libraries(aura_wifi_tests PRIVATE aura_core)
     add_test(NAME aura_wifi_tests COMMAND aura_wifi_tests)
+    add_executable(aura_radio_tests tests/unit/radio_test.cpp)
+    target_link_libraries(aura_radio_tests PRIVATE aura_core)
+    add_test(NAME aura_radio_tests COMMAND aura_radio_tests)
+    add_executable(aura_app_layout_tests tests/unit/app_layout_test.cpp)
+    target_link_libraries(aura_app_layout_tests PRIVATE aura_core)
+    add_test(NAME aura_app_layout_tests COMMAND aura_app_layout_tests)
+    add_executable(aura_greek_calendar_tests tests/unit/greek_calendar_test.cpp)
+    target_link_libraries(aura_greek_calendar_tests PRIVATE aura_core)
+    add_test(NAME aura_greek_calendar_tests COMMAND aura_greek_calendar_tests)
+    add_executable(aura_fuel_prices_tests tests/unit/fuel_prices_test.cpp)
+    target_link_libraries(aura_fuel_prices_tests PRIVATE aura_core)
+    add_test(NAME aura_fuel_prices_tests COMMAND aura_fuel_prices_tests)
+    if(WIN32)
+        add_executable(aura_ancs_probe
+            tools/ancs_probe.cpp
+            simulator/app/src/windows_ancs_service.cpp
+        )
+        target_include_directories(aura_ancs_probe PRIVATE simulator/app/include)
+        target_link_libraries(aura_ancs_probe PRIVATE aura_core bluetoothapis setupapi)
+        # Manual network integration check; deliberately not registered with
+        # CTest because it requires the public radio directory and a live stream.
+        add_executable(aura_radio_live_test
+            tests/integration/windows_radio_live_test.cpp
+            simulator/app/src/windows_audio_backend.cpp
+            simulator/app/src/windows_radio_service.cpp
+        )
+        target_include_directories(aura_radio_live_test PRIVATE simulator/app/include)
+        target_compile_definitions(aura_radio_live_test PRIVATE SDL_MAIN_HANDLED)
+        target_link_libraries(aura_radio_live_test PRIVATE aura_core SDL2::SDL2-static winhttp ws2_32)
+        # Loopback only: a fake Shoutcast server checks the ICY fallback,
+        # reconnection and fast station switching.
+        add_executable(aura_windows_radio_icy_tests
+            tests/unit/windows_radio_icy_test.cpp
+            simulator/app/src/windows_audio_backend.cpp
+            simulator/app/src/windows_radio_service.cpp
+        )
+        target_include_directories(aura_windows_radio_icy_tests PRIVATE simulator/app/include)
+        target_compile_definitions(aura_windows_radio_icy_tests PRIVATE SDL_MAIN_HANDLED)
+        target_link_libraries(aura_windows_radio_icy_tests PRIVATE aura_core SDL2::SDL2-static winhttp ws2_32)
+        add_test(NAME aura_windows_radio_icy_tests COMMAND aura_windows_radio_icy_tests)
+        add_executable(aura_bridge_stream_tests
+            tests/unit/bridge_stream_test.cpp
+            simulator/app/src/local_codex_provider.cpp
+            simulator/app/src/bridge_http.cpp
+        )
+        target_include_directories(aura_bridge_stream_tests PRIVATE simulator/app/include)
+        target_link_libraries(aura_bridge_stream_tests PRIVATE aura_core winhttp ws2_32)
+        add_test(NAME aura_bridge_stream_tests COMMAND aura_bridge_stream_tests)
+    endif()
     add_executable(aura_companion_models_tests tests/unit/companion_models_test.cpp)
     target_link_libraries(aura_companion_models_tests PRIVATE aura_core)
     add_test(NAME aura_companion_models_tests COMMAND aura_companion_models_tests)
+    add_executable(aura_organizer_tests tests/unit/organizer_test.cpp)
+    target_link_libraries(aura_organizer_tests PRIVATE aura_core)
+    add_test(NAME aura_organizer_tests COMMAND aura_organizer_tests)
+    add_executable(aura_offline_commands_tests tests/unit/offline_commands_test.cpp)
+    target_link_libraries(aura_offline_commands_tests PRIVATE aura_core)
+    add_test(NAME aura_offline_commands_tests COMMAND aura_offline_commands_tests)
     add_executable(aura_ui_recovery_models_tests tests/unit/ui_recovery_models_test.cpp)
     target_link_libraries(aura_ui_recovery_models_tests PRIVATE aura_core)
     add_test(NAME aura_ui_recovery_models_tests COMMAND aura_ui_recovery_models_tests)

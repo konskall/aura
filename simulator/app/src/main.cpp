@@ -1,9 +1,11 @@
 #include "aura/assistant_state.hpp"
+#include "aura/assistant_stream.hpp"
 #include "aura/aoraton.hpp"
 #include "aura/aoraton_real.hpp"
 #include "aura/aura_ui.hpp"
 #include "aura/bridge_speech_service.hpp"
 #include "aura/companion_runtime.hpp"
+#include "aura/companion_strings.hpp"
 #include "aura/control_events.hpp"
 #include "aura/device_status.hpp"
 #include "aura/aoraton_account_transport.hpp"
@@ -12,12 +14,18 @@
 #include "aura/mock_provider.hpp"
 #include "aura/open_meteo_weather_service.hpp"
 #include "aura/provider.hpp"
+#include "aura/radio.hpp"
 #include "aura/screenshot.hpp"
 #include "aura/strings.hpp"
 #include "aura/weather.hpp"
 #include "aura/weather_store.hpp"
 #include "aura/wifi.hpp"
+#include "aura/greek_calendar.hpp"
+#include "aura/offline_commands.hpp"
 #include "aura/windows_audio_backend.hpp"
+#include "aura/windows_ancs_service.hpp"
+#include "aura/windows_fuel_service.hpp"
+#include "aura/windows_radio_service.hpp"
 #include "aura/windows_wifi_service.hpp"
 
 #include <algorithm>
@@ -32,6 +40,7 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -48,6 +57,45 @@
 #include "lvgl.h"
 
 namespace {
+constexpr std::size_t kMaximumRetiredRequests = 4;
+
+template <typename T>
+void prune_finished(std::vector<std::future<T>>& futures) {
+    futures.erase(std::remove_if(futures.begin(), futures.end(), [](std::future<T>& future) {
+        return !future.valid() || future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;
+    }), futures.end());
+}
+
+template <typename T>
+bool retire_future(std::future<T>& active, std::vector<std::future<T>>& retired) {
+    prune_finished(retired);
+    if (!active.valid()) return true;
+    if (active.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+        active = {};
+        return true;
+    }
+    if (retired.size() >= kMaximumRetiredRequests) return false;
+    retired.push_back(std::move(active));
+    return true;
+}
+
+template <typename T>
+bool retire_future(std::optional<std::future<T>>& active, std::vector<std::future<T>>& retired) {
+    prune_finished(retired);
+    if (!active || !active->valid()) {
+        active.reset();
+        return true;
+    }
+    if (active->wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+        active.reset();
+        return true;
+    }
+    if (retired.size() >= kMaximumRetiredRequests) return false;
+    retired.push_back(std::move(*active));
+    active.reset();
+    return true;
+}
+
 std::vector<std::string> utf8_command_line_arguments(int argc, char** argv) {
 #ifdef _WIN32
     int wide_count = 0;
@@ -110,17 +158,35 @@ std::string aoraton_client_message_id() {
     return result;
 }
 
-aura::WeatherLocation demo_weather_location(const std::string& name = "Αθήνα") {
-    if (name == "Σπάρτη") return {name, "Πελοπόννησος", "Ελλάδα", "GR", "Europe/Athens", 37.0733, 22.4297};
-    if (name == "Θεσσαλονίκη") return {name, "Κεντρική Μακεδονία", "Ελλάδα", "GR", "Europe/Athens", 40.6401, 22.9444};
-    if (name == "Πάτρα") return {name, "Δυτική Ελλάδα", "Ελλάδα", "GR", "Europe/Athens", 38.2466, 21.7346};
-    return {name, "Αττική", "Ελλάδα", "GR", "Europe/Athens", 37.9838, 23.7275};
+aura::WeatherLocation demo_weather_location(
+    const std::string& requested_name = {},
+    aura::InterfaceLanguage language = aura::InterfaceLanguage::Greek) {
+    const bool english = language == aura::InterfaceLanguage::English;
+    const std::string name = requested_name.empty() ? (english ? "Athens" : "Αθήνα") : requested_name;
+    if (name == "Σπάρτη" || name == "Sparta") {
+        return {english ? "Sparta" : "Σπάρτη", english ? "Peloponnese" : "Πελοπόννησος",
+                english ? "Greece" : "Ελλάδα", "GR", "Europe/Athens", 37.0733, 22.4297};
+    }
+    if (name == "Θεσσαλονίκη" || name == "Thessaloniki") {
+        return {english ? "Thessaloniki" : "Θεσσαλονίκη",
+                english ? "Central Macedonia" : "Κεντρική Μακεδονία", english ? "Greece" : "Ελλάδα",
+                "GR", "Europe/Athens", 40.6401, 22.9444};
+    }
+    if (name == "Πάτρα" || name == "Patras") {
+        return {english ? "Patras" : "Πάτρα", english ? "Western Greece" : "Δυτική Ελλάδα",
+                english ? "Greece" : "Ελλάδα", "GR", "Europe/Athens", 38.2466, 21.7346};
+    }
+    return {english ? "Athens" : "Αθήνα", english ? "Attica" : "Αττική",
+            english ? "Greece" : "Ελλάδα", "GR", "Europe/Athens", 37.9838, 23.7275};
 }
 
 aura::WeatherData demo_weather_data(aura::WeatherCondition condition = aura::WeatherCondition::PartlyCloudy,
-                                     const std::string& city = "Αθήνα") {
+                                     const std::string& city = {},
+                                     aura::InterfaceLanguage language = aura::InterfaceLanguage::Greek,
+                                     bool is_day = true) {
     aura::WeatherData data;
-    data.location = demo_weather_location(city);
+    data.location = demo_weather_location(city, language);
+    data.is_day = is_day;
     data.temperature_c = condition == aura::WeatherCondition::Rain ? 17.0F : 22.0F;
     data.apparent_temperature_c = condition == aura::WeatherCondition::Rain ? 16.0F : 24.0F;
     data.wind_kmh = condition == aura::WeatherCondition::Windy ? 46.0F : 12.0F;
@@ -157,7 +223,7 @@ aura::WeatherData demo_weather_data(aura::WeatherCondition condition = aura::Wea
     for (std::size_t index = 0; index < data.hourly.size(); ++index) {
         data.hourly[index] = {times[index], temperatures[index], later[index], demo_code(later[index]),
             later[index] == aura::WeatherCondition::Rain ? 82 :
-            (later[index] == aura::WeatherCondition::Thunderstorm ? 92 : 12)};
+            (later[index] == aura::WeatherCondition::Thunderstorm ? 92 : 12), is_day && index == 0};
     }
     data.hourly_count = data.hourly.size();
     const char* dates[] = {"2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22"};
@@ -185,8 +251,9 @@ std::vector<aura::WifiNetwork> demo_wifi_networks() {
     };
 }
 
-aura::WeatherData demo_tlesdetector_weather_data() {
-    auto data = demo_weather_data(aura::WeatherCondition::Thunderstorm);
+aura::WeatherData demo_tlesdetector_weather_data(
+    aura::InterfaceLanguage language = aura::InterfaceLanguage::Greek) {
+    auto data = demo_weather_data(aura::WeatherCondition::Thunderstorm, {}, language);
     data.provider = aura::WeatherProvider::TlesDetector;
     data.temperature_c = 19.0F;
     data.apparent_temperature_c = 18.0F;
@@ -217,6 +284,41 @@ aura::WeatherData demo_tlesdetector_weather_data() {
     data.hazards.max_positive_ka = 91;
     return data;
 }
+
+std::string read_text_store(const std::filesystem::path& path) {
+    constexpr std::uintmax_t kMaxBytes = 128U * 1024U;
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error || size > kMaxBytes) return {};
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return {};
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+bool write_text_store(const std::filesystem::path& path, const std::string& data) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) return false;
+    const auto temporary = std::filesystem::path(path.string() + ".tmp");
+    {
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        if (!output) return false;
+        output.write(data.data(), static_cast<std::streamsize>(data.size()));
+        output.flush();
+        if (!output) return false;
+    }
+#ifdef _WIN32
+    if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        std::filesystem::remove(temporary, error);
+        return false;
+    }
+#else
+    std::filesystem::rename(temporary, path, error);
+    if (error) std::filesystem::remove(temporary, error);
+    if (error) return false;
+#endif
+    return true;
+}
 }
 
 int main(int argc, char** argv) {
@@ -229,6 +331,7 @@ int main(int argc, char** argv) {
     std::string motion_scenario;
     std::string motion_directory;
     std::string weather_live_city;
+    std::optional<aura::InterfaceLanguage> language_override;
     bool capture_weather_forecast = false;
     int capture_weather_scroll_y = 340;
     float window_scale = 1.0F;
@@ -244,6 +347,14 @@ int main(int argc, char** argv) {
         if (argument == "--motion-sequence" && index + 1 < arguments.size()) motion_scenario = arguments[++index];
         if (argument == "--motion-dir" && index + 1 < arguments.size()) motion_directory = arguments[++index];
         if (argument == "--weather-live-city" && index + 1 < arguments.size()) weather_live_city = arguments[++index];
+        if (argument == "--language" && index + 1 < arguments.size()) {
+            const auto value = arguments[++index];
+            if (value != "el" && value != "en") {
+                std::cerr << "AURA: --language expects el or en\n";
+                return 2;
+            }
+            language_override = aura::parse_interface_language(value);
+        }
         if (argument == "--scale" && index + 1 < arguments.size()) {
             try { window_scale = std::clamp(std::stof(arguments[++index]), 1.0F, 3.0F); }
             catch (...) { window_scale = 1.0F; }
@@ -270,7 +381,6 @@ int main(int argc, char** argv) {
 
     aura::AssistantController controller;
     aura::DeviceStatusModel device_status;
-    const auto& text = aura::l10n::el_gr();
     const std::string aoraton_mode_name = environment("AURA_AORATON_MODE", "mock");
     std::unique_ptr<aura::AoratonMailbox> aoraton_mailbox;
     std::unique_ptr<aura::IAoratonService> aoraton_service;
@@ -318,7 +428,21 @@ int main(int argc, char** argv) {
     std::optional<aura::AoratonSnapshot> aoraton_capture_override;
     aura::simulator::WindowsAudioBackend audio;
     audio.initialize();
+    aura::simulator::WindowsRadioService radio_service(audio);
+    aura::RadioModel radio_model;
+    aura::LauncherLayoutModel launcher_layout_model;
+    aura::simulator::WindowsFuelService fuel_service(
+        environment("AURA_BRIDGE_TOKEN"),
+        static_cast<std::uint16_t>(integer(environment("AURA_BRIDGE_PORT", "4778"), 4778)));
+    aura::FuelPriceModel fuel_model;
+    const std::string companion_store_dir = environment("AURA_COMPANION_STORE", "simulator/runtime/companion");
+    const std::filesystem::path radio_store_path = std::filesystem::path(companion_store_dir) / "radio.txt";
+    const std::filesystem::path launcher_layout_store_path =
+        std::filesystem::path(companion_store_dir) / "app-layout.txt";
     aura::AuraUi ui;
+    const auto text = [&ui]() -> const aura::l10n::Strings& {
+        return ui.language() == aura::InterfaceLanguage::English ? aura::l10n::en_us() : aura::l10n::el_gr();
+    };
     aura::WeatherModel weather_model;
     aura::simulator::OpenMeteoWeatherService weather_service;
     const std::string weather_store_override = environment("AURA_WEATHER_STORE");
@@ -326,8 +450,12 @@ int main(int argc, char** argv) {
         aura::simulator::WeatherStore::default_base_path() : std::filesystem::path(weather_store_override));
     if (const auto cached = weather_store.load_cache()) weather_model.restore_cache(*cached);
     if (const auto saved = weather_store.load_location()) weather_model.restore_location(*saved);
+    weather_model.set_refresh_interval(weather_store.load_refresh_interval());
     std::optional<std::future<aura::WeatherGeocodingResult>> pending_weather_search;
     std::optional<std::future<aura::WeatherFetchResult>> pending_weather_fetch;
+    std::optional<std::chrono::steady_clock::time_point> next_weather_refresh_at;
+    std::optional<std::future<aura::simulator::RadioSearchResult>> pending_radio_search;
+    std::optional<std::future<aura::simulator::FuelFetchResult>> pending_fuel_fetch;
     bool weather_auto_fetch_first{false};
     bool weather_fetch_persist{false};
     bool weather_live_finished{false};
@@ -337,17 +465,15 @@ int main(int argc, char** argv) {
     std::unique_ptr<aura::IAssistantProvider> provider;
     bool live_provider = std::string(environment("AURA_PROVIDER", "mock")) == "codex";
     std::future<aura::AssistantReply> pending_reply;
+    std::shared_ptr<aura::AssistantStreamMailbox> pending_stream;
+    std::uint64_t pending_stream_sequence = 0;
     // Superseded async work. Destroying an unfinished std::async future blocks
     // until it completes, so replaced requests are parked here and released
     // once ready instead of freezing the UI thread.
     std::vector<std::future<aura::AssistantReply>> retired_replies;
     std::vector<std::future<aura::WeatherGeocodingResult>> retired_weather_searches;
     std::vector<std::future<aura::WeatherFetchResult>> retired_weather_fetches;
-    const auto prune_ready = [](auto& futures) {
-        futures.erase(std::remove_if(futures.begin(), futures.end(), [](auto& future) {
-            return future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;
-        }), futures.end());
-    };
+    std::vector<std::future<aura::simulator::RadioSearchResult>> retired_radio_searches;
     bool pending = false;
     std::uint64_t pending_generation = 0;
     float manual_input_amplitude = -1.0F;
@@ -372,14 +498,22 @@ int main(int argc, char** argv) {
         int aoraton_cancel{0};
         int weather_open{0};
         int weather_refresh{0};
+        int weather_interval{0};
         int weather_search{0};
         int weather_select{0};
+        int radio_play{0};
+        int radio_stop{0};
+        int radio_search{0};
+        int radio_favorite{0};
+        int radio_move{0};
+        int launcher_move{0};
         int wifi_open{0};
         int wifi_scan{0};
         int wifi_connect{0};
         int wifi_forget{0};
         int system_action{0};
         int sound_preview{0};
+        int voice_preview{0};
         int aoraton_unlock{0};
         int aoraton_unlock_bytes{0};
         int aoraton_paste{0};
@@ -389,6 +523,7 @@ int main(int argc, char** argv) {
 
     std::function<void()> provider_changed_hook;
     auto select_provider = [&](bool live) {
+        if (!retire_future(pending_reply, retired_replies)) return;
         if (provider) provider->cancel();
         if (pending) {
             // The replaced provider's reply can no longer be delivered; end the
@@ -396,12 +531,13 @@ int main(int argc, char** argv) {
             pending = false;
             controller.dispatch({aura::EventType::Cancel});
         }
-        if (pending_reply.valid()) retired_replies.push_back(std::move(pending_reply));
         live_provider = live;
         if (live) {
             provider = std::make_unique<aura::simulator::LocalCodexProvider>(
                 environment("AURA_BRIDGE_TOKEN"),
-                static_cast<std::uint16_t>(integer(environment("AURA_BRIDGE_PORT", "4778"), 4778)));
+                static_cast<std::uint16_t>(integer(environment("AURA_BRIDGE_PORT", "4778"), 4778)),
+                std::string(environment("AURA_BRIDGE_AI_PROVIDER", "codex")) == "groq" ?
+                    "Groq via local gateway" : "Local Codex CLI");
         } else {
             provider = std::make_unique<aura::MockProvider>();
         }
@@ -425,30 +561,43 @@ int main(int argc, char** argv) {
     std::function<void(aura::WeatherLocation, bool)> start_weather_fetch;
     std::function<void(std::string, bool)> start_weather_search;
     start_weather_fetch = [&](aura::WeatherLocation location, bool save_as_default) {
+        if (!retire_future(pending_weather_fetch, retired_weather_fetches)) {
+            weather_model.fetch_failed("WEATHER_BUSY", false);
+            apply_weather();
+            return;
+        }
         if (!weather_model.begin_fetch(location, save_as_default)) return;
+        next_weather_refresh_at = std::chrono::steady_clock::now() + std::chrono::minutes(
+            aura::weather_refresh_interval_minutes(weather_model.snapshot().refresh_interval));
         if (save_as_default && interaction_report.empty()) weather_store.save_location(location);
         weather_fetch_persist = save_as_default ||
             (weather_model.snapshot().has_saved_location &&
              same_weather_location(weather_model.snapshot().saved_location, location));
         apply_weather();
         if (!interaction_report.empty()) {
-            auto data = demo_weather_data(aura::WeatherCondition::PartlyCloudy, location.name);
+            auto data = demo_weather_data(aura::WeatherCondition::PartlyCloudy, location.name, ui.language());
             data.location = std::move(location);
             weather_model.fetch_succeeded(data);
             apply_weather();
             return;
         }
-        if (pending_weather_fetch) retired_weather_fetches.push_back(std::move(*pending_weather_fetch));
         pending_weather_fetch.emplace(weather_service.fetch(std::move(location)));
     };
     start_weather_search = [&](std::string query, bool auto_fetch_first) {
+        if (!retire_future(pending_weather_search, retired_weather_searches)) {
+            weather_model.search_failed("WEATHER_BUSY", false);
+            apply_weather();
+            return;
+        }
         if (!weather_model.begin_search(query)) return;
         weather_auto_fetch_first = auto_fetch_first;
         apply_weather();
         if (!interaction_report.empty()) {
+            const bool english = ui.language() == aura::InterfaceLanguage::English;
             std::vector<aura::WeatherLocation> results{
-                demo_weather_location(query.empty() ? "Αθήνα" : query),
-                demo_weather_location("Αθήνα"), demo_weather_location("Σπάρτη")};
+                demo_weather_location(query, ui.language()),
+                demo_weather_location({}, ui.language()),
+                demo_weather_location(english ? "Sparta" : "Σπάρτη", ui.language())};
             weather_model.search_succeeded(results);
             apply_weather();
             if (auto_fetch_first) {
@@ -458,8 +607,8 @@ int main(int argc, char** argv) {
             }
             return;
         }
-        if (pending_weather_search) retired_weather_searches.push_back(std::move(*pending_weather_search));
-        pending_weather_search.emplace(weather_service.search(std::move(query)));
+        pending_weather_search.emplace(weather_service.search(std::move(query),
+            aura::interface_language_code(ui.language())));
     };
     auto open_weather = [&] {
         const auto& snapshot = weather_model.snapshot();
@@ -520,6 +669,18 @@ int main(int argc, char** argv) {
     const bool deterministic_run = smoke || ui_stress || !capture_scenario.empty() ||
         !interaction_report.empty() || !motion_scenario.empty() || !weather_live_city.empty() ||
         aoraton_pairing_smoke;
+    aura::simulator::WindowsAncsService ancs_service;
+    const bool ancs_enabled = !deterministic_run && std::string(environment("AURA_ANCS_ENABLED")) == "1";
+    if (!deterministic_run) {
+        const auto saved_radio = read_text_store(radio_store_path);
+        if (!saved_radio.empty() && !radio_model.restore_favorites(saved_radio)) {
+            std::cerr << "AURA radio: ignored invalid favourites store\n";
+        }
+        const auto saved_layout = read_text_store(launcher_layout_store_path);
+        if (!saved_layout.empty() && !launcher_layout_model.restore(saved_layout)) {
+            std::cerr << "AURA launcher: ignored invalid app layout store\n";
+        }
+    }
     // Deterministic runs never sign in to the owner's account.
     if (aoraton_account_transport && !deterministic_run) aoraton_account_transport->start();
     aura::WifiModel wifi_model;
@@ -572,9 +733,13 @@ int main(int argc, char** argv) {
             apply_wifi();
             return;
         }
+        if (!retire_future(pending_wifi_scan, retired_wifi_scans)) {
+            wifi_model.scan_failed("SCAN_BUSY");
+            apply_wifi();
+            return;
+        }
         if (!wifi_model.begin_scan()) return;
         apply_wifi();
-        if (pending_wifi_scan) retired_wifi_scans.push_back(std::move(*pending_wifi_scan));
         pending_wifi_scan.emplace(wifi_service.scan());
         wifi_last_scan = std::chrono::steady_clock::now();
     };
@@ -616,6 +781,117 @@ int main(int argc, char** argv) {
         }
     };
 
+    std::uint64_t radio_generation{0};
+    auto apply_radio = [&] { ui.apply_radio(radio_model.snapshot()); };
+    auto save_radio = [&] {
+        if (!deterministic_run && !write_text_store(radio_store_path, radio_model.serialize_favorites())) {
+            std::cerr << "AURA radio: could not save favourites\n";
+        }
+    };
+    auto apply_launcher_layout = [&] { ui.apply_launcher_layout(launcher_layout_model.snapshot()); };
+    auto save_launcher_layout = [&] {
+        if (!deterministic_run &&
+            !write_text_store(launcher_layout_store_path, launcher_layout_model.serialize())) {
+            std::cerr << "AURA launcher: could not save app layout\n";
+        }
+    };
+    auto play_radio = [&](const aura::RadioStation& selected) {
+        const aura::RadioStation station = selected;
+        radio_model.begin_connect(station);
+        if (deterministic_run) {
+            radio_generation = 0;
+            radio_model.set_playing();
+            radio_model.set_title(ui.language() == aura::InterfaceLanguage::English ?
+                                      aura::l10n::companion_en_us().radio_demo_title :
+                                      aura::l10n::companion_el_gr().radio_demo_title);
+        } else {
+            radio_generation = radio_service.play(station);
+        }
+        apply_radio();
+    };
+    auto stop_radio = [&] {
+        radio_service.stop();
+        radio_generation = radio_service.generation();
+        radio_model.stop();
+        apply_radio();
+    };
+    auto search_radio = [&](std::string query) {
+        if (!retire_future(pending_radio_search, retired_radio_searches)) {
+            radio_model.begin_search(query);
+            radio_model.search_finished({}, "RADIO_BUSY");
+            apply_radio();
+            return;
+        }
+        radio_model.begin_search(query);
+        apply_radio();
+        if (deterministic_run) {
+            auto results = aura::greek_default_stations();
+            if (results.size() > 4) results.resize(4);
+            for (auto& station : results) station.name += " · " + std::string(text().demo);
+            radio_model.search_finished(std::move(results), {});
+            apply_radio();
+            return;
+        }
+        pending_radio_search.emplace(radio_service.search(std::move(query)));
+    };
+    auto poll_radio = [&] {
+        aura::simulator::RadioWorkerEvent event;
+        bool changed = false;
+        while (radio_service.poll(event)) {
+            if (event.generation != radio_generation) continue;
+            if (event.type == aura::simulator::RadioWorkerEventType::Playing) radio_model.set_playing();
+            else if (event.type == aura::simulator::RadioWorkerEventType::Title) radio_model.set_title(event.text);
+            else if (event.type == aura::simulator::RadioWorkerEventType::Reconnecting) {
+                // The stream dropped and is being joined again: show "Σύνδεση…".
+                radio_model.begin_connect(radio_model.snapshot().station);
+            }
+            else radio_model.fail(event.text);
+            changed = true;
+        }
+        if (pending_radio_search &&
+            pending_radio_search->wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+            auto result = pending_radio_search->get();
+            pending_radio_search.reset();
+            radio_model.search_finished(std::move(result.stations), result.ok ? std::string{} : result.error_code);
+            changed = true;
+        }
+        if (changed) apply_radio();
+    };
+
+    auto apply_fuel = [&] { ui.apply_fuel(fuel_model.snapshot()); };
+    auto refresh_fuel = [&] {
+        if (!fuel_service.configured() || pending_fuel_fetch || !fuel_model.begin_fetch()) return;
+        apply_fuel();
+        pending_fuel_fetch.emplace(fuel_service.fetch());
+    };
+    auto poll_fuel = [&] {
+        if (!pending_fuel_fetch ||
+            pending_fuel_fetch->wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        auto result = pending_fuel_fetch->get();
+        pending_fuel_fetch.reset();
+        if (result.ok) {
+            const auto& status = device_status.snapshot();
+            if (status.date_valid) {
+                result.data.stale = aura::fuel_prices_stale(result.data, status.year, status.month, status.day);
+            }
+            fuel_model.fetch_succeeded(std::move(result.data));
+        } else {
+            fuel_model.fetch_failed(std::move(result.error_code));
+        }
+        apply_fuel();
+    };
+    if (!deterministic_run) refresh_fuel();
+    // The prices refresh on their own (sooner while missing or stale); the
+    // bridge re-reads its cache, which dev-simulator.ps1 renews weekly.
+    std::uint32_t fuel_refresh_elapsed_ms = 0;
+    auto tick_fuel = [&](std::uint32_t elapsed_ms) {
+        if (deterministic_run) return;
+        fuel_refresh_elapsed_ms += elapsed_ms;
+        if (fuel_refresh_elapsed_ms < aura::fuel_refresh_interval_ms(fuel_model.snapshot())) return;
+        fuel_refresh_elapsed_ms = 0;
+        refresh_fuel();
+    };
+
     std::function<void()> cancel_voice_hook;
     auto cancel = [&] {
         if (provider) provider->cancel();
@@ -624,7 +900,35 @@ int main(int argc, char** argv) {
         controller.dispatch({aura::EventType::Cancel});
     };
     std::function<aura::TurnRequest(std::string)> turn_request_hook;
+    std::function<bool(const std::string&)> offline_command_hook;
+    std::function<void(const std::string&)> local_answer_hook;
+    std::function<void()> end_voice_turn_hook;
     auto start_turn = [&](std::string prompt) {
+        auto calendar_intent = aura::analyze_greek_calendar_intent(prompt);
+        // "Πότε γιορτάζει ο Γιώργος;" is answered here only for a listed name;
+        // the assistant answers about anybody else.
+        std::optional<aura::NamedayMatch> nameday_match;
+        if (calendar_intent == aura::GreekCalendarIntent::NamedayOf) {
+            const auto& status = device_status.snapshot();
+            if (status.date_valid) nameday_match = aura::greek_nameday_of(prompt, status.year);
+            if (!nameday_match) calendar_intent = aura::GreekCalendarIntent::None;
+        }
+        // Timers, reminders and settings come first: "βάλε υπενθύμιση ... ραδιόφωνο"
+        // is a reminder, not a radio request.
+        const bool offline_command = aura::parse_offline_command(prompt).kind != aura::OfflineCommandKind::None;
+        const auto radio_intent = offline_command ? aura::RadioIntent{} : aura::analyze_radio_intent(prompt);
+        const auto* spoken_station = radio_intent.kind == aura::RadioIntentKind::PlayStation ?
+            radio_model.find_spoken(prompt) : nullptr;
+        if (radio_intent.kind == aura::RadioIntentKind::Stop || spoken_station ||
+            (radio_intent.explicit_radio && radio_intent.kind != aura::RadioIntentKind::None)) {
+            if (aura::is_turn_active(controller.snapshot().state)) controller.dispatch({aura::EventType::Cancel});
+            if (end_voice_turn_hook) end_voice_turn_hook();
+            ui.show(aura::UiView::Radio);
+            if (radio_intent.kind == aura::RadioIntentKind::Stop) stop_radio();
+            else if (spoken_station) play_radio(*spoken_station);
+            else apply_radio();
+            return;
+        }
         const auto weather_intent = aura::analyze_weather_intent(prompt);
         const bool answer_from_forecast = weather_intent.kind == aura::WeatherIntentKind::ShowSaved &&
                                           weather_model.snapshot().has_data;
@@ -632,6 +936,7 @@ int main(int argc, char** argv) {
             // A weather request is answered by the Weather screen; close the
             // voice turn so the loop below does not re-submit a transcript.
             if (aura::is_turn_active(controller.snapshot().state)) controller.dispatch({aura::EventType::Cancel});
+            if (end_voice_turn_hook) end_voice_turn_hook();
             if (weather_intent.kind == aura::WeatherIntentKind::ShowSaved) {
                 ui.show(aura::UiView::Weather);
                 open_weather();
@@ -652,6 +957,12 @@ int main(int argc, char** argv) {
             if (pending_generation == previous.turn_generation) return;
             // The reply belongs to a turn that already ended (an error or a reset); it is never shown.
             if (provider) provider->cancel();
+            if (!retire_future(pending_reply, retired_replies)) {
+                pending = false;
+                controller.dispatch({aura::EventType::Fail, "PROVIDER_BUSY"});
+                apply();
+                return;
+            }
             pending = false;
         }
         // A shown answer, confirmation card, error or listening screen closes first, so the
@@ -662,14 +973,72 @@ int main(int argc, char** argv) {
             if (audio_state == aura::AudioState::Playing || audio_state == aura::AudioState::Paused) audio.stop();
             controller.dispatch({aura::EventType::Reset});
         }
-        if (prompt.empty()) prompt = text.capture_short_prompt;
+        if (prompt.empty()) prompt = text().capture_short_prompt;
         const bool started = controller.dispatch({aura::EventType::TurnStarted, prompt});
         apply();
         if (!started) return;
+        if (offline_command_hook && offline_command_hook(prompt)) {
+            apply();
+            return;
+        }
+        if (calendar_intent != aura::GreekCalendarIntent::None) {
+            const bool english = ui.language() == aura::InterfaceLanguage::English;
+            const auto& strings = english ? aura::l10n::companion_en_us() : aura::l10n::companion_el_gr();
+            const auto& status = device_status.snapshot();
+            std::string answer = strings.calendar_date_unavailable;
+            char formatted[384];
+            if (nameday_match) {
+                std::string days;
+                const auto& dates = nameday_match->dates;
+                for (std::size_t index = 0; index < dates.size(); ++index) {
+                    if (index > 0) days += index + 1 == dates.size() ? strings.calendar_and : ", ";
+                    days += std::to_string(dates[index].day) + '/' + std::to_string(dates[index].month);
+                }
+                std::snprintf(formatted, sizeof(formatted), strings.calendar_nameday_of_answer,
+                              nameday_match->name.c_str(), days.c_str());
+                answer = formatted;
+            } else if (status.date_valid && calendar_intent == aura::GreekCalendarIntent::Namedays) {
+                const auto calendar = aura::greek_calendar_day(status.year, status.month, status.day);
+                if (calendar.namedays.empty()) {
+                    answer = strings.briefing_no_namedays;
+                } else {
+                    std::snprintf(formatted, sizeof(formatted), strings.briefing_namedays_format,
+                                  aura::join_namedays(calendar.namedays).c_str());
+                    answer = formatted;
+                }
+            } else if (status.date_valid) {
+                const auto next = aura::next_greek_holiday(status.year, status.month, status.day);
+                if (next && next->days_until == 0) {
+                    const auto* holiday = english ?
+                        aura::greek_holiday_name_en(next->kind) : aura::greek_holiday_name_el(next->kind);
+                    std::snprintf(formatted, sizeof(formatted), strings.calendar_holiday_today_answer, holiday);
+                    answer = formatted;
+                } else if (next) {
+                    const auto* holiday = english ?
+                        aura::greek_holiday_name_en(next->kind) : aura::greek_holiday_name_el(next->kind);
+                    std::snprintf(formatted, sizeof(formatted), strings.calendar_next_holiday_answer,
+                                  holiday, next->date.day, next->date.month);
+                    answer = formatted;
+                }
+            }
+            if (local_answer_hook) local_answer_hook(answer);
+            else controller.dispatch({aura::EventType::FinalResult, answer});
+            apply();
+            return;
+        }
         pending_generation = controller.snapshot().turn_generation;
-        if (pending_reply.valid()) retired_replies.push_back(std::move(pending_reply));
-        pending_reply = provider->start_turn(turn_request_hook ? turn_request_hook(std::move(prompt)) :
-                                                                 aura::TurnRequest{std::move(prompt), {}, {}, {}, {}, {}});
+        if (!retire_future(pending_reply, retired_replies)) {
+            controller.dispatch({aura::EventType::Fail, "PROVIDER_BUSY"});
+            apply();
+            return;
+        }
+        aura::TurnRequest request;
+        if (turn_request_hook) request = turn_request_hook(std::move(prompt));
+        else request.prompt = std::move(prompt);
+        pending_stream = std::make_shared<aura::AssistantStreamMailbox>();
+        pending_stream_sequence = 0;
+        request.stream = pending_stream;
+        pending_reply = provider->start_turn(std::move(request));
         pending = true;
     };
 
@@ -679,8 +1048,39 @@ int main(int argc, char** argv) {
     companion_context.audio = &audio;
     companion_context.aoraton = &aoraton;
     companion_context.weather = &weather_model;
+    companion_context.fuel = &fuel_model;
     companion_context.status = &device_status;
     companion_context.start_turn = [&start_turn](std::string prompt) { start_turn(std::move(prompt)); };
+    companion_context.cancel_turn = [&] {
+        if (provider) provider->cancel();
+        pending = false;
+    };
+    companion_context.on_voice_active = [&radio_service](bool active) { radio_service.set_hold(active); };
+    companion_context.assistant_provider_name = [&]() {
+        return provider ? std::string(provider->name()) : std::string{};
+    };
+    companion_context.web_search_available = [&]() {
+        return live_provider && std::string(environment("AURA_BRIDGE_AI_PROVIDER", "codex")) == "codex";
+    };
+    if (ancs_enabled) {
+        companion_context.on_phone_action = [&ancs_service](std::uint32_t uid, bool positive) {
+            ancs_service.perform_action(uid, positive);
+        };
+        companion_context.on_phone_pair = [&ancs_service] {
+            ancs_service.start();
+#ifdef _WIN32
+            ShellExecuteW(nullptr, L"open", L"ms-settings:bluetooth", nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+        };
+        companion_context.on_phone_forget = [&ancs_service] {
+            // Stop the private in-process transport immediately. Windows owns
+            // the bond, so let the user explicitly remove it in system UI.
+            ancs_service.stop();
+#ifdef _WIN32
+            ShellExecuteW(nullptr, L"open", L"ms-settings:bluetooth", nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+        };
+    }
     companion_context.make_translator = [&]() -> std::unique_ptr<aura::IAssistantProvider> {
         if (live_provider) {
             return std::make_unique<aura::simulator::LocalCodexProvider>(environment("AURA_BRIDGE_TOKEN"),
@@ -689,9 +1089,38 @@ int main(int argc, char** argv) {
         return std::make_unique<aura::MockProvider>(deterministic_run ? 0U : 600U);
     };
     companion_context.deterministic = deterministic_run;
-    companion_context.store_dir = environment("AURA_COMPANION_STORE", "simulator/runtime/companion");
+    companion_context.store_dir = companion_store_dir;
     aura::simulator::CompanionRuntime companion(std::move(companion_context));
+    if (language_override) companion.set_language(*language_override);
+    ui.set_language(companion.language());
+    if (ancs_enabled) ancs_service.start();
+    auto poll_ancs = [&] {
+        if (!ancs_enabled) return;
+        aura::simulator::WindowsAncsEvent event;
+        while (ancs_service.poll(event)) {
+            if (event.kind == aura::simulator::WindowsAncsEvent::Kind::Link) {
+                companion.phone().set_link(event.link,
+                    event.link == aura::PhoneLinkState::Connected ? aura::PhonePlatform::Iphone :
+                                                                   aura::PhonePlatform::Unknown,
+                    event.link == aura::PhoneLinkState::Connected ? "iPhone" : "");
+            } else if (event.kind == aura::simulator::WindowsAncsEvent::Kind::Remove) {
+                companion.phone().remove(event.uid);
+            } else {
+                auto notification = std::move(event.notification);
+                if (companion.clock().snapshot().clock_valid) {
+                    notification.minute = companion.clock().snapshot().now_minute;
+                }
+                notification.demo = false;
+                companion.phone().upsert(std::move(notification));
+            }
+        }
+    };
     turn_request_hook = [&companion](std::string prompt) { return companion.turn_request(std::move(prompt)); };
+    offline_command_hook = [&companion](const std::string& prompt) {
+        return companion.handle_offline_command(prompt);
+    };
+    local_answer_hook = [&companion](const std::string& answer) { companion.answer_locally(answer); };
+    end_voice_turn_hook = [&companion] { companion.end_voice_turn(); };
     provider_changed_hook = [&companion] { companion.provider_changed(); };
     cancel_voice_hook = [&companion] { companion.cancel_voice(); };
 
@@ -699,6 +1128,7 @@ int main(int argc, char** argv) {
     ui_callbacks.on_ask = [&] {
         ++interaction_counts.ask;
         // A new question interrupts a spoken answer instead of talking over it.
+        if (aura::is_turn_active(controller.snapshot().state)) cancel();
         const auto audio_state = audio.diagnostics().state;
         if (audio_state == aura::AudioState::Playing || audio_state == aura::AudioState::Paused) audio.stop();
         controller.dispatch({aura::EventType::WakeDetected});
@@ -805,6 +1235,16 @@ int main(int argc, char** argv) {
         else if (snapshot.has_saved_location) start_weather_fetch(snapshot.saved_location, false);
         else apply_weather();
     };
+    ui_callbacks.on_weather_refresh_interval = [&](aura::WeatherRefreshInterval interval) {
+        ++interaction_counts.weather_interval;
+        if (!weather_model.set_refresh_interval(interval)) return;
+        if (!deterministic_run && !weather_store.save_refresh_interval(interval)) {
+            std::cerr << "AURA weather: could not save refresh interval\n";
+        }
+        next_weather_refresh_at = std::chrono::steady_clock::now() +
+            std::chrono::minutes(aura::weather_refresh_interval_minutes(interval));
+        apply_weather();
+    };
     ui_callbacks.on_weather_search = [&](const std::string& query) {
         ++interaction_counts.weather_search;
         start_weather_search(query, false);
@@ -813,6 +1253,33 @@ int main(int argc, char** argv) {
         ++interaction_counts.weather_select;
         const auto& snapshot = weather_model.snapshot();
         if (index < snapshot.suggestion_count) start_weather_fetch(snapshot.suggestions[index], true);
+    };
+    ui_callbacks.on_radio_play = [&](const aura::RadioStation& station) {
+        ++interaction_counts.radio_play;
+        play_radio(station);
+    };
+    ui_callbacks.on_radio_stop = [&] {
+        ++interaction_counts.radio_stop;
+        stop_radio();
+    };
+    ui_callbacks.on_radio_search = [&](const std::string& query) {
+        ++interaction_counts.radio_search;
+        search_radio(query);
+    };
+    ui_callbacks.on_radio_favorite = [&](const aura::RadioStation& station) {
+        ++interaction_counts.radio_favorite;
+        if (radio_model.toggle_favorite(station)) save_radio();
+        apply_radio();
+    };
+    ui_callbacks.on_radio_move = [&](std::size_t index, int direction) {
+        ++interaction_counts.radio_move;
+        if (radio_model.move_favorite(index, direction)) save_radio();
+        apply_radio();
+    };
+    ui_callbacks.on_launcher_app_move = [&](std::size_t from, std::size_t to) {
+        ++interaction_counts.launcher_move;
+        if (launcher_layout_model.move(from, to)) save_launcher_layout();
+        apply_launcher_layout();
     };
     ui_callbacks.on_wifi_open = [&] {
         ++interaction_counts.wifi_open;
@@ -872,8 +1339,24 @@ int main(int argc, char** argv) {
         }
         if (action == aura::SystemAction::FactoryReset) {
             // Captures and tests never touch the files of a real run.
-            if (!deterministic_run) weather_store.clear_location();
+            if (!deterministic_run) {
+                weather_store.clear_location();
+                weather_store.clear_settings();
+            }
+            stop_radio();
+            radio_model = aura::RadioModel{};
+            launcher_layout_model.reset();
+            if (!deterministic_run) {
+                std::error_code radio_error;
+                std::filesystem::remove(radio_store_path, radio_error);
+                std::error_code layout_error;
+                std::filesystem::remove(launcher_layout_store_path, layout_error);
+            }
+            apply_radio();
+            apply_launcher_layout();
             weather_model.clear_location();
+            weather_model.set_refresh_interval(aura::kDefaultWeatherRefreshInterval);
+            next_weather_refresh_at.reset();
             apply_weather();
             wifi_model.forget_saved_network();
             if (wifi_host.host_connected) {
@@ -895,6 +1378,13 @@ int main(int argc, char** argv) {
         ui_callbacks.on_sound_preview = [&interaction_counts, preview] {
             ++interaction_counts.sound_preview;
             preview();
+        };
+    }
+    {
+        auto preview = ui_callbacks.on_voice_preview;
+        ui_callbacks.on_voice_preview = [&interaction_counts, preview](aura::AssistantVoice voice) {
+            ++interaction_counts.voice_preview;
+            preview(voice);
         };
     }
     {
@@ -955,12 +1445,35 @@ int main(int argc, char** argv) {
     ui.apply_aoraton(aoraton.snapshot());
     ui.apply_weather(weather_model.snapshot());
     ui.apply_wifi(wifi_model.snapshot());
+    ui.apply_radio(radio_model.snapshot());
+    ui.apply_launcher_layout(launcher_layout_model.snapshot());
+    ui.apply_fuel(fuel_model.snapshot());
+
+    if (!deterministic_run && weather_model.snapshot().has_saved_location) {
+        start_weather_fetch(weather_model.snapshot().saved_location, false);
+    }
 
     if (!weather_live_city.empty()) {
         ui.show(aura::UiView::WeatherLocation);
         start_weather_search(weather_live_city, true);
     }
 
+    if (!capture_scenario.empty() || !motion_scenario.empty()) {
+        // Evidence is never touched: a real cursor over the capture window must
+        // not hover, press or select anything.
+        SDL_SetEventFilter([](void*, SDL_Event* event) -> int {
+            switch (event->type) {
+                case SDL_MOUSEMOTION:
+                case SDL_MOUSEBUTTONDOWN:
+                case SDL_MOUSEBUTTONUP:
+                case SDL_MOUSEWHEEL:
+                case SDL_FINGERDOWN:
+                case SDL_FINGERUP:
+                case SDL_FINGERMOTION: return 0;
+                default: return 1;
+            }
+        }, nullptr);
+    }
     if (!capture_scenario.empty()) {
         ui.set_capture_mode(true);
         controller.dispatch({aura::EventType::BatteryChanged, {}, 92});
@@ -972,7 +1485,8 @@ int main(int argc, char** argv) {
         weather_model.clear_location();
         if (capture_scenario == "home" || capture_scenario == "ambient" || capture_scenario == "low-battery" ||
             capture_scenario == "briefing" || capture_scenario == "always-on") {
-            weather_model.fetch_succeeded(demo_weather_data());
+            weather_model.fetch_succeeded(demo_weather_data(
+                aura::WeatherCondition::PartlyCloudy, {}, ui.language()));
         }
         apply_weather();
         device_status.set_connection(true, aura::StatusOrigin::Simulated, 3);
@@ -999,15 +1513,19 @@ int main(int argc, char** argv) {
         }
         else if (capture_scenario == "home") ui.show(aura::UiView::Home);
         else if (capture_scenario == "ambient") {
-            controller.dispatch({aura::EventType::Sleep});
+            // The ambient screen is the always-on clock (the Home orb is "home").
+            companion.capture("always-on");
             apply();
         }
         else if (capture_scenario == "low-battery") {
             controller.dispatch({aura::EventType::BatteryChanged, {}, 12});
+            device_status.set_power(12, false, aura::StatusOrigin::Simulated);
+            ui.apply_status(device_status.snapshot());
             apply();
             ui.show(aura::UiView::Home);
         }
         else if (capture_scenario == "launcher" || capture_scenario == "quick-actions") ui.show(aura::UiView::Launcher);
+        else if (capture_scenario == "launcher-reorder") ui.edit_launcher_layout();
         else if (capture_scenario == "wake") {
             controller.dispatch({aura::EventType::WakeDetected});
             apply();
@@ -1017,28 +1535,35 @@ int main(int argc, char** argv) {
             controller.dispatch({aura::EventType::BeginRecording});
             apply();
         } else if (capture_scenario == "thinking") {
-            controller.dispatch({aura::EventType::TurnStarted, text.capture_thinking_prompt});
+            controller.dispatch({aura::EventType::TurnStarted, text().capture_thinking_prompt});
             apply();
         } else if (capture_scenario == "answer") {
-            controller.dispatch({aura::EventType::TurnStarted, text.capture_short_prompt});
-            controller.dispatch({aura::EventType::FinalResult, text.capture_short_answer});
+            controller.dispatch({aura::EventType::TurnStarted, text().capture_short_prompt});
+            controller.dispatch({aura::EventType::FinalResult, text().capture_short_answer});
             apply();
         } else if (capture_scenario == "answer-long") {
-            controller.dispatch({aura::EventType::TurnStarted, text.capture_long_prompt});
-            controller.dispatch({aura::EventType::FinalResult, text.capture_long_answer});
+            controller.dispatch({aura::EventType::TurnStarted, text().capture_long_prompt});
+            controller.dispatch({aura::EventType::FinalResult, text().capture_long_answer});
             apply();
         } else if (capture_scenario == "speaking") {
-            controller.dispatch({aura::EventType::TurnStarted, text.capture_speaking_prompt});
-            controller.dispatch({aura::EventType::FinalResult, text.capture_speaking_answer});
+            controller.dispatch({aura::EventType::TurnStarted, text().capture_speaking_prompt});
+            controller.dispatch({aura::EventType::FinalResult, text().capture_speaking_answer});
             apply();
             audio.play_test_tone(1600);
             ui.apply_audio(audio.diagnostics());
         } else if (capture_scenario == "cards" || capture_scenario == "search") ui.show(aura::UiView::Cards);
         else if (capture_scenario == "settings") ui.show(aura::UiView::Settings);
+        else if (capture_scenario == "language") ui.show(aura::UiView::LanguageSettings);
         else if (capture_scenario == "diagnostics") ui.show(aura::UiView::Diagnostics);
         else if (capture_scenario == "system") ui.show(aura::UiView::System);
+        else if (capture_scenario == "system-restart") ui.show_system_confirmation(aura::SystemAction::Restart);
+        else if (capture_scenario == "system-power-off") ui.show_system_confirmation(aura::SystemAction::PowerOff);
+        else if (capture_scenario == "system-factory-reset") {
+            ui.show_system_confirmation(aura::SystemAction::FactoryReset);
+        }
         else if (capture_scenario == "power-off") ui.power_off();
         else if (capture_scenario == "boot") ui.boot();
+        else if (capture_scenario == "weather-settings") ui.show(aura::UiView::WeatherSettings);
         else if (capture_scenario == "notifications") ui.show(aura::UiView::Notifications);
         else if (capture_scenario == "offline") {
             controller.dispatch({aura::EventType::ProviderUnavailable, "PROVIDER_UNAVAILABLE"});
@@ -1054,6 +1579,13 @@ int main(int argc, char** argv) {
             ui.show(aura::UiView::Audio);
             if (!audio.play_bundled_wav()) return 7;
             ui.apply_audio(audio.diagnostics());
+        } else if (capture_scenario == "radio") {
+            const auto stations = aura::greek_default_stations();
+            if (!stations.empty()) play_radio(stations.front());
+            ui.show(aura::UiView::Radio);
+        } else if (capture_scenario == "radio-search") {
+            search_radio("rock");
+            ui.show(aura::UiView::RadioSearch);
         } else if (capture_scenario == "aoraton") {
             ui.show(aura::UiView::AoratonRooms);
         } else if (capture_scenario == "aoraton-unpaired") {
@@ -1141,7 +1673,7 @@ int main(int argc, char** argv) {
             ui.show(aura::UiView::AoratonConversation);
         } else if (capture_scenario == "aoraton-confirm") {
             aoraton.select_room("demo-family");
-            aoraton.prepare_send("demo-family", text.capture_message);
+            aoraton.prepare_send("demo-family", text().capture_message);
             ui.apply_aoraton(aoraton.snapshot());
             ui.show(aura::UiView::AoratonConfirm);
         } else if (capture_scenario == "aoraton-compose") {
@@ -1153,6 +1685,7 @@ int main(int argc, char** argv) {
         } else if (capture_scenario == "weather-sunny" || capture_scenario == "weather-cloudy" ||
                    capture_scenario == "weather-rainy" || capture_scenario == "weather-stormy" ||
                    capture_scenario == "weather-snowy" || capture_scenario == "weather-night" ||
+                   capture_scenario == "weather-night-cloudy" ||
                    capture_scenario == "weather-forecast" || capture_scenario == "weather-gateway" ||
                    capture_scenario == "weather-gateway-details") {
             aura::WeatherCondition condition = aura::WeatherCondition::Clear;
@@ -1160,9 +1693,12 @@ int main(int argc, char** argv) {
             else if (capture_scenario == "weather-rainy") condition = aura::WeatherCondition::Rain;
             else if (capture_scenario == "weather-stormy") condition = aura::WeatherCondition::Thunderstorm;
             else if (capture_scenario == "weather-snowy") condition = aura::WeatherCondition::Snow;
+            else if (capture_scenario == "weather-night-cloudy") condition = aura::WeatherCondition::PartlyCloudy;
+            const bool night = capture_scenario == "weather-night" ||
+                               capture_scenario == "weather-night-cloudy";
             auto data = (capture_scenario == "weather-gateway" || capture_scenario == "weather-gateway-details") ?
-                demo_tlesdetector_weather_data() : demo_weather_data(condition);
-            if (capture_scenario == "weather-night") data.is_day = false;
+                demo_tlesdetector_weather_data(ui.language()) :
+                demo_weather_data(condition, {}, ui.language(), !night);
             weather_model.clear_location();
             weather_model.fetch_succeeded(data);
             apply_weather();
@@ -1173,13 +1709,15 @@ int main(int argc, char** argv) {
         } else if (capture_scenario == "weather" || capture_scenario == "weather-success" ||
                    capture_scenario == "weather-from-quick-actions") {
             weather_model.clear_location();
-            weather_model.fetch_succeeded(demo_weather_data());
+            weather_model.fetch_succeeded(demo_weather_data(
+                aura::WeatherCondition::PartlyCloudy, {}, ui.language()));
             apply_weather();
             ui.show(aura::UiView::Weather);
         } else if (capture_scenario == "weather-loading") {
             weather_model.clear_location();
-            weather_model.restore_location(demo_weather_location("Σπάρτη"));
-            weather_model.begin_fetch(demo_weather_location("Σπάρτη"), false);
+            const char* city = ui.language() == aura::InterfaceLanguage::English ? "Sparta" : "Σπάρτη";
+            weather_model.restore_location(demo_weather_location(city, ui.language()));
+            weather_model.begin_fetch(demo_weather_location(city, ui.language()), false);
             apply_weather();
             ui.show(aura::UiView::Weather);
         } else if (capture_scenario == "weather-no-city") {
@@ -1188,15 +1726,15 @@ int main(int argc, char** argv) {
             ui.show(aura::UiView::Weather);
         } else if (capture_scenario == "weather-offline") {
             weather_model.clear_location();
-            weather_model.restore_location(demo_weather_location());
-            weather_model.begin_fetch(demo_weather_location(), false);
+            weather_model.restore_location(demo_weather_location({}, ui.language()));
+            weather_model.begin_fetch(demo_weather_location({}, ui.language()), false);
             weather_model.fetch_failed("NETWORK_UNAVAILABLE", true);
             apply_weather();
             ui.show(aura::UiView::Weather);
         } else if (capture_scenario == "weather-error") {
             weather_model.clear_location();
-            weather_model.restore_location(demo_weather_location());
-            weather_model.begin_fetch(demo_weather_location(), false);
+            weather_model.restore_location(demo_weather_location({}, ui.language()));
+            weather_model.begin_fetch(demo_weather_location({}, ui.language()), false);
             weather_model.fetch_failed("WEATHER_PROVIDER_ERROR", false);
             apply_weather();
             ui.show(aura::UiView::Weather);
@@ -1206,9 +1744,12 @@ int main(int argc, char** argv) {
             ui.show(aura::UiView::WeatherLocation);
         } else if (capture_scenario == "weather-results") {
             weather_model.clear_location();
-            weather_model.begin_search("Σπάρτη");
-            weather_model.search_succeeded({demo_weather_location("Σπάρτη"),
-                demo_weather_location("Αθήνα"), demo_weather_location("Πάτρα")});
+            const bool english = ui.language() == aura::InterfaceLanguage::English;
+            weather_model.begin_search(english ? "Sparta" : "Σπάρτη");
+            weather_model.search_succeeded({
+                demo_weather_location(english ? "Sparta" : "Σπάρτη", ui.language()),
+                demo_weather_location(english ? "Athens" : "Αθήνα", ui.language()),
+                demo_weather_location(english ? "Patras" : "Πάτρα", ui.language())});
             apply_weather();
             ui.show(aura::UiView::WeatherLocation);
         } else if (capture_scenario == "wifi") {
@@ -1228,10 +1769,8 @@ int main(int argc, char** argv) {
             wifi_model.set_radio_available(false, "NO_ADAPTER");
             ui.apply_wifi(wifi_model.snapshot());
             ui.show(aura::UiView::Wifi);
-        } else if (capture_scenario == "tools") {
-            ui.show(aura::UiView::Tools);
         } else if (capture_scenario == "calendar") {
-            ui.show(aura::UiView::Calendar);
+            companion.capture("calendar");
         } else if (capture_scenario == "camera") {
             ui.show(aura::UiView::Camera);
         } else if (capture_scenario == "battery") {
@@ -1248,6 +1787,26 @@ int main(int argc, char** argv) {
             ui.show_typography_proof(1);
         } else if (capture_scenario == "typography-proof-3") {
             ui.show_typography_proof(2);
+        } else if (capture_scenario == "briefing-calendar") {
+            device_status.set_date(2026, 12, 6, 0, aura::StatusOrigin::Simulated);
+            ui.apply_status(device_status.snapshot());
+            companion.capture("briefing");
+            ui.show(aura::UiView::Briefing);
+        } else if (capture_scenario == "briefing-fuel") {
+            // Captures run without the bridge: labelled DEMO prices stand in for
+            // the European Commission bulletin.
+            aura::FuelPriceData demo_fuel;
+            demo_fuel.period_date = "2026-10-19";
+            demo_fuel.source = "European Commission Weekly Oil Bulletin";
+            demo_fuel.source_url = "https://energy.ec.europa.eu/data-and-analysis/weekly-oil-bulletin_en";
+            demo_fuel.unleaded95_millieur_per_litre = 1912;
+            demo_fuel.diesel_millieur_per_litre = 1634;
+            demo_fuel.demo = true;
+            fuel_model.begin_fetch();
+            fuel_model.fetch_succeeded(std::move(demo_fuel));
+            apply_fuel();
+            companion.capture("briefing");
+            ui.show(aura::UiView::Briefing);
         } else if (companion.capture(capture_scenario)) {
             apply();
         } else {
@@ -1300,17 +1859,21 @@ int main(int argc, char** argv) {
             apply();
             ui.set_input_amplitude(0.45F, true);
         } else if (motion_scenario == "thinking") {
-            controller.dispatch({aura::EventType::TurnStarted, text.capture_thinking_prompt});
+            controller.dispatch({aura::EventType::TurnStarted, text().capture_thinking_prompt});
             apply();
         } else if (motion_scenario == "speaking") {
-            controller.dispatch({aura::EventType::TurnStarted, text.capture_speaking_prompt});
-            controller.dispatch({aura::EventType::FinalResult, text.capture_speaking_answer});
+            controller.dispatch({aura::EventType::TurnStarted, text().capture_speaking_prompt});
+            controller.dispatch({aura::EventType::FinalResult, text().capture_speaking_answer});
             apply();
             audio.play_test_tone(5000);
             ui.apply_audio(audio.diagnostics());
+        } else if (motion_scenario == "system-restart") {
+            apply();
+            ui.show_system_confirmation(aura::SystemAction::Restart);
         } else if (motion_scenario == "weather-clear" || motion_scenario == "weather-cloudy" ||
                    motion_scenario == "weather-rain" || motion_scenario == "weather-storm" ||
                    motion_scenario == "weather-snow" || motion_scenario == "weather-night" ||
+                   motion_scenario == "weather-night-cloudy" ||
                    motion_scenario == "weather-wind") {
             aura::WeatherCondition condition = aura::WeatherCondition::Clear;
             if (motion_scenario == "weather-cloudy") condition = aura::WeatherCondition::Cloudy;
@@ -1318,8 +1881,10 @@ int main(int argc, char** argv) {
             else if (motion_scenario == "weather-storm") condition = aura::WeatherCondition::Thunderstorm;
             else if (motion_scenario == "weather-snow") condition = aura::WeatherCondition::Snow;
             else if (motion_scenario == "weather-wind") condition = aura::WeatherCondition::Windy;
-            auto data = demo_weather_data(condition);
-            if (motion_scenario == "weather-night") data.is_day = false;
+            else if (motion_scenario == "weather-night-cloudy") condition = aura::WeatherCondition::PartlyCloudy;
+            const bool night = motion_scenario == "weather-night" ||
+                               motion_scenario == "weather-night-cloudy";
+            auto data = demo_weather_data(condition, {}, ui.language(), !night);
             weather_model.clear_location();
             weather_model.fetch_succeeded(data);
             apply_weather();
@@ -1340,13 +1905,15 @@ int main(int argc, char** argv) {
             aura::UiView::Notifications, aura::UiView::Settings, aura::UiView::Audio,
             aura::UiView::AoratonRooms, aura::UiView::AoratonPair, aura::UiView::AoratonConversation,
             aura::UiView::AoratonCompose, aura::UiView::AoratonConfirm, aura::UiView::Navigation,
-            aura::UiView::Weather, aura::UiView::WeatherLocation, aura::UiView::Tools, aura::UiView::Calendar,
+            aura::UiView::Weather, aura::UiView::WeatherSettings, aura::UiView::WeatherLocation,
+            aura::UiView::Calendar,
             aura::UiView::Camera, aura::UiView::Battery, aura::UiView::VoiceSettings,
             aura::UiView::Diagnostics, aura::UiView::Wifi, aura::UiView::WifiPassword,
             aura::UiView::WifiDetails, aura::UiView::Clock, aura::UiView::ClockNew, aura::UiView::TimerNew,
             aura::UiView::AlarmNew, aura::UiView::ReminderNew, aura::UiView::Notes, aura::UiView::NoteNew,
             aura::UiView::Briefing, aura::UiView::Translate, aura::UiView::PhoneLink,
-            aura::UiView::DisplaySettings, aura::UiView::Update, aura::UiView::Home,
+            aura::UiView::DisplaySettings, aura::UiView::Update, aura::UiView::Radio,
+            aura::UiView::RadioSearch, aura::UiView::Home,
         };
         for (int pass = 0; pass < 10; ++pass) {
             for (const auto view : views) ui.show(view);
@@ -1429,12 +1996,16 @@ int main(int argc, char** argv) {
                 if (aoraton_fail_closed_transport) aoraton_fail_closed_transport->poll();
                 aoraton.tick(8);
                 poll_wifi(std::chrono::steady_clock::now());
+                poll_radio();
+                poll_fuel();
                 apply();
                 ui.apply_audio(audio.diagnostics());
                 ui.apply_aoraton(aoraton_capture_override ? *aoraton_capture_override : aoraton.snapshot());
                 ui.apply_status(device_status.snapshot());
                 ui.apply_weather(weather_model.snapshot());
                 ui.apply_wifi(wifi_model.snapshot());
+                ui.apply_radio(radio_model.snapshot());
+                ui.apply_fuel(fuel_model.snapshot());
                 companion.poll(8);
                 companion.apply();
                 if (controller.snapshot().state == aura::AssistantState::Listening) {
@@ -1547,7 +2118,9 @@ int main(int argc, char** argv) {
             controller.dispatch({aura::EventType::Reset});
             apply();
             if (ui.view() == view && view != aura::UiView::Home) ui.show(aura::UiView::Home);
-            ui.show(view);
+            // Home at the root, then `view`: Back returns Home, never to a
+            // screen left over from an earlier check.
+            ui.show_from_home(view);
             pump(4);
         };
         std::function<lv_obj_t*(lv_obj_t*)> find_scrollable = [&](lv_obj_t* root) -> lv_obj_t* {
@@ -1639,9 +2212,9 @@ int main(int argc, char** argv) {
         record("home.launcher", "icon-center", ui.view() == aura::UiView::Launcher,
                std::to_string(static_cast<int>(ui.view())));
         lv_obj_update_layout(ui.root());
-        if (auto* grid = find_scrollable(ui.root())) lv_obj_scroll_to_y(grid, 148, LV_ANIM_OFF);
+        if (auto* grid = find_scrollable(ui.root())) lv_obj_scroll_to_y(grid, 680, LV_ANIM_OFF);
         pump(3);
-        tap(384, 360);
+        tap(96, 360);
         record("launcher.settings", "icon-center", ui.view() == aura::UiView::Settings,
                std::to_string(static_cast<int>(ui.view())));
         reset_to(aura::UiView::Home);
@@ -1659,7 +2232,7 @@ int main(int argc, char** argv) {
                std::to_string(static_cast<int>(ui.view())));
 
         // Settings is a scrolling list: rows are 88 px high on a 96 px pitch
-        // starting at y=96 (Wi-Fi, provider, motion, weather, sound, status, system).
+        // starting at y=96 (Wi-Fi, language, provider, motion, weather, sound, status, system).
         auto settings_row_y = [](int index, int scroll) { return 96 + index * 96 + 44 - scroll; };
         auto scroll_view_to = [&](int y) {
             lv_obj_update_layout(ui.root());
@@ -1668,10 +2241,23 @@ int main(int argc, char** argv) {
         };
         reset_to(aura::UiView::Settings);
         const int rapid_provider_before = interaction_counts.provider;
-        rapid_double_tap(220, settings_row_y(1, 0));
+        rapid_double_tap(220, settings_row_y(2, 0));
         record("settings.provider", "rapid-double-tap",
                interaction_counts.provider == rapid_provider_before + 1,
                std::to_string(interaction_counts.provider - rapid_provider_before));
+
+        reset_to(aura::UiView::Settings);
+        tap(220, settings_row_y(1, 0));
+        const bool language_page = ui.view() == aura::UiView::LanguageSettings;
+        tap(220, 236);
+        const bool english_selected = ui.language() == aura::InterfaceLanguage::English;
+        tap(48, 48);
+        tap(220, settings_row_y(1, 0));
+        tap(220, 140);
+        const bool greek_restored = ui.language() == aura::InterfaceLanguage::Greek;
+        tap(48, 48);
+        record("settings.language", "english-then-greek", language_page && english_selected && greek_restored,
+               english_selected ? "English copy and locale applied" : "English locale not applied");
 
         controller.dispatch({aura::EventType::Reset});
         controller.dispatch({aura::EventType::WakeDetected});
@@ -1694,8 +2280,8 @@ int main(int argc, char** argv) {
                controller.snapshot().state == aura::AssistantState::Idle,
                aura::state_name(controller.snapshot().state));
 
-        controller.dispatch({aura::EventType::TurnStarted, text.capture_short_prompt});
-        controller.dispatch({aura::EventType::FinalResult, text.capture_short_answer});
+        controller.dispatch({aura::EventType::TurnStarted, text().capture_short_prompt});
+        controller.dispatch({aura::EventType::FinalResult, text().capture_short_answer});
         apply(); pump(4);
         const int ask_again_before = interaction_counts.ask;
         tap(240, 420);
@@ -1706,20 +2292,20 @@ int main(int argc, char** argv) {
 
         // Typed questions (the control panel's prompt): one sent over the listening screen
         // replaces it, and a repeat while it is being answered waits instead of failing BUSY.
-        start_turn(text.capture_long_prompt);
-        start_turn(text.capture_long_prompt);
+        start_turn(text().capture_long_prompt);
+        start_turn(text().capture_long_prompt);
         record("assistant.prompt_repeat", "while-thinking",
                pending && controller.snapshot().state == aura::AssistantState::Thinking &&
-               controller.snapshot().user_text == text.capture_long_prompt,
+               controller.snapshot().user_text == text().capture_long_prompt,
                aura::state_name(controller.snapshot().state));
         cancel();
-        controller.dispatch({aura::EventType::TurnStarted, text.capture_short_prompt});
-        controller.dispatch({aura::EventType::FinalResult, text.capture_short_answer});
+        controller.dispatch({aura::EventType::TurnStarted, text().capture_short_prompt});
+        controller.dispatch({aura::EventType::FinalResult, text().capture_short_answer});
         apply(); pump(4);
-        start_turn(text.capture_long_prompt);
+        start_turn(text().capture_long_prompt);
         record("assistant.prompt_after_answer", "replaces-question",
                controller.snapshot().state == aura::AssistantState::Thinking &&
-               controller.snapshot().user_text == text.capture_long_prompt,
+               controller.snapshot().user_text == text().capture_long_prompt,
                aura::state_name(controller.snapshot().state));
         cancel();
         apply(); pump(4);
@@ -1735,7 +2321,7 @@ int main(int argc, char** argv) {
         record("nav.home", "back-long-press", ui.view() == aura::UiView::Home,
                std::to_string(static_cast<int>(ui.view())));
 
-        for (const auto& point : row_points(settings_row_y(1, 0))) {
+        for (const auto& point : row_points(settings_row_y(2, 0))) {
             reset_to(aura::UiView::Settings);
             const int provider_before = interaction_counts.provider;
             const bool live_before = live_provider;
@@ -1744,19 +2330,30 @@ int main(int argc, char** argv) {
                    interaction_counts.provider == provider_before + 1 && live_provider != live_before,
                    live_provider ? "codex" : "mock");
         }
-        for (const auto& point : row_points(settings_row_y(2, 0))) {
+        for (const auto& point : row_points(settings_row_y(3, 0))) {
             reset_to(aura::UiView::Settings);
             const bool reduced_before = ui.reduced_motion();
             tap(point.x, point.y);
             record("settings.motion", point.name, ui.reduced_motion() != reduced_before,
                    ui.reduced_motion() ? "reduced" : "full");
         }
-        // The last three rows are reached by scrolling the list to its end (296 px).
+        {
+            // Every check starts from Home: after reset_to, Back never reaches a
+            // screen left over from an earlier check.
+            reset_to(aura::UiView::Settings);
+            tap(240, settings_row_y(1, 0));
+            const bool language_opened = ui.view() == aura::UiView::LanguageSettings;
+            reset_to(aura::UiView::Clock);
+            tap(48, 48);
+            record("harness.reset_to", "back-returns-home", language_opened && ui.view() == aura::UiView::Home,
+                   std::to_string(static_cast<int>(ui.view())));
+        }
+        // Lower rows are reached by scrolling the list while preserving 80 px targets.
         const struct { const char* action; int index; int scroll; aura::UiView expected; } setting_routes[] = {
-            {"settings.weather", 3, 0, aura::UiView::WeatherLocation},
-            {"settings.audio", 4, 296, aura::UiView::Audio},
-            {"settings.status", 5, 296, aura::UiView::Battery},
-            {"settings.system", 6, 296, aura::UiView::System},
+            {"settings.weather", 4, 200, aura::UiView::WeatherSettings},
+            {"settings.audio", 5, 296, aura::UiView::Audio},
+            {"settings.status", 6, 296, aura::UiView::Battery},
+            {"settings.system", 7, 392, aura::UiView::System},
         };
         for (const auto& route : setting_routes) {
             for (const auto& point : row_points(settings_row_y(route.index, route.scroll))) {
@@ -1767,6 +2364,19 @@ int main(int argc, char** argv) {
                        std::to_string(static_cast<int>(ui.view())));
             }
         }
+        reset_to(aura::UiView::WeatherSettings);
+        // Leave the UI debounce window used by the preceding System-row tap.
+        pump(4);
+        const int weather_interval_before = interaction_counts.weather_interval;
+        tap(129, 262);
+        record("weather.settings_interval", "15-minute-tile",
+               interaction_counts.weather_interval == weather_interval_before + 1 &&
+               weather_model.snapshot().refresh_interval == aura::WeatherRefreshInterval::Minutes15,
+               std::to_string(aura::weather_refresh_interval_minutes(weather_model.snapshot().refresh_interval)));
+        pump(8);
+        tap(220, 136);
+        record("weather.settings_location", "location-row", ui.view() == aura::UiView::WeatherLocation,
+               std::to_string(static_cast<int>(ui.view())));
         for (const auto& point : row_points(settings_row_y(0, 0))) {
             reset_to(aura::UiView::Settings);
             const int wifi_open_before = interaction_counts.wifi_open;
@@ -1837,7 +2447,7 @@ int main(int argc, char** argv) {
 
         reset_to(aura::UiView::Settings);
         const bool persisted_motion_before = ui.reduced_motion();
-        tap(184, settings_row_y(2, 0));
+        tap(184, settings_row_y(3, 0));
         ui.show(aura::UiView::Home);
         ui.show(aura::UiView::Settings);
         pump(3);
@@ -1952,9 +2562,10 @@ int main(int argc, char** argv) {
                std::to_string(static_cast<int>(ui.view())));
 
         reset_to(aura::UiView::Settings);
-        tap(184, settings_row_y(3, 0));
+        scroll_view_to(200);
+        tap(184, settings_row_y(4, 200));
         tap(48, 48);
-        record("weather_location.back", "header-button",
+        record("weather_settings.back", "header-button",
                ui.view() == aura::UiView::Settings,
                std::to_string(static_cast<int>(ui.view())));
 
@@ -2028,6 +2639,14 @@ int main(int argc, char** argv) {
                std::to_string(controller.snapshot().notification_count));
 
         // Sound: the volume slider (y 211), then switch rows on a 96 px pitch.
+        // Exercise the enabled paths explicitly. Normal simulator capability
+        // discovery may correctly disable these controls when no speech service
+        // is running, which is a different state from a broken touch target.
+        aura::CompanionCapabilities voice_test_capabilities{};
+        voice_test_capabilities.microphone = true;
+        voice_test_capabilities.speech_recognition = true;
+        voice_test_capabilities.speech_output = true;
+        ui.set_capabilities(voice_test_capabilities);
         reset_to(aura::UiView::Audio);
         drag(60, 211, 430, 211);
         record("audio.volume", "slider-drag", audio.diagnostics().volume > 0.75F,
@@ -2052,11 +2671,38 @@ int main(int argc, char** argv) {
                companion.sound().spoken_replies ? "on" : "off");
         tap(220, 332);
         reset_to(aura::UiView::Audio);
-        scroll_view_to(150);
+        scroll_view_to(246);
+        const bool continuous_before = companion.sound().continuous_conversation;
+        tap(220, 332);
+        record("audio.continuous", "row-center",
+               companion.sound().continuous_conversation != continuous_before,
+               companion.sound().continuous_conversation ? "on" : "off");
+        tap(220, 332);
+        reset_to(aura::UiView::Audio);
+        scroll_view_to(342);
+        const bool barge_before = companion.sound().barge_in;
+        tap(220, 332);
+        record("audio.barge_in", "row-center", companion.sound().barge_in != barge_before,
+               companion.sound().barge_in ? "on" : "off");
+        tap(220, 332);
+        reset_to(aura::UiView::Audio);
+        scroll_view_to(452);
         const int preview_before = interaction_counts.sound_preview;
-        tap(240, 432);
+        tap(240, 408);
         record("audio.preview", "button-center", interaction_counts.sound_preview == preview_before + 1,
                aura::audio_state_name(audio.diagnostics().state));
+
+        reset_to(aura::UiView::VoiceSettings);
+        tap(220, 140);
+        const bool athina_selected = companion.sound().assistant_voice == aura::AssistantVoice::Athina;
+        const int voice_preview_before = interaction_counts.voice_preview;
+        tap(240, 336);
+        const bool preview_requested = interaction_counts.voice_preview == voice_preview_before + 1;
+        tap(220, 236);
+        record("voice.select_preview", "rows-and-button",
+               athina_selected && preview_requested &&
+                   companion.sound().assistant_voice == aura::AssistantVoice::Nestoras,
+               std::to_string(interaction_counts.voice_preview - voice_preview_before));
 
         // Diagnostics keeps the speaker checks: a test tone and the demo WAV.
         reset_to(aura::UiView::Diagnostics);
@@ -2104,12 +2750,40 @@ int main(int argc, char** argv) {
         record("system.restart", "confirm",
                restart_asks && booting && interaction_counts.system_action == restart_before + 1 &&
                ui.view() == aura::UiView::Home, std::to_string(static_cast<int>(ui.view())));
+        // The orbit check below needs full motion; earlier checks may leave reduced motion on.
+        if (ui.reduced_motion()) {
+            reset_to(aura::UiView::Settings);
+            tap(240, settings_row_y(3, 0));
+        }
         reset_to(aura::UiView::System);
         scroll_view_to(120);
         tap(220, 356);
         const bool power_asks = ui.view() == aura::UiView::SystemConfirm;
         tap(352, 420);
         const bool off = ui.view() == aura::UiView::PowerOff;
+        {
+            // The power-off orb is the small "quiet" one: its 6 px dot circles at
+            // radius 56 around (240, 220), inside its rings, not at radius 72.
+            // Enough frames for the 33 ms animation step to move it.
+            pump(12);
+            std::function<lv_obj_t*(lv_obj_t*)> find_dot = [&](lv_obj_t* object) -> lv_obj_t* {
+                if (lv_obj_get_width(object) == 6 && lv_obj_get_height(object) == 6) return object;
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    if (auto* found = find_dot(lv_obj_get_child(object, static_cast<int32_t>(index)))) return found;
+                }
+                return nullptr;
+            };
+            lv_obj_update_layout(ui.root());
+            auto* dot = find_dot(ui.root());
+            double radius = 0.0;
+            if (dot) {
+                const double dx = lv_obj_get_x(dot) + 3 - 240.0;
+                const double dy = lv_obj_get_y(dot) + 3 - 220.0;
+                radius = std::sqrt(dx * dx + dy * dy);
+            }
+            record("system.power_off_orbit", "inside-quiet-rings", dot && std::fabs(radius - 56.0) <= 2.0,
+                   std::to_string(radius));
+        }
         tap(240, 240);
         const bool tap_ignored = ui.view() == aura::UiView::PowerOff;
         long_press(240, 240);
@@ -2130,19 +2804,19 @@ int main(int argc, char** argv) {
 
         // Back returns to a list where it was left.
         reset_to(aura::UiView::Settings);
-        scroll_view_to(296);
-        tap(220, settings_row_y(6, 296));
+        scroll_view_to(392);
+        tap(220, settings_row_y(7, 392));
         const bool opened_system = ui.view() == aura::UiView::System;
         tap(56, 56);
         lv_obj_update_layout(ui.root());
         auto* settings_list = find_scrollable(ui.root());
         const int kept = settings_list ? static_cast<int>(lv_obj_get_scroll_y(settings_list)) : -1;
         record("nav.back_keeps_scroll", "header-back",
-               opened_system && ui.view() == aura::UiView::Settings && kept == 296, std::to_string(kept));
+               opened_system && ui.view() == aura::UiView::Settings && kept == 392, std::to_string(kept));
 
         controller.dispatch({aura::EventType::Reset});
-        controller.dispatch({aura::EventType::TurnStarted, text.capture_speaking_prompt});
-        controller.dispatch({aura::EventType::FinalResult, text.capture_speaking_answer});
+        controller.dispatch({aura::EventType::TurnStarted, text().capture_speaking_prompt});
+        controller.dispatch({aura::EventType::FinalResult, text().capture_speaking_answer});
         audio.play_test_tone(2600);
         apply(); ui.apply_audio(audio.diagnostics()); pump(4);
         const int speaking_pause_before = interaction_counts.audio_pause;
@@ -2201,7 +2875,7 @@ int main(int argc, char** argv) {
             }
         }
         aoraton.select_room("demo-family");
-        aoraton.prepare_send("demo-family", text.capture_message);
+        aoraton.prepare_send("demo-family", text().capture_message);
         ui.apply_aoraton(aoraton.snapshot());
         ui.show(aura::UiView::AoratonConfirm);
         pump(4);
@@ -2277,16 +2951,16 @@ int main(int argc, char** argv) {
         ui.apply_aoraton(aoraton.snapshot());
 
         controller.dispatch({aura::EventType::Reset});
-        controller.dispatch({aura::EventType::TurnStarted, text.capture_thinking_prompt});
+        controller.dispatch({aura::EventType::TurnStarted, text().capture_thinking_prompt});
         apply(); pump(5);
         tap(240, 420);
         record("assistant.cancel", "during-animation",
-               controller.snapshot().state == aura::AssistantState::Idle && ui.view() == aura::UiView::Home,
+               controller.snapshot().state == aura::AssistantState::Idle && ui.view() == aura::UiView::Launcher,
                aura::state_name(controller.snapshot().state));
 
         controller.dispatch({aura::EventType::Reset});
-        controller.dispatch({aura::EventType::TurnStarted, text.capture_long_prompt});
-        controller.dispatch({aura::EventType::FinalResult, text.capture_long_answer});
+        controller.dispatch({aura::EventType::TurnStarted, text().capture_long_prompt});
+        controller.dispatch({aura::EventType::FinalResult, text().capture_long_answer});
         apply(); pump(5);
         auto* long_reader = find_scrollable(ui.root());
         const int long_scroll_before = long_reader ? lv_obj_get_scroll_y(long_reader) : 0;
@@ -2343,7 +3017,7 @@ int main(int argc, char** argv) {
                "inactive outside target");
 
         controller.dispatch({aura::EventType::WifiChanged, {}, 0});
-        controller.dispatch({aura::EventType::TurnStarted, text.capture_short_prompt});
+        controller.dispatch({aura::EventType::TurnStarted, text().capture_short_prompt});
         controller.dispatch({aura::EventType::ProviderUnavailable, "NETWORK_UNAVAILABLE"});
         apply(); pump(3);
         const int retry_offline_before = interaction_counts.retry;
@@ -2371,6 +3045,7 @@ int main(int argc, char** argv) {
 
         reset_to(aura::UiView::Battery);
         const bool status_muted_before = audio.diagnostics().muted;
+        scroll_view_to(220);
         tap(240, 420);
         record("status.mute", "button-center", audio.diagnostics().muted != status_muted_before,
                audio.diagnostics().muted ? "muted" : "unmuted");
@@ -2400,15 +3075,159 @@ int main(int argc, char** argv) {
             pump(2);
         };
 
-        // Launcher: the third row sits below the fold.
-        const Point third_row[]{{"today", 96, 360}, {"notifications", 240, 360}, {"settings", 384, 360}};
-        const aura::UiView third_row_views[]{aura::UiView::Briefing, aura::UiView::Notifications, aura::UiView::Settings};
+        reset_to(aura::UiView::Launcher);
+        tap(96, 188);
+        const bool conversation_started = ui.view() == aura::UiView::Assistant;
+        tap(352, 420);
+        record("conversation.cancel", "returns-to-apps",
+               conversation_started && ui.view() == aura::UiView::Launcher &&
+                   controller.snapshot().state == aura::AssistantState::Idle,
+               view_text());
+
+        // Launcher: row three contains Today, Radio and Notifications.
+        const Point third_row[]{{"today", 96, 360}, {"radio", 240, 360}, {"notifications", 384, 360}};
+        const aura::UiView third_row_views[]{aura::UiView::Briefing, aura::UiView::Radio,
+                                             aura::UiView::Notifications};
         for (int index = 0; index < 3; ++index) {
             reset_to(aura::UiView::Launcher);
             scroll_view_to(148);
             tap(third_row[index].x, third_row[index].y);
             record("launcher.row3", third_row[index].name, ui.view() == third_row_views[index], view_text());
         }
+        reset_to(aura::UiView::Launcher);
+        scroll_view_to(680);
+        tap(96, 360);
+        record("launcher.row4", "settings", ui.view() == aura::UiView::Settings, view_text());
+
+        // Launcher edit mode: Edit, pick an app, pick its new place. The order
+        // is stored at once, and the grid opens apps again when editing ends.
+        launcher_layout_model.reset();
+        apply_launcher_layout();
+        reset_to(aura::UiView::Launcher);
+        const int reorder_moves_before = interaction_counts.launcher_move;
+        const int reorder_asks_before = interaction_counts.ask;
+        tap(432, 48);
+        tap(96, 164);
+        const bool reorder_selected = ui.view() == aura::UiView::Launcher &&
+                                      interaction_counts.ask == reorder_asks_before;
+        tap(384, 336);
+        const auto& reordered = launcher_layout_model.snapshot().order;
+        record("launcher.reorder", "select-then-place",
+               reorder_selected && interaction_counts.launcher_move == reorder_moves_before + 1 &&
+                   reordered[5] == aura::LauncherApp::Conversation &&
+                   reordered[0] == aura::LauncherApp::Weather && ui.view() == aura::UiView::Launcher,
+               std::to_string(interaction_counts.launcher_move - reorder_moves_before));
+        tap(432, 48);
+        const int reorder_weather_before = interaction_counts.weather_open;
+        tap(96, 164);
+        record("launcher.reorder", "done-then-open",
+               ui.view() == aura::UiView::Weather && interaction_counts.weather_open == reorder_weather_before + 1,
+               view_text());
+        // Leaving by a swipe also ends editing. The grid is reached the way the
+        // owner reaches it (Home, then Apps), so Back has a real Home below it.
+        reset_to(aura::UiView::Home);
+        tap(424, 436);
+        const bool reorder_on_grid = ui.view() == aura::UiView::Launcher;
+        tap(432, 48);
+        swipe(60, 300, 420, 300);
+        const bool reorder_left = reorder_on_grid && ui.view() == aura::UiView::Home;
+        tap(424, 436);
+        const int reorder_weather_again = interaction_counts.weather_open;
+        tap(96, 164);
+        record("launcher.reorder", "swipe-ends-edit",
+               reorder_left && ui.view() == aura::UiView::Weather &&
+                   interaction_counts.weather_open == reorder_weather_again + 1,
+               view_text());
+        launcher_layout_model.reset();
+        apply_launcher_layout();
+
+        reset_to(aura::UiView::Launcher);
+        scroll_view_to(680);
+        tap(240, 360);
+        record("launcher.row4", "organizer", ui.view() == aura::UiView::Calendar, view_text());
+        tap(432, 48);
+        record("organizer.new", "plus", ui.view() == aura::UiView::OrganizerNew, view_text());
+        companion.organizer().clear();
+        companion.organizer().add_task("DEMO task", 0);
+        companion.apply();
+        ui.open_organizer(aura::OrganizerKind::Task);
+        pump(3);
+        tap(180, 184);
+        record("organizer.task", "toggle",
+               companion.organizer().snapshot().tasks.size() == 1 &&
+                   companion.organizer().snapshot().tasks.front().completed,
+               companion.organizer().snapshot().tasks.empty() ? "missing" : "completed");
+        tap(424, 184);
+        record("organizer.task", "delete", companion.organizer().snapshot().tasks.empty(),
+               std::to_string(companion.organizer().snapshot().tasks.size()));
+
+        // A new song title must not rebuild the search keyboard while the owner types.
+        {
+            play_radio(radio_model.snapshot().favorites.front());
+            reset_to(aura::UiView::Radio);
+            tap(432, 48);
+            std::function<lv_obj_t*(lv_obj_t*)> find_textarea = [&](lv_obj_t* object) -> lv_obj_t* {
+                if (lv_obj_check_type(object, &lv_textarea_class)) return object;
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    if (auto* found = find_textarea(lv_obj_get_child(object, static_cast<int32_t>(index)))) return found;
+                }
+                return nullptr;
+            };
+            // A marker on the object itself: a rebuilt keyboard is a new object without it.
+            static int marker = 0;
+            auto* area_before = find_textarea(ui.root());
+            if (area_before) lv_obj_set_user_data(area_before, &marker);
+            radio_model.set_title("DEMO · Νέο τραγούδι");
+            apply_radio();
+            pump(2);
+            auto* area_after = find_textarea(ui.root());
+            record("radio.search_typing", "title-update-keeps-keyboard",
+                   ui.view() == aura::UiView::RadioSearch && area_after &&
+                       lv_obj_get_user_data(area_after) == &marker,
+                   view_text());
+            stop_radio();
+        }
+
+        radio_model = aura::RadioModel{};
+        apply_radio();
+        reset_to(aura::UiView::Radio);
+        const auto first_station_before_move = radio_model.snapshot().favorites.front().id;
+        tap(240, 180);
+        const int radio_move_before = interaction_counts.radio_move;
+        tap(422, 280);
+        record("radio.reorder", "first-station-down",
+               interaction_counts.radio_move == radio_move_before + 1 &&
+                   radio_model.snapshot().favorites[1].id == first_station_before_move,
+               std::to_string(interaction_counts.radio_move - radio_move_before));
+        tap(240, 180);
+        const int radio_play_before = interaction_counts.radio_play;
+        tap(220, 272);
+        record("radio.play", "first-favourite",
+               interaction_counts.radio_play == radio_play_before + 1 &&
+               radio_model.snapshot().state == aura::RadioState::Playing,
+               aura::radio_state_name(radio_model.snapshot().state));
+        const int radio_favourite_before = interaction_counts.radio_favorite;
+        tap(352, 252);
+        record("radio.favorite", "button-center",
+               interaction_counts.radio_favorite == radio_favourite_before + 1,
+               std::to_string(interaction_counts.radio_favorite - radio_favourite_before));
+        const int radio_stop_before = interaction_counts.radio_stop;
+        tap(128, 252);
+        record("radio.stop", "button-center",
+               interaction_counts.radio_stop == radio_stop_before + 1 &&
+               radio_model.snapshot().state == aura::RadioState::Idle,
+               aura::radio_state_name(radio_model.snapshot().state));
+
+        reset_to(aura::UiView::Radio);
+        tap(432, 48);
+        const bool radio_search_opened = ui.view() == aura::UiView::RadioSearch;
+        type_text("rock");
+        const int radio_search_before = interaction_counts.radio_search;
+        tap(432, 48);
+        record("radio.search", "typed-query-button",
+               radio_search_opened && interaction_counts.radio_search == radio_search_before + 1 &&
+               !radio_model.snapshot().results.empty(),
+               std::to_string(radio_model.snapshot().results.size()));
 
         reset_to(aura::UiView::Home);
         tap(240, 132);
@@ -2534,6 +3353,79 @@ int main(int argc, char** argv) {
         controller.dispatch({aura::EventType::Reset});
         apply();
 
+        reset_to(aura::UiView::Launcher);
+        tap(96, 188);
+        const bool history_opened = ui.view() == aura::UiView::ConversationHistory;
+        tap(128, 420);
+        const bool history_ask_started = ui.view() == aura::UiView::Assistant;
+        tap(352, 420);
+        record("conversation.history", "open-ask-cancel",
+               history_opened && history_ask_started && ui.view() == aura::UiView::Launcher,
+               view_text());
+
+        start_turn("Βάλε ένταση 35");
+        pump(4);
+        const bool offline_volume_card = controller.snapshot().state == aura::AssistantState::ActionConfirmation &&
+            companion.extras().pending_action &&
+            companion.extras().pending_action->type == aura::AssistantActionType::Volume;
+        tap(128, 420);
+        record("offline.volume", "confirm-button",
+               offline_volume_card && std::fabs(audio.diagnostics().volume - 0.35F) < 0.01F,
+               aura::state_name(controller.snapshot().state));
+
+        companion.organizer().clear();
+        start_turn("Αγόρασε ψωμί");
+        pump(4);
+        const bool offline_shopping_card = controller.snapshot().state == aura::AssistantState::ActionConfirmation &&
+            companion.extras().pending_action &&
+            companion.extras().pending_action->type == aura::AssistantActionType::Shopping;
+        tap(128, 420);
+        record("offline.shopping", "confirm-button",
+               offline_shopping_card && companion.organizer().snapshot().shopping.size() == 1,
+               std::to_string(companion.organizer().snapshot().shopping.size()));
+
+        controller.dispatch({aura::EventType::Reset});
+        start_turn("Τι ώρα είναι;");
+        pump(4);
+        record("offline.time", "local-reply",
+               controller.snapshot().state == aura::AssistantState::Responding &&
+                   !controller.snapshot().answer_text.empty() && !companion.extras().pending_action,
+               controller.snapshot().answer_text);
+        controller.dispatch({aura::EventType::Reset});
+        apply();
+
+        // A local calendar answer joins the conversation like any other answer
+        // (and is spoken on a voice turn through the same companion path).
+        start_turn("Ποιος γιορτάζει σήμερα;");
+        pump(4);
+        {
+            const auto& history = companion.extras().conversation_history;
+            record("local.calendar_history", "local-reply",
+                   controller.snapshot().state == aura::AssistantState::Responding && !history.empty() &&
+                       history.back().question == "Ποιος γιορτάζει σήμερα;" &&
+                       history.back().answer == controller.snapshot().answer_text,
+                   std::to_string(history.size()));
+        }
+        controller.dispatch({aura::EventType::Reset});
+        apply();
+        start_turn("Πότε γιορτάζει ο Γιώργος;");
+        pump(4);
+        {
+            // A time never wraps at its colon ("19:" then "30"): ':' is not a line break.
+            const lv_font_t* font = lv_font_get_default();
+            lv_point_t one_line{};
+            lv_text_get_size(&one_line, "aaaaaaaa 19:", font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            lv_point_t wrapped{};
+            lv_text_get_size(&wrapped, "aaaaaaaa 19:30", font, 0, 0, one_line.x + 1, LV_TEXT_FLAG_NONE);
+            record("text.time_wrap", "no-break-at-colon", wrapped.x < one_line.x, std::to_string(wrapped.x));
+        }
+        record("local.nameday_of", "local-reply",
+               controller.snapshot().state == aura::AssistantState::Responding &&
+                   controller.snapshot().answer_text.find("23/4") != std::string::npos,
+               controller.snapshot().answer_text);
+        controller.dispatch({aura::EventType::Reset});
+        apply();
+
         // A proposed message opens the Aoraton confirmation; the provider path
         // then applies the reply, which must not cover that screen.
         {
@@ -2560,15 +3452,35 @@ int main(int argc, char** argv) {
         pump(4);
         const auto ask_before_new = interaction_counts.ask;
         tap(352, 420);
+        const bool new_topic_history_open = ui.view() == aura::UiView::ConversationHistory;
+        tap(352, 420);
         record("assistant.new_conversation", "secondary-button",
-               companion.memory().size() == 0 && interaction_counts.ask == ask_before_new + 1,
+               new_topic_history_open && companion.memory().size() == 0 &&
+                   interaction_counts.ask == ask_before_new + 1,
                aura::state_name(controller.snapshot().state));
         controller.dispatch({aura::EventType::Reset});
         apply();
 
+        // Keep the calendar-dependent row order deterministic. 26 October has
+        // a nameday row while 25 October does not, which used to move the alarm
+        // below this physical pointer target depending on the day of the run.
+        device_status.set_clock(18, 24, aura::StatusOrigin::Simulated);
+        device_status.set_date(2026, 10, 25, 0, aura::StatusOrigin::Simulated);
         reset_to(aura::UiView::Briefing);
-        tap(220, 180);
-        record("today.row", "first-row", ui.view() != aura::UiView::Briefing, view_text());
+        // The holiday is informative; the first actionable row is the alarm
+        // created earlier through the real alarm form.
+        lv_obj_update_layout(ui.root());
+        auto* today_action = find_sized_clickable(ui.root(), 432, 88);
+        lv_area_t today_action_bounds{};
+        if (today_action) {
+            lv_obj_scroll_to_view_recursive(today_action, LV_ANIM_OFF);
+            pump(3);
+            lv_obj_get_coords(today_action, &today_action_bounds);
+        }
+        tap(today_action ? (today_action_bounds.x1 + today_action_bounds.x2) / 2 : 220,
+            today_action ? (today_action_bounds.y1 + today_action_bounds.y2) / 2 : 276);
+        record("today.row", "first-actionable-row",
+               today_action && ui.view() == aura::UiView::Clock, view_text());
 
         aura::CompanionCapabilities voice_capabilities;
         voice_capabilities.microphone = true;
@@ -2663,20 +3575,16 @@ int main(int argc, char** argv) {
 
         reset_to(aura::UiView::Settings);
         scroll_view_to(680);
-        tap(220, settings_row_y(7, 680));
+        tap(220, settings_row_y(8, 680));
         record("settings.display", "row", ui.view() == aura::UiView::DisplaySettings, view_text());
         reset_to(aura::UiView::Settings);
         scroll_view_to(680);
-        tap(220, settings_row_y(8, 680));
+        tap(220, settings_row_y(9, 680));
         record("settings.phone", "row", ui.view() == aura::UiView::PhoneLink, view_text());
         reset_to(aura::UiView::Settings);
         scroll_view_to(680);
-        tap(220, settings_row_y(9, 680));
-        record("settings.wake_word", "info-row", ui.view() == aura::UiView::Settings, view_text());
-        reset_to(aura::UiView::Settings);
-        scroll_view_to(680);
         tap(220, settings_row_y(10, 680));
-        record("settings.update", "row", ui.view() == aura::UiView::Update, view_text());
+        record("settings.wake_word", "info-row", ui.view() == aura::UiView::Settings, view_text());
 
         const std::size_t passed = static_cast<std::size_t>(std::count_if(results.begin(), results.end(),
             [](const InteractionResult& result) { return result.passed; }));
@@ -2696,6 +3604,7 @@ int main(int argc, char** argv) {
         std::cout << "AURA pointer coverage: " << passed << "/" << results.size()
                   << " passed at " << window_scale << "x; report=" << interaction_report << '\n';
         if (provider) provider->cancel();
+        radio_service.stop();
         audio.shutdown();
         if (lv_is_initialized()) lv_deinit();
         return passed == results.size() ? 0 : 10;
@@ -2712,6 +3621,7 @@ int main(int argc, char** argv) {
     bool f12_down = false;
     bool smoke_started = false;
     bool smoke_shot = false;
+    bool smoke_stream_observed = false;
     std::chrono::steady_clock::time_point smoke_result_ready{};
     auto metrics_started = started;
     std::uint64_t handler_microseconds = 0;
@@ -2776,40 +3686,60 @@ int main(int argc, char** argv) {
                 device_status.set_power(device_status.snapshot().battery_percent, charging, aura::StatusOrigin::Simulated);
             }
             else if (event.type == "provider") {
-                select_provider(event.payload == "codex");
+                select_provider(event.payload == "codex" || event.payload == "groq");
                 ui.set_provider_live(live_provider);
+            }
+            else if (event.type == "language") {
+                if (event.payload == "el" || event.payload == "en") {
+                    const auto language = aura::parse_interface_language(event.payload);
+                    companion.set_language(language);
+                    ui.set_language(language);
+                }
             }
             else if (event.type == "review_long_answer") {
                 controller.dispatch({aura::EventType::Reset});
-                controller.dispatch({aura::EventType::TurnStarted, text.capture_long_prompt});
-                controller.dispatch({aura::EventType::FinalResult, text.capture_long_answer});
+                controller.dispatch({aura::EventType::TurnStarted, text().capture_long_prompt});
+                controller.dispatch({aura::EventType::FinalResult, text().capture_long_answer});
             }
             else if (event.type == "review_speaking") {
                 controller.dispatch({aura::EventType::Reset});
-                controller.dispatch({aura::EventType::TurnStarted, text.capture_speaking_prompt});
-                controller.dispatch({aura::EventType::FinalResult, text.capture_speaking_answer});
+                controller.dispatch({aura::EventType::TurnStarted, text().capture_speaking_prompt});
+                controller.dispatch({aura::EventType::FinalResult, text().capture_speaking_answer});
                 audio.play_test_tone(2400);
             }
             else if (event.type == "ui_view") {
                 if (event.payload == "home") ui.show(aura::UiView::Home);
                 else if (event.payload == "launcher") ui.show(aura::UiView::Launcher);
+                else if (event.payload == "assistant") ui.show(aura::UiView::Assistant);
                 else if (event.payload == "cards") ui.show(aura::UiView::Cards);
                 else if (event.payload == "notifications") ui.show(aura::UiView::Notifications);
                 else if (event.payload == "settings") ui.show(aura::UiView::Settings);
+                else if (event.payload == "language") ui.show(aura::UiView::LanguageSettings);
                 else if (event.payload == "diagnostics") ui.show(aura::UiView::Diagnostics);
+                else if (event.payload == "system") ui.show(aura::UiView::System);
                 else if (event.payload == "audio") ui.show(aura::UiView::Audio);
+                else if (event.payload == "radio") ui.show(aura::UiView::Radio);
+                else if (event.payload == "radio-search") ui.show(aura::UiView::RadioSearch);
                 else if (event.payload == "aoraton") ui.show(aura::UiView::AoratonRooms);
                 else if (event.payload == "navigation") ui.show(aura::UiView::Navigation);
                 else if (event.payload == "weather") {
                     ui.show(aura::UiView::Weather);
                     open_weather();
                 }
+                else if (event.payload == "weather-settings") ui.show(aura::UiView::WeatherSettings);
                 else if (event.payload == "weather-location") ui.show(aura::UiView::WeatherLocation);
-                else if (event.payload == "tools") ui.show(aura::UiView::Tools);
                 else if (event.payload == "calendar") ui.show(aura::UiView::Calendar);
                 else if (event.payload == "camera") ui.show(aura::UiView::Camera);
                 else if (event.payload == "battery") ui.show(aura::UiView::Battery);
                 else if (event.payload == "voice") ui.show(aura::UiView::VoiceSettings);
+                else if (event.payload == "wifi") ui.show(aura::UiView::Wifi);
+                else if (event.payload == "clock") ui.show(aura::UiView::Clock);
+                else if (event.payload == "notes") ui.show(aura::UiView::Notes);
+                else if (event.payload == "briefing") ui.show(aura::UiView::Briefing);
+                else if (event.payload == "translate") ui.show(aura::UiView::Translate);
+                else if (event.payload == "phone") ui.show(aura::UiView::PhoneLink);
+                else if (event.payload == "display") ui.show(aura::UiView::DisplaySettings);
+                else if (event.payload == "update") ui.show(aura::UiView::Update);
             }
             else if (event.type == "screen" && event.payload == "off") controller.dispatch({aura::EventType::Sleep});
             else if (event.type == "screen" && event.payload == "on") controller.dispatch({aura::EventType::WakeScreen});
@@ -2822,6 +3752,19 @@ int main(int argc, char** argv) {
             else if (event.type == "audio_fail") audio.simulate_failure(event.payload.empty() ? "DEMO_AUDIO_FAILURE" : event.payload.c_str());
             else if (event.type == "audio_mute") audio.set_muted(integer(event.payload) != 0);
             else if (event.type == "audio_volume") audio.set_volume(static_cast<float>(integer(event.payload, 55)) / 100.0F);
+            else if (event.type == "voice_preview") {
+                if (event.payload == "athina") companion.preview_voice(aura::AssistantVoice::Athina);
+                else if (event.payload == "nestoras") companion.preview_voice(aura::AssistantVoice::Nestoras);
+            }
+            else if (event.type == "radio_play") {
+                const auto* station = event.payload.empty() ?
+                    (radio_model.snapshot().favorites.empty() ? nullptr : &radio_model.snapshot().favorites.front()) :
+                    radio_model.find_spoken(event.payload);
+                if (station) play_radio(*station);
+            }
+            else if (event.type == "radio_stop") stop_radio();
+            else if (event.type == "radio_search") search_radio(event.payload);
+            else if (event.type == "fuel_refresh") refresh_fuel();
             else if (event.type == "input_amplitude") {
                 manual_input_amplitude = static_cast<float>(std::clamp(integer(event.payload), 0, 100)) / 100.0F;
             }
@@ -2831,7 +3774,7 @@ int main(int argc, char** argv) {
             }
             else if (event.type == "weather_refresh") open_weather();
             else if (event.type == "aoraton_incoming" || event.type == "aoraton_unread") {
-                const std::string text_value = event.payload.empty() ? text.incoming_demo_message : event.payload;
+                const std::string text_value = event.payload.empty() ? text().incoming_demo_message : event.payload;
                 aoraton.inject_incoming("demo-lab", text_value);
                 controller.dispatch({aura::EventType::NotificationReceived, "AORATON_MESSAGE"});
             }
@@ -2855,21 +3798,49 @@ int main(int argc, char** argv) {
             ui.apply_aoraton(aoraton.snapshot());
             ui.apply_weather(weather_model.snapshot());
             ui.apply_wifi(wifi_model.snapshot());
+            ui.apply_radio(radio_model.snapshot());
+            ui.apply_fuel(fuel_model.snapshot());
         }
 
         poll_weather();
+        if (!deterministic_run && next_weather_refresh_at && now >= *next_weather_refresh_at &&
+            !pending_weather_fetch && !pending_weather_search && weather_model.snapshot().has_saved_location) {
+            if (device_status.snapshot().online) {
+                start_weather_fetch(weather_model.snapshot().saved_location, false);
+            } else {
+                // Do not spin while offline; retry quietly after a short bounded delay.
+                next_weather_refresh_at = now + std::chrono::minutes(5);
+            }
+        }
         poll_wifi(now);
-        prune_ready(retired_replies);
-        prune_ready(retired_weather_searches);
-        prune_ready(retired_weather_fetches);
-        prune_ready(retired_wifi_scans);
+        poll_radio();
+        poll_fuel();
+        tick_fuel(elapsed);
+        poll_ancs();
+        prune_finished(retired_replies);
+        prune_finished(retired_weather_searches);
+        prune_finished(retired_weather_fetches);
+        prune_finished(retired_wifi_scans);
+        prune_finished(retired_radio_searches);
+
+        if (pending && pending_stream && pending_generation == controller.snapshot().turn_generation) {
+            aura::AssistantStreamSnapshot update;
+            if (pending_stream->take_after(pending_stream_sequence, update)) {
+                pending_stream_sequence = update.sequence;
+                companion.deliver_stream_update(update);
+                if (smoke && !update.text.empty() && controller.snapshot().state == aura::AssistantState::Responding) {
+                    smoke_stream_observed = true;
+                }
+                apply();
+            }
+        }
 
         if (!pending && controller.snapshot().state == aura::AssistantState::Transcribing &&
             !companion.handles_transcribing()) {
             // The desktop has no speech recognizer: the Listening screen shows a
             // labelled synthetic input, whose transcript is the fixed sample
             // prompt. Without this the assistant would wait in Thinking forever.
-            start_turn(text.capture_short_prompt);
+            start_turn(text().capture_short_prompt);
         }
 
         if (pending && pending_reply.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
@@ -2904,6 +3875,10 @@ int main(int argc, char** argv) {
             if (!screenshot_path.empty() && !aura::simulator::save_display_bmp(display, screenshot_path)) {
                 std::cerr << "AURA: screenshot failed\n";
                 return 3;
+            }
+            if (!smoke_stream_observed) {
+                std::cerr << "AURA: smoke did not observe a streamed partial reply\n";
+                return 11;
             }
             running = false;
         }
@@ -2970,6 +3945,8 @@ int main(int argc, char** argv) {
         ui.apply_status(device_status.snapshot());
         ui.apply_weather(weather_model.snapshot());
         ui.apply_wifi(wifi_model.snapshot());
+        ui.apply_radio(radio_model.snapshot());
+        ui.apply_fuel(fuel_model.snapshot());
         companion.apply();
         if (companion.capturing()) {
             // The runtime feeds the real microphone level.
@@ -3034,6 +4011,7 @@ int main(int argc, char** argv) {
     }
 
     if (provider) provider->cancel();
+    radio_service.stop();
     audio.shutdown();
     if (!motion_scenario.empty()) {
         lv_mem_monitor_t motion_memory{};

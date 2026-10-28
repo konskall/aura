@@ -3,189 +3,275 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>AURA • Simulator Controls</title>
+  <title>AURA LAB · Simulator Console</title>
   <style>
-    :root { color-scheme: dark; --bg:#05070c; --panel:#0d1420; --line:#20374a; --cyan:#38e8ff; --teal:#45ffd1; --violet:#8a6cff; --muted:#8ea1b5; --error:#ff5f7e; }
+    :root {
+      color-scheme: dark;
+      --bg:#05070d; --surface:#0b111d; --surface-2:#101a29; --line:#203247;
+      --text:#f4f7ff; --muted:#91a5bd; --cyan:#43e7ff; --mint:#42f5cb;
+      --violet:#8d78ff; --rose:#ff7092; --amber:#ffc970;
+    }
     * { box-sizing:border-box; }
-    body { margin:0; min-height:100vh; background:radial-gradient(circle at 15% 0,#102335 0,var(--bg) 45%); color:#f4f8ff; font:14px/1.45 "Segoe UI",sans-serif; }
-    main { width:min(980px,calc(100% - 32px)); margin:28px auto; }
-    header { display:flex; align-items:end; justify-content:space-between; margin-bottom:18px; }
-    h1 { margin:0; font-size:24px; letter-spacing:.18em; color:var(--cyan); }
-    .sub { color:var(--muted); } .grid { display:grid; grid-template-columns:1.3fr .7fr; gap:16px; }
-    section { background:rgba(13,20,32,.92); border:1px solid var(--line); border-radius:20px; padding:18px; box-shadow:0 20px 60px #0008; }
-    section h2 { margin:0 0 14px; font-size:14px; color:var(--teal); text-transform:uppercase; letter-spacing:.12em; }
-    textarea { width:100%; min-height:118px; resize:vertical; border:1px solid #28465d; border-radius:14px; padding:14px; background:#070c13; color:white; font:16px/1.5 "Segoe UI",sans-serif; outline:none; }
-    textarea:focus { border-color:var(--cyan); box-shadow:0 0 0 3px #38e8ff1c; }
-    .row { display:flex; gap:9px; flex-wrap:wrap; align-items:center; margin-top:12px; }
-    button,select { border:1px solid #2b4b61; border-radius:12px; padding:10px 14px; background:#111e2b; color:#f4f8ff; cursor:pointer; }
-    button:hover { border-color:var(--cyan); } button.primary { background:linear-gradient(120deg,#0f7080,#463a96); border-color:var(--cyan); font-weight:650; }
-    button.danger { border-color:#743047; color:#ff9caf; }
-    label { color:var(--muted); } input[type=range] { accent-color:var(--cyan); width:210px; }
-    .status { display:flex; gap:8px; align-items:center; color:var(--muted); }
-    .dot { width:8px; height:8px; border-radius:50%; background:var(--teal); box-shadow:0 0 12px var(--teal); }
-    #log { min-height:92px; max-height:160px; overflow:auto; padding:10px; border-radius:12px; background:#060a10; color:var(--muted); font:12px/1.5 Consolas,monospace; }
-    .hint { color:var(--muted); font-size:12px; margin-top:9px; }
-    @media(max-width:760px){ .grid{grid-template-columns:1fr} header{align-items:start;flex-direction:column;gap:8px} }
+    html { scroll-behavior:smooth; }
+    body {
+      margin:0; min-height:100vh; color:var(--text);
+      background:
+        radial-gradient(900px 520px at 4% -8%,#12344b 0,transparent 58%),
+        radial-gradient(720px 520px at 104% 4%,#241853 0,transparent 55%),var(--bg);
+      font:14px/1.5 "Segoe UI Variable","Segoe UI",sans-serif;
+    }
+    body::before { content:""; position:fixed; inset:0; pointer-events:none; opacity:.16;
+      background-image:linear-gradient(#8fdfff0a 1px,transparent 1px),linear-gradient(90deg,#8fdfff0a 1px,transparent 1px);
+      background-size:32px 32px; mask-image:linear-gradient(to bottom,#000,transparent 80%); }
+    main { position:relative; width:min(1240px,calc(100% - 32px)); margin:0 auto; padding:28px 0 56px; }
+    header { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:18px; }
+    .brand { display:flex; align-items:center; gap:14px; }
+    .mark { display:grid; place-items:center; width:46px; height:46px; border:1px solid #54eaff66;
+      border-radius:50%; background:radial-gradient(circle at 35% 30%,#77ffff,#5374ff 40%,#25105c 68%,#090d18 70%);
+      box-shadow:0 0 30px #4cecff40, inset 0 0 18px #fff4; }
+    h1 { margin:0; font-size:23px; line-height:1.1; letter-spacing:.17em; color:var(--cyan); }
+    .subtitle,.hint { color:var(--muted); }
+    .subtitle { margin-top:5px; }
+    .connection { display:flex; align-items:center; gap:9px; min-height:38px; padding:8px 13px;
+      border:1px solid var(--line); border-radius:999px; background:#0a121ed9; color:var(--muted); }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--amber); box-shadow:0 0 12px currentColor; }
+    .connection.online .dot { background:var(--mint); }
+    .connection.error .dot { background:var(--rose); }
+    nav { position:sticky; top:10px; z-index:5; display:flex; flex-wrap:wrap; gap:7px; margin-bottom:18px;
+      padding:9px; border:1px solid #25364c; border-radius:16px; background:#080e17e8; backdrop-filter:blur(16px); }
+    nav a { padding:7px 11px; border-radius:9px; color:#b9c8d8; text-decoration:none; font-size:12px; }
+    nav a:hover { color:white; background:#172536; }
+    .grid { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:14px; }
+    section { grid-column:span 6; min-width:0; padding:18px; border:1px solid var(--line); border-radius:20px;
+      background:linear-gradient(145deg,#101927e8,#080e18ed); box-shadow:0 18px 50px #0006; }
+    section.wide { grid-column:span 8; } section.narrow { grid-column:span 4; } section.full { grid-column:1/-1; }
+    .section-head { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; margin-bottom:14px; }
+    h2 { margin:0; font-size:14px; letter-spacing:.11em; text-transform:uppercase; color:var(--mint); }
+    .eyebrow { margin-top:3px; color:#71869d; font-size:11px; text-transform:uppercase; letter-spacing:.08em; }
+    .badge { flex:none; padding:4px 8px; border:1px solid #344861; border-radius:99px; color:#93aac1; font-size:10px; letter-spacing:.06em; }
+    .badge.demo { color:var(--amber); border-color:#715b33; }
+    .row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:10px; }
+    .field { display:grid; gap:6px; min-width:180px; flex:1; color:var(--muted); font-size:12px; }
+    textarea,input:not([type=range]),select { width:100%; border:1px solid #2a4259; border-radius:12px; padding:10px 12px;
+      background:#060b12; color:white; outline:none; font:inherit; }
+    textarea { min-height:86px; resize:vertical; font-size:15px; }
+    textarea:focus,input:focus,select:focus { border-color:var(--cyan); box-shadow:0 0 0 3px #43e7ff16; }
+    button { min-height:38px; border:1px solid #2c465f; border-radius:11px; padding:8px 12px;
+      background:#111d2b; color:#eef6ff; cursor:pointer; font:600 13px/1.2 inherit; transition:.15s ease; }
+    button:hover { transform:translateY(-1px); border-color:#58dff6; background:#17283a; }
+    button:active { transform:none; } button:disabled { opacity:.45; cursor:not-allowed; transform:none; }
+    button.primary { border-color:#50dbef; background:linear-gradient(120deg,#11697a,#4b3ca0); }
+    button.danger { border-color:#73374c; color:#ff9bb0; } button.soft { color:#bcd0e5; background:#0b1521; }
+    .segmented { display:flex; padding:3px; border:1px solid #263b51; border-radius:13px; background:#07101a; }
+    .segmented button { border:0; border-radius:9px; background:transparent; }
+    .segmented button.selected { background:#263a54; color:var(--cyan); }
+    label { color:var(--muted); } input[type=range] { width:min(220px,55vw); accent-color:var(--cyan); }
+    .metric { min-width:90px; color:#c7d5e5; } .metric strong { color:var(--cyan); }
+    .hint { margin:10px 0 0; font-size:12px; }
+    #log { min-height:122px; max-height:220px; overflow:auto; white-space:pre-wrap; padding:12px;
+      border:1px solid #17283a; border-radius:13px; background:#050910; color:#91a7bd; font:12px/1.55 Consolas,monospace; }
+    .log-head { display:flex; gap:8px; align-items:center; }
+    .counter { color:var(--cyan); font-variant-numeric:tabular-nums; }
+    @media(max-width:980px){ section,section.wide,section.narrow{grid-column:span 12} }
+    @media(max-width:640px){ main{width:min(100% - 20px,1240px);padding-top:18px} header{flex-direction:column}.connection{align-self:stretch} nav{top:4px}.mark{width:40px;height:40px} }
   </style>
 </head>
 <body>
 <main>
-  <header><div><h1>AURA LAB</h1><div class="sub">Native LVGL simulator • development controls</div></div><div class="status"><span class="dot"></span><span id="status">loopback ready</span></div></header>
+  <header>
+    <div class="brand"><div class="mark" aria-hidden="true"></div><div><h1>AURA LAB</h1><div class="subtitle">Native LVGL simulator · development console</div></div></div>
+    <div class="connection" id="connection"><span class="dot"></span><span id="status">Έλεγχος τοπικής υπηρεσίας…</span></div>
+  </header>
+
+  <nav aria-label="Ενότητες ελέγχου">
+    <a href="#assistant">Βοηθός</a><a href="#screens">Οθόνες</a><a href="#weather">Καιρός</a>
+    <a href="#radio">Ραδιόφωνο</a><a href="#device">Συσκευή</a><a href="#audio">Ήχος</a>
+    <a href="#companion">Companion</a><a href="#aoraton">Aoraton</a><a href="#timeline">Συμβάντα</a>
+  </nav>
+
   <div class="grid">
-    <section>
-      <h2>Greek assistant turn</h2>
-      <textarea id="prompt">Πες μου για τον Ταΰγετο</textarea>
+    <section class="wide" id="assistant">
+      <div class="section-head"><div><h2>Βοηθός AURA</h2><div class="eyebrow">Πραγματική ροή assistant στο LVGL</div></div><span class="badge">ACTIVE PIPELINE</span></div>
+      <textarea id="prompt" aria-label="Μήνυμα προς τον βοηθό">Πες μου για τον Ταΰγετο</textarea>
       <div class="row">
-        <button class="primary" data-prompt>Αποστολή στο LVGL</button>
-        <select id="provider"><option value="mock">Demo Mode</option><option value="codex">Local Codex CLI</option></select>
-        <button class="danger" data-event="cancel">Ακύρωση</button>
+        <button class="primary" id="sendPrompt">Αποστολή στο AURA</button>
+        <label class="field" style="max-width:210px">Provider<select id="provider"><option value="mock">Demo provider</option><option value="codex">Local Codex CLI</option><option value="groq">Groq API</option></select></label>
+        <button class="danger" data-event="cancel">Ακύρωση turn</button>
       </div>
-      <div class="hint">Το αποτέλεσμα εμφανίζεται στο πραγματικό παράθυρο LVGL 480 × 480. Τα live/current δεδομένα δεν θεωρούνται επαληθευμένα χωρίς ξεχωριστή πηγή.</div>
+      <p class="hint">Το αποτέλεσμα εμφανίζεται μόνο στο πραγματικό παράθυρο LVGL 480×480. Ο provider DEMO επισημαίνεται ως DEMO.</p>
     </section>
-    <section>
-      <h2>Assistant state</h2>
-      <div class="row">
-        <button data-event="reset">Idle</button>
-        <button data-event="wake_detected">Wake</button><button data-event="begin_recording">Listen</button>
-        <button data-event="end_recording">Transcribe</button><button data-event="provider_unavailable">Offline</button>
-        <button class="danger" data-event="error" data-value="DEMO_FAILURE">Error</button>
+
+    <section class="narrow">
+      <div class="section-head"><div><h2>Γλώσσα</h2><div class="eyebrow">UI · assistant · STT · TTS</div></div></div>
+      <div class="segmented" id="languageControl">
+        <button data-event="language" data-value="el">Ελληνικά</button>
+        <button data-event="language" data-value="en">English</button>
       </div>
+      <p class="hint">Η επιλογή αποθηκεύεται από τον simulator και εφαρμόζεται άμεσα σε όλο το UI.</p>
+    </section>
+
+    <section class="full">
+      <div class="section-head"><div><h2>Καταστάσεις βοηθού</h2><div class="eyebrow">State machine & motion review</div></div><span class="badge demo">DETERMINISTIC</span></div>
       <div class="row">
-        <button data-event="review_long_answer">Long answer</button>
-        <button data-event="review_speaking">Speaking + PCM</button>
+        <button data-event="reset">Idle</button><button data-event="wake_detected">Wake</button>
+        <button data-event="begin_recording">Listening</button><button data-event="end_recording">Thinking</button>
+        <button data-event="review_speaking">Speaking + PCM</button><button data-event="review_long_answer">Long answer</button>
+        <button data-event="provider_unavailable">Offline</button><button class="danger" data-event="error" data-value="DEMO_FAILURE">Error · DEMO</button>
       </div>
     </section>
-    <section>
-      <h2>Native UI review</h2>
+
+    <section class="full" id="screens">
+      <div class="section-head"><div><h2>Πλοήγηση πραγματικού UI</h2><div class="eyebrow">Όλες οι τρέχουσες κύριες οθόνες</div></div><span class="badge">LVGL 480×480</span></div>
       <div class="row">
-        <button data-event="ui_view" data-value="home">Home</button>
-        <button data-event="ui_view" data-value="launcher">Tools</button>
-        <button data-event="ui_view" data-value="cards">Cards</button>
-        <button data-event="ui_view" data-value="notifications">Notifications</button>
-        <button data-event="ui_view" data-value="settings">Settings</button>
-        <button data-event="ui_view" data-value="diagnostics">Diagnostics</button>
-        <button data-event="ui_view" data-value="audio">Audio</button>
-        <button data-event="ui_view" data-value="aoraton">Aoraton</button>
-        <button data-event="ui_view" data-value="weather">Καιρός</button>
-        <button data-event="ui_view" data-value="weather-location">Πόλη καιρού</button>
+        <button class="primary" data-event="ui_view" data-value="home">Home</button>
+        <button data-event="ui_view" data-value="launcher">Apps</button><button data-event="ui_view" data-value="assistant">Assistant</button>
+        <button data-event="ui_view" data-value="cards">Cards</button><button data-event="ui_view" data-value="notifications">Notifications</button>
+        <button data-event="ui_view" data-value="briefing">Σήμερα</button><button data-event="ui_view" data-value="weather">Καιρός</button>
+        <button data-event="ui_view" data-value="radio">Ραδιόφωνο</button><button data-event="ui_view" data-value="clock">Ρολόι</button>
+        <button data-event="ui_view" data-value="notes">Σημειώσεις</button><button data-event="ui_view" data-value="translate">Μετάφραση</button>
+        <button data-event="ui_view" data-value="aoraton">Aoraton</button><button data-event="ui_view" data-value="phone">Τηλέφωνο</button>
+        <button data-event="ui_view" data-value="settings">Ρυθμίσεις</button><button data-event="ui_view" data-value="language">Γλώσσα</button>
+        <button data-event="ui_view" data-value="weather-settings">Ρυθμίσεις καιρού</button><button data-event="ui_view" data-value="weather-location">Πόλη καιρού</button>
+        <button data-event="ui_view" data-value="audio">Ήχος</button><button data-event="ui_view" data-value="voice">Φωνή</button>
+        <button data-event="ui_view" data-value="display">Οθόνη</button><button data-event="ui_view" data-value="wifi">Wi‑Fi</button>
+        <button data-event="ui_view" data-value="battery">Κατάσταση</button><button data-event="ui_view" data-value="system">Σύστημα</button>
+        <button data-event="ui_view" data-value="update">Ενημέρωση</button><button data-event="ui_view" data-value="diagnostics">Διαγνωστικά</button>
       </div>
-      <div class="hint">Οι εντολές αλλάζουν την πραγματική κοινή LVGL εφαρμογή· δεν αποδίδουν ξεχωριστές HTML οθόνες.</div>
     </section>
-    <section>
-      <h2>Weather • Open-Meteo</h2>
+
+    <section class="wide" id="weather">
+      <div class="section-head"><div><h2>Καιρός</h2><div class="eyebrow">Open-Meteo · αποθηκευμένη πόλη · day/night</div></div><span class="badge">LIVE WHEN ONLINE</span></div>
       <div class="row">
-        <input id="weatherCity" value="Αθήνα" maxlength="80" aria-label="Πόλη καιρού">
+        <label class="field">Πόλη<input id="weatherCity" value="Αθήνα" maxlength="80" autocomplete="off"></label>
         <button class="primary" id="weatherSearch">Αναζήτηση πόλης</button>
-        <button data-event="weather_refresh">Ανανέωση</button>
+        <button data-event="weather_refresh">Ανανέωση δεδομένων</button>
       </div>
-      <div class="hint">Χειροκίνητη πόλη — η συσκευή δεν χρησιμοποιεί GPS. Τα live δεδομένα προέρχονται από Open-Meteo.</div>
+      <p class="hint">Η συσκευή δεν υποθέτει GPS. Το εικονίδιο χρησιμοποιεί και το πεδίο is_day, ώστε τη νύχτα να μη δείχνει ήλιο.</p>
     </section>
-    <section>
-      <h2>Device simulation</h2>
-      <div class="row"><label>Battery <strong id="batteryValue">78%</strong></label><input id="battery" type="range" min="0" max="100" value="78"></div>
-      <div class="row">
-        <button data-event="wifi" data-value="0">Wi‑Fi loss</button><button data-event="wifi" data-value="1">Wi‑Fi restore</button>
-        <button data-event="wifi_fail_next">Next Wi‑Fi connect fails</button>
-        <button data-event="bluetooth" data-value="1">BLE on</button><button data-event="bluetooth" data-value="0">BLE off</button>
-        <button data-event="charging" data-value="1">Charging</button><button data-event="charging" data-value="0">On battery</button>
-        <button data-event="battery_unknown">Battery unknown</button>
-      </div>
-      <div class="row">
-        <button data-event="notification" data-value="Aoraton demo">Notification</button>
-        <button data-event="screen" data-value="off">Screen off</button><button data-event="screen" data-value="on">Screen on</button>
-      </div>
+
+    <section class="narrow" id="radio">
+      <div class="section-head"><div><h2>Ραδιόφωνο & καύσιμα</h2><div class="eyebrow">Live services</div></div></div>
+      <label class="field">Σταθμός ή αναζήτηση<input id="radioQuery" value="Kiss 92.9" maxlength="100" autocomplete="off"></label>
+      <div class="row"><button class="primary" id="radioPlay">Αναπαραγωγή</button><button id="radioSearch">Αναζήτηση</button><button class="danger" data-event="radio_stop">Stop</button></div>
+      <div class="row"><button data-event="ui_view" data-value="radio-search">Λίστα σταθμών</button><button data-event="fuel_refresh">Ανανέωση καυσίμων ΕΕ</button></div>
     </section>
-    <section>
-      <h2>Audio engine</h2>
+
+    <section class="wide" id="device">
+      <div class="section-head"><div><h2>Προσομοίωση συσκευής</h2><div class="eyebrow">Συνδεσιμότητα · ενέργεια · οθόνη</div></div><span class="badge demo">SIMULATED</span></div>
+      <div class="row"><span class="metric">Μπαταρία <strong id="batteryValue">78%</strong></span><input id="battery" type="range" min="0" max="100" value="78" aria-label="Ποσοστό μπαταρίας"></div>
       <div class="row">
-        <button class="primary" data-event="audio_test">Test speaker</button><button data-event="audio_wav">Play WAV</button>
-        <button data-event="audio_pause">Pause</button><button data-event="audio_resume">Resume</button>
-        <button class="danger" data-event="audio_stop">Stop</button>
-        <button data-event="audio_complete">Complete</button><button class="danger" data-event="audio_fail" data-value="DEMO_AUDIO_FAILURE">Fail</button>
+        <button data-event="wifi" data-value="0">Wi‑Fi loss</button><button data-event="wifi" data-value="1">Wi‑Fi restore</button><button data-event="wifi_fail_next">Next connect fails</button>
+        <button data-event="bluetooth" data-value="1">Bluetooth on</button><button data-event="bluetooth" data-value="0">Bluetooth off</button>
+        <button data-event="charging" data-value="1">Charging</button><button data-event="charging" data-value="0">On battery</button><button data-event="battery_unknown">Battery unknown</button>
       </div>
-      <div class="row"><label>Synthetic mic amplitude <strong id="amplitudeValue">50%</strong></label><input id="amplitude" type="range" min="0" max="100" value="50"></div>
-      <div class="row"><label>Volume <strong id="audioVolumeValue">55%</strong></label><input id="audioVolume" type="range" min="0" max="100" value="55"></div>
-      <div class="row"><button data-event="audio_mute" data-value="1">Mute</button><button data-event="audio_mute" data-value="0">Unmute</button></div>
+      <div class="row"><button data-event="notification" data-value="AURA notification · DEMO">Notification · DEMO</button><button data-event="screen" data-value="off">Screen off</button><button data-event="screen" data-value="on">Screen on</button></div>
     </section>
-    <section>
-      <h2>Aoraton • isolated mock</h2>
-      <textarea id="aoratonMessage">Νέο ασφαλές μήνυμα • DEMO</textarea>
-      <div class="row">
-        <button class="primary" id="injectAoraton">Inject incoming</button>
-        <button id="prepareAoraton">Prepare outgoing</button>
-        <button data-event="aoraton_confirm">Confirm pending</button>
-        <button data-event="aoraton_sound">Notification sound</button>
-      </div>
-      <div class="row">
-        <button data-event="aoraton_disconnect">Disconnect</button><button data-event="aoraton_reconnect">Reconnect</button>
-        <button class="danger" data-event="aoraton_invalid">Invalid ciphertext</button>
-        <button class="danger" data-event="aoraton_pairing_failure">Pairing failure</button>
-        <button data-event="aoraton_reset">Reset mock</button>
-      </div>
-      <div class="hint">Δεν συνδέεται σε production rooms και δεν χρησιμοποιεί πραγματικά κλειδιά ή μηνύματα.</div>
+
+    <section class="narrow" id="audio">
+      <div class="section-head"><div><h2>Audio engine</h2><div class="eyebrow">Native Windows backend</div></div></div>
+      <div class="row"><button class="primary" data-event="audio_test">Test speaker</button><button data-event="audio_wav">Play WAV</button><button data-event="audio_pause">Pause</button><button data-event="audio_resume">Resume</button><button class="danger" data-event="audio_stop">Stop</button></div>
+      <div class="row"><button class="primary" data-event="voice_preview" data-value="nestoras">Neural · Νέστορας</button><button data-event="voice_preview" data-value="athina">Neural · Αθηνά</button></div>
+      <div class="row"><span class="metric">Mic <strong id="amplitudeValue">50%</strong></span><input id="amplitude" type="range" min="0" max="100" value="50" aria-label="Synthetic microphone amplitude"></div>
+      <div class="row"><span class="metric">Volume <strong id="audioVolumeValue">55%</strong></span><input id="audioVolume" type="range" min="0" max="100" value="55" aria-label="Ένταση ήχου"></div>
+      <div class="row"><button data-event="audio_mute" data-value="1">Mute</button><button data-event="audio_mute" data-value="0">Unmute</button><button data-event="audio_complete">Complete</button><button class="danger" data-event="audio_fail" data-value="DEMO_AUDIO_FAILURE">Fail · DEMO</button></div>
+      <p class="hint">Οι neural δοκιμές χρησιμοποιούν τον ενεργό TTS provider του bridge και απαιτούν σύνδεση.</p>
     </section>
-    <section>
-      <h2>Companion • v13</h2>
-      <div class="row">
-        <button data-event="timer_start" data-value="10">Χρονόμετρο 10 δευτ.</button>
-        <button data-event="alarm_soon">Ξυπνητήρι σε 1 λεπτό</button>
-        <button data-event="reminder_soon">Υπενθύμιση σε 1 λεπτό</button>
-        <button data-event="briefing">Σήμερα</button>
-      </div>
-      <div class="row">
-        <button data-event="imu" data-value="raise">IMU: σήκωμα</button>
-        <button data-event="imu" data-value="face_down">IMU: ανάποδα</button>
-        <button data-event="imu" data-value="face_up">IMU: ανάσκελα</button>
-        <button data-event="display_sleep">Σβήσιμο οθόνης</button>
-      </div>
-      <textarea id="companionText">WhatsApp|Μαρία|Θα αργήσω 10 λεπτά</textarea>
-      <div class="row">
-        <button id="phoneNotification">Ειδοποίηση κινητού</button>
-        <button id="phoneCall">Εισερχόμενη κλήση</button>
-        <button data-event="phone_call_end">Τέλος κλήσης</button>
-        <button data-event="phone_clear">Καθαρισμός κινητού</button>
-        <button data-event="phone_pair">Σύνδεση κινητού</button>
-      </div>
-      <div class="row">
-        <button id="translateMine">Μετάφραση (εγώ)</button>
-        <button id="translateTheirs">Μετάφραση (άλλος)</button>
-        <button id="noteText">Σημείωση</button>
-        <button data-event="update_available">Ενημέρωση διαθέσιμη</button>
-      </div>
-      <div class="hint">Όλα είναι DEMO: το κινητό, ο αισθητήρας κίνησης και η ενημέρωση προσομοιώνονται. Το μικρόφωνο και η φωνή είναι πραγματικά όταν τρέχει το bridge με το whisper.cpp.</div>
+
+    <section class="wide" id="companion">
+      <div class="section-head"><div><h2>Companion εργαλεία</h2><div class="eyebrow">Ρολόι · iPhone · μετάφραση · σημειώσεις</div></div><span class="badge demo">INPUT SIMULATION</span></div>
+      <div class="row"><button data-event="timer_start" data-value="10">Timer 10 sec</button><button data-event="alarm_soon">Alarm +1 min</button><button data-event="reminder_soon" data-value="DEMO υπενθύμιση">Reminder +1 min</button><button data-event="briefing">Άνοιγμα «Σήμερα»</button></div>
+      <div class="row"><button data-event="imu" data-value="raise">IMU raise</button><button data-event="imu" data-value="face_down">Face down</button><button data-event="imu" data-value="face_up">Face up</button><button data-event="display_sleep">Display sleep</button></div>
+      <label class="field">Δοκιμαστικό περιεχόμενο<input id="companionText" value="WhatsApp|Μαρία|Θα αργήσω 10 λεπτά" maxlength="600"></label>
+      <div class="row"><button class="primary" id="phoneNotification">iPhone notification · DEMO</button><button id="phoneCall">Incoming call · DEMO</button><button data-event="phone_call_end">End call</button><button data-event="phone_clear">Clear phone</button><button data-event="phone_pair">Pair phone · DEMO</button></div>
+      <div class="row"><button id="translateMine">Translate mine</button><button id="translateTheirs">Translate theirs</button><button id="noteText">Νέα σημείωση</button><button data-event="update_available">Update available · DEMO</button></div>
+      <p class="hint">Τα παραπάνω είναι σαφώς επισημασμένα inputs προσομοίωσης. Το πραγματικό ANCS χρησιμοποιείται μόνο όταν ο simulator ξεκινήσει με -EnableIphoneAncs.</p>
     </section>
-    <section>
-      <h2>Event timeline</h2>
-      <div id="log">Waiting for an event…</div>
+
+    <section class="narrow" id="aoraton">
+      <div class="section-head"><div><h2>Aoraton</h2><div class="eyebrow">Isolated mock controls</div></div><span class="badge demo">DEMO</span></div>
+      <textarea id="aoratonMessage" aria-label="Δοκιμαστικό μήνυμα Aoraton">Νέο ασφαλές μήνυμα · DEMO</textarea>
+      <div class="row"><button class="primary" id="injectAoraton">Inject incoming</button><button id="prepareAoraton">Prepare outgoing</button><button data-event="aoraton_confirm">Confirm</button><button data-event="aoraton_sound">Sound</button></div>
+      <div class="row"><button data-event="aoraton_disconnect">Disconnect</button><button data-event="aoraton_reconnect">Reconnect</button><button class="danger" data-event="aoraton_invalid">Invalid ciphertext</button><button class="danger" data-event="aoraton_pairing_failure">Pairing failure</button><button data-event="aoraton_reset">Reset mock</button></div>
+      <p class="hint">Δεν συνδέεται σε production rooms και δεν χρησιμοποιεί πραγματικά κλειδιά ή μηνύματα.</p>
+    </section>
+
+    <section class="full" id="timeline">
+      <div class="section-head"><div><h2>Event timeline</h2><div class="eyebrow">Αποστολές προς την ουρά του simulator</div></div><div class="log-head"><span class="counter" id="eventCount">0 events</span><button class="soft" id="clearLog">Clear</button></div></div>
+      <div id="log" role="log" aria-live="polite">Δεν έχει σταλεί συμβάν σε αυτή τη συνεδρία.</div>
+      <p class="hint">“Queued” σημαίνει ότι η τοπική υπηρεσία δέχθηκε το event. Η οπτική επιβεβαίωση γίνεται στο παράθυρο LVGL.</p>
     </section>
   </div>
 </main>
 <script>
-  const token = new URLSearchParams(location.search).get('token') || '';
+  const params = new URLSearchParams(location.search);
+  const token = params.get('token') || '';
   const log = document.querySelector('#log');
   const status = document.querySelector('#status');
-  async function send(type,payload='') {
-    const stamp = new Date().toLocaleTimeString('el-GR');
-    try {
-      const response = await fetch('/api/event',{method:'POST',headers:{'content-type':'application/json','authorization':`Bearer ${token}`},body:JSON.stringify({type,payload})});
-      if(!response.ok) throw new Error((await response.json()).code || response.status);
-      log.textContent = `${stamp}  ${type}  ${payload}\n` + log.textContent;
-      status.textContent = 'event accepted';
-    } catch(error) { status.textContent = `error: ${error.message}`; }
+  const connection = document.querySelector('#connection');
+  const provider = document.querySelector('#provider');
+  let eventCount = 0;
+
+  function setConnection(kind, message) {
+    connection.classList.remove('online','error');
+    if (kind) connection.classList.add(kind);
+    status.textContent = message;
   }
-  document.querySelector('[data-prompt]').onclick=()=>send('prompt',document.querySelector('#prompt').value);
+
+  async function checkHealth() {
+    if (!token) { setConnection('error','Λείπει το access token'); return; }
+    try {
+      const response = await fetch('/health',{cache:'no-store'});
+      if (!response.ok) throw new Error(String(response.status));
+      setConnection('online','Control service online');
+    } catch { setConnection('error','Control service unavailable'); }
+  }
+
+  function appendLog(type,payload) {
+    const line = `${new Date().toLocaleTimeString('el-GR')}  ${type}${payload ? `  ${payload}` : ''}`;
+    log.textContent = eventCount === 0 ? line : `${line}\n${log.textContent}`;
+    eventCount += 1;
+    document.querySelector('#eventCount').textContent = `${eventCount} event${eventCount === 1 ? '' : 's'}`;
+  }
+
+  async function send(type,payload='') {
+    if (!token) { setConnection('error','Λείπει το access token'); return false; }
+    try {
+      const response = await fetch('/api/event',{
+        method:'POST', headers:{'content-type':'application/json','authorization':`Bearer ${token}`},
+        body:JSON.stringify({type,payload})
+      });
+      if (!response.ok) throw new Error((await response.json()).code || String(response.status));
+      appendLog(type,String(payload));
+      setConnection('online',`Queued · ${type}`);
+      return true;
+    } catch(error) {
+      setConnection('error',`Αποτυχία · ${error.message}`);
+      return false;
+    }
+  }
+
+  document.querySelector('#sendPrompt').onclick=()=>send('prompt',document.querySelector('#prompt').value);
   document.querySelector('#weatherSearch').onclick=()=>send('weather_city',document.querySelector('#weatherCity').value);
-  document.querySelectorAll('[data-event]').forEach(button=>button.onclick=()=>send(button.dataset.event,button.dataset.value||''));
-  document.querySelector('#provider').onchange=(event)=>send('provider',event.target.value);
-  const battery=document.querySelector('#battery');
-  battery.oninput=()=>document.querySelector('#batteryValue').textContent=`${battery.value}%`;
-  battery.onchange=()=>send('battery',battery.value);
-  const audioVolume=document.querySelector('#audioVolume');
-  audioVolume.oninput=()=>document.querySelector('#audioVolumeValue').textContent=`${audioVolume.value}%`;
-  audioVolume.onchange=()=>send('audio_volume',audioVolume.value);
-  const amplitude=document.querySelector('#amplitude');
-  amplitude.oninput=()=>document.querySelector('#amplitudeValue').textContent=`${amplitude.value}%`;
-  amplitude.onchange=()=>send('input_amplitude',amplitude.value);
+  document.querySelectorAll('[data-event]').forEach(button=>button.onclick=async()=>{
+    const ok=await send(button.dataset.event,button.dataset.value||'');
+    if(ok && button.dataset.event==='language') {
+      document.querySelectorAll('#languageControl button').forEach(item=>item.classList.toggle('selected',item===button));
+    }
+  });
+  provider.value = ['mock','codex','groq'].includes(params.get('provider')) ? params.get('provider') : 'mock';
+  provider.onchange=(event)=>send('provider',event.target.value);
+
+  function bindRange(id,eventType,valueId) {
+    const input=document.querySelector(id), value=document.querySelector(valueId);
+    input.oninput=()=>value.textContent=`${input.value}%`;
+    input.onchange=()=>send(eventType,input.value);
+  }
+  bindRange('#battery','battery','#batteryValue');
+  bindRange('#audioVolume','audio_volume','#audioVolumeValue');
+  bindRange('#amplitude','input_amplitude','#amplitudeValue');
+
+  document.querySelector('#radioPlay').onclick=()=>send('radio_play',document.querySelector('#radioQuery').value);
+  document.querySelector('#radioSearch').onclick=()=>send('radio_search',document.querySelector('#radioQuery').value);
   document.querySelector('#injectAoraton').onclick=()=>send('aoraton_incoming',document.querySelector('#aoratonMessage').value);
   document.querySelector('#prepareAoraton').onclick=()=>send('aoraton_prepare',document.querySelector('#aoratonMessage').value);
   const companionText=()=>document.querySelector('#companionText').value;
@@ -194,6 +280,12 @@
   document.querySelector('#translateMine').onclick=()=>send('translate_text','mine|'+companionText());
   document.querySelector('#translateTheirs').onclick=()=>send('translate_text','theirs|'+companionText());
   document.querySelector('#noteText').onclick=()=>send('note_text',companionText());
+  document.querySelector('#clearLog').onclick=()=>{ eventCount=0; log.textContent='Δεν έχει σταλεί συμβάν σε αυτή τη συνεδρία.'; document.querySelector('#eventCount').textContent='0 events'; };
+  document.querySelectorAll('textarea,input').forEach(input=>input.addEventListener('keydown',event=>{
+    if(event.key==='Enter' && event.ctrlKey && input.id==='prompt') document.querySelector('#sendPrompt').click();
+  }));
+  checkHealth();
+  setInterval(checkHealth,15000);
 </script>
 </body>
 </html>

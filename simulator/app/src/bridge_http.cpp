@@ -108,9 +108,10 @@ bool json_bool(const std::string& json, const std::string& key, bool fallback) {
     return fallback;
 }
 
-BridgeResponse bridge_request(const wchar_t* method, std::uint16_t port, const std::string& path,
-                              const std::string& token, const std::string& body, const char* content_type,
-                              int timeout_ms, std::size_t max_bytes) {
+BridgeResponse request_impl(const wchar_t* method, std::uint16_t port, const std::string& path,
+                            const std::string& token, const std::string& body, const char* content_type,
+                            int timeout_ms, std::size_t max_bytes,
+                            const std::function<bool(std::string_view)>* on_chunk) {
     BridgeResponse response;
 #ifdef _WIN32
     HINTERNET session = WinHttpOpen(L"AURA-Simulator/0.2", WINHTTP_ACCESS_TYPE_NO_PROXY,
@@ -151,19 +152,33 @@ BridgeResponse bridge_request(const wchar_t* method, std::uint16_t port, const s
                 if (*character < 0x80) response.content_type.push_back(static_cast<char>(*character));
             }
         }
+        // A streamed 200 body goes to `on_chunk` as it arrives and is not kept:
+        // the decoder bounds the text, so a long answer (many deltas plus the
+        // final copy) is not cut by the buffer. Other bodies are kept, bounded.
+        const bool streaming = on_chunk && response.status == 200;
+        std::string chunk;
+        std::size_t total = 0;
         for (;;) {
             DWORD available = 0;
             if (!WinHttpQueryDataAvailable(request, &available) || available == 0) break;
-            const auto old_size = response.body.size();
-            response.body.resize(old_size + available);
+            chunk.resize(available);
             DWORD read = 0;
-            if (!WinHttpReadData(request, response.body.data() + old_size, available, &read)) break;
-            response.body.resize(old_size + read);
-            if (response.body.size() > max_bytes) {
+            if (!WinHttpReadData(request, chunk.data(), available, &read)) break;
+            chunk.resize(read);
+            total += read;
+            if (total > max_bytes) {
                 response.status = 0;
                 response.body.clear();
                 break;
             }
+            if (streaming) {
+                if (read > 0 && !(*on_chunk)(chunk)) {
+                    response.status = 0;
+                    break;
+                }
+                continue;
+            }
+            response.body += chunk;
         }
     }
     WinHttpCloseHandle(request);
@@ -171,9 +186,22 @@ BridgeResponse bridge_request(const wchar_t* method, std::uint16_t port, const s
     WinHttpCloseHandle(session);
 #else
     (void)method; (void)port; (void)path; (void)token; (void)body; (void)content_type; (void)timeout_ms;
-    (void)max_bytes;
+    (void)max_bytes; (void)on_chunk;
 #endif
     return response;
+}
+
+BridgeResponse bridge_request(const wchar_t* method, std::uint16_t port, const std::string& path,
+                              const std::string& token, const std::string& body, const char* content_type,
+                              int timeout_ms, std::size_t max_bytes) {
+    return request_impl(method, port, path, token, body, content_type, timeout_ms, max_bytes, nullptr);
+}
+
+BridgeResponse bridge_stream_request(const wchar_t* method, std::uint16_t port, const std::string& path,
+                                     const std::string& token, const std::string& body, const char* content_type,
+                                     int timeout_ms, std::size_t max_bytes,
+                                     const std::function<bool(std::string_view)>& on_chunk) {
+    return request_impl(method, port, path, token, body, content_type, timeout_ms, max_bytes, &on_chunk);
 }
 
 }  // namespace aura::simulator

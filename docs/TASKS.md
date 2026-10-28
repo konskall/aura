@@ -15,12 +15,13 @@
 - [x] Implement an ESP32 ES8311 backend that delegates codec/amplifier ownership to the official BSP.
 
 - [x] v13: shared companion models, screens, bridge speech, simulator runtime and evidence; firmware `aura_companion` adapters written.
+- [x] Add persisted continuous spoken follow-ups and conservative speech-over-TTS barge-in to the Windows/shared voice pipeline.
 
 ## Pending gates
 
 - [ ] Choose the cloud AI provider and build the gateway; enable device voice/translation/spoken replies through it.
 - [ ] Build the AURA Link Android app and the device-side GATT server (`docs/phone/ANDROID_COMPANION.md`).
-- [ ] Train a wake-word model for «Αύρα» (ESP-SR WakeNet or microWakeWord) and measure its battery cost.
+- [ ] Train and license a Greek wake-word model for «Αύρα» (ESP-SR WakeNet, openWakeWord or microWakeWord); measure false accepts/rejects and battery cost before enabling the existing capability.
 - [ ] Decide the OTA hosting and signing (secure boot or signed images) before the first field update.
 
 - [x] Install/activate ESP-IDF 5.5.5 and compile the firmware; resolve only evidence-backed BSP/API drift (2026-10-24: clean build; see VERIFICATION).

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace aura {
 
@@ -48,9 +49,13 @@ struct DisplaySettings {
     bool always_on{true};
     bool raise_to_wake{true};
     bool flip_to_mute{true};
+    int active_brightness_percent{100};
     std::uint32_t timeout_ms{30000};
     std::uint32_t dim_ms{5000};
 };
+
+std::string serialize_display_settings(const DisplaySettings& settings);
+DisplaySettings parse_display_settings(const std::string& data);
 
 struct DisplaySnapshot {
     DisplayMode mode{DisplayMode::Active};
@@ -83,6 +88,7 @@ public:
 
 private:
     void set_mode(DisplayMode mode);
+    int brightness_for(DisplayMode mode) const noexcept;
     void changed() noexcept { ++snapshot_.sequence; }
 
     DisplaySnapshot snapshot_{};

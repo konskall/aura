@@ -116,8 +116,8 @@ void AuraUi::apply_update(const UpdateSnapshot& snapshot) {
     if (self.current_view == UiView::Update) {
         if (structural) self.render(UiView::Update);
         else self.update_progress_widgets();
-    } else if (self.current_view == UiView::Settings && structural) {
-        self.render(UiView::Settings);
+    } else if (self.current_view == UiView::System && structural) {
+        self.render(UiView::System);
     }
 }
 
@@ -136,6 +136,7 @@ void AuraUi::apply_display(const DisplaySnapshot& snapshot) {
     const bool settings_changed = snapshot.settings.always_on != previous.settings.always_on ||
         snapshot.settings.raise_to_wake != previous.settings.raise_to_wake ||
         snapshot.settings.flip_to_mute != previous.settings.flip_to_mute ||
+        snapshot.settings.active_brightness_percent != previous.settings.active_brightness_percent ||
         snapshot.settings.timeout_ms != previous.settings.timeout_ms;
     if (self.current_view == UiView::AlwaysOn) {
         self.render(self.aod_return_view, true);
@@ -148,11 +149,74 @@ void AuraUi::apply_display(const DisplaySnapshot& snapshot) {
     }
 }
 
+void AuraUi::apply_organizer(const OrganizerSnapshot& snapshot) {
+    auto& self = *impl_;
+    if (snapshot.sequence == self.organizer.sequence) return;
+    self.organizer = snapshot;
+    if (self.current_view == UiView::Calendar) self.render(UiView::Calendar);
+}
+
+void AuraUi::apply_radio(const RadioSnapshot& snapshot) {
+    auto& self = *impl_;
+    if (snapshot.sequence == self.radio.sequence) return;
+    const bool ambient_changed = snapshot.state != self.radio.state ||
+                                 snapshot.station.id != self.radio.station.id;
+    // The search screen shows no stream title: a new song must not rebuild its
+    // keyboard (and lose shift or the symbol page) while the owner types.
+    const bool search_changed =
+        snapshot.searching != self.radio.searching || snapshot.query != self.radio.query ||
+        snapshot.search_error != self.radio.search_error ||
+        !std::equal(snapshot.results.begin(), snapshot.results.end(), self.radio.results.begin(),
+                    self.radio.results.end(), [](const auto& left, const auto& right) { return left.id == right.id; });
+    self.radio = snapshot;
+    switch (self.current_view) {
+        case UiView::Radio:
+            self.render(UiView::Radio);
+            break;
+        case UiView::RadioSearch:
+            if (search_changed) self.render(UiView::RadioSearch);
+            break;
+        case UiView::AlwaysOn:
+            if (ambient_changed) self.render(UiView::AlwaysOn);
+            break;
+        default: break;
+    }
+}
+
+void AuraUi::apply_launcher_layout(const LauncherLayoutSnapshot& snapshot) {
+    auto& self = *impl_;
+    if (snapshot.sequence == self.launcher_layout.sequence && snapshot.order == self.launcher_layout.order) return;
+    self.launcher_layout = snapshot;
+    if (self.current_view == UiView::Launcher) self.render(UiView::Launcher);
+}
+
+void AuraUi::edit_launcher_layout() {
+    auto& self = *impl_;
+    if (!self.callbacks.on_launcher_app_move) return;
+    if (self.current_view != UiView::Launcher) {
+        self.navigation.reset();
+        self.navigation.navigate(UiView::Launcher);
+    }
+    self.launcher_reordering = true;
+    self.launcher_selected_app.reset();
+    self.render(UiView::Launcher);
+}
+
+void AuraUi::apply_fuel(const FuelPriceSnapshot& snapshot) {
+    auto& self = *impl_;
+    if (snapshot.sequence == self.fuel.sequence) return;
+    self.fuel = snapshot;
+    if (self.current_view == UiView::Briefing) self.render(UiView::Briefing);
+}
+
 void AuraUi::apply_assistant_extras(const AssistantExtras& extras) {
     auto& self = *impl_;
     if (extras.sequence == self.extras.sequence) return;
     self.extras = extras;
-    if (self.current_view == UiView::Assistant) self.render(UiView::Assistant);
+    if (self.current_view == UiView::Assistant || self.current_view == UiView::ConversationHistory ||
+        self.current_view == UiView::Launcher || self.current_view == UiView::Battery) {
+        self.render(self.current_view);
+    }
 }
 
 void AuraUi::set_capabilities(const CompanionCapabilities& capabilities) {
@@ -169,6 +233,12 @@ void AuraUi::set_capabilities(const CompanionCapabilities& capabilities) {
 void AuraUi::open_briefing() {
     impl_->navigation.reset();
     impl_->navigate(UiView::Briefing);
+}
+
+void AuraUi::open_organizer(OrganizerKind kind) {
+    impl_->organizer_kind = kind;
+    impl_->navigation.reset();
+    impl_->navigate(UiView::Calendar);
 }
 
 void AuraUi::open_note(std::uint32_t id) {

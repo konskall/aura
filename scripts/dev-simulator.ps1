@@ -1,12 +1,18 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('mock','codex')][string]$Provider = 'mock',
+    [ValidateSet('mock','codex','groq')][string]$Provider = 'mock',
+    [ValidateSet('local','groq')][string]$SpeechProvider = 'local',
+    [ValidateSet('auto','windows','neural','azure')][string]$TtsProvider = 'auto',
+    [switch]$EnableIphoneAncs,
+    [switch]$TraceIphoneAncs,
     [switch]$NoBrowser,
     [switch]$Smoke
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'aura-env.ps1')
+Import-AuraLocalEnv -Path (Join-Path $repo '.env')
 $exe = Join-Path $repo 'build\native\aura_simulator.exe'
 if (-not (Test-Path -LiteralPath $exe)) {
     & (Join-Path $PSScriptRoot 'build-simulator.ps1')
@@ -25,7 +31,74 @@ $env:AURA_BRIDGE_TOKEN = $token
 $env:AURA_BRIDGE_PORT = '4778'
 $env:AURA_CONTROLS_PORT = '4777'
 $env:AURA_CONTROL_EVENTS = $events
-$env:AURA_PROVIDER = $Provider
+$env:AURA_PROVIDER = if ($Provider -eq 'mock') { 'mock' } else { 'codex' }
+$env:AURA_BRIDGE_AI_PROVIDER = if ($Provider -eq 'groq') { 'groq' } else { 'codex' }
+if ($Provider -eq 'groq') { $SpeechProvider = 'groq' }
+if ($Provider -eq 'groq' -or $SpeechProvider -eq 'groq') {
+    if (-not $env:GROQ_API_KEY) {
+        throw 'GROQ_API_KEY is required in the process environment or ignored project .env for Groq chat or speech.'
+    }
+    if ($env:GROQ_API_KEY -notmatch '^gsk_[A-Za-z0-9_-]{20,}$' -or $env:GROQ_API_KEY.Length -gt 256) {
+        throw 'GROQ_API_KEY does not have a valid Groq key shape.'
+    }
+}
+$env:AURA_STT_PROVIDER = $SpeechProvider
+# The EU Weekly Oil Bulletin is weekly: renew the cached Greek averages in the
+# background when they are missing or more than a week old, so the Today card
+# never depends on someone running the update by hand. The bridge re-reads
+# the cache and the simulator asks again on its own.
+$fuelCache = Join-Path $repo 'bridge\runtime\fuel-prices.json'
+$fuelCurrent = $false
+if (Test-Path -LiteralPath $fuelCache) {
+    try {
+        $period = [datetime]::ParseExact((Get-Content -LiteralPath $fuelCache -Raw | ConvertFrom-Json).period_date,
+            'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
+        $fuelCurrent = ((Get-Date) - $period).TotalDays -le 7
+    } catch {
+        $fuelCurrent = $false
+    }
+}
+if (-not $fuelCurrent) {
+    Start-Process -FilePath 'powershell' -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-File', (Join-Path $PSScriptRoot 'update-eu-fuel-prices.ps1')) | Out-Null
+}
+$neuralPackage = Join-Path $repo '.tools\edge-tts\edge_tts\__init__.py'
+if ($TtsProvider -eq 'auto') {
+    $azureReady = $env:AZURE_SPEECH_KEY -and ($env:AZURE_SPEECH_REGION -or $env:AZURE_SPEECH_ENDPOINT)
+    # The 'neural' voices use the unofficial Microsoft Edge read-aloud service,
+    # so they are never chosen automatically: official Azure, else Windows.
+    $TtsProvider = if ($azureReady) { 'azure' } else { 'windows' }
+}
+if ($TtsProvider -eq 'azure') {
+    if (-not $env:AZURE_SPEECH_KEY) {
+        throw 'AZURE_SPEECH_KEY is required in the process environment or ignored project .env for Azure Speech.'
+    }
+    if ($env:AZURE_SPEECH_KEY.Length -lt 32 -or $env:AZURE_SPEECH_KEY.Length -gt 256 -or
+        $env:AZURE_SPEECH_KEY -match '\s') {
+        throw 'AZURE_SPEECH_KEY does not have a plausible key shape.'
+    }
+    if (-not $env:AZURE_SPEECH_REGION -and -not $env:AZURE_SPEECH_ENDPOINT) {
+        throw 'AZURE_SPEECH_REGION or AZURE_SPEECH_ENDPOINT is required for Azure Speech.'
+    }
+    $env:AURA_TTS_PROVIDER = 'azure'
+    Remove-Item Env:AURA_EDGE_TTS_PYTHONPATH -ErrorAction SilentlyContinue
+} elseif ($TtsProvider -eq 'neural') {
+    if (-not (Test-Path -LiteralPath $neuralPackage)) {
+        throw 'Neural voices are not installed. Run .\scripts\setup-neural-voice.ps1 first.'
+    }
+    Write-Warning 'The neural voices use the unofficial Microsoft Edge read-aloud service, not a supported API. Prefer -TtsProvider azure.'
+    $env:AURA_TTS_PROVIDER = 'edge-neural'
+    $env:AURA_EDGE_TTS_PYTHONPATH = Join-Path $repo '.tools\edge-tts'
+} else {
+    $env:AURA_TTS_PROVIDER = 'windows'
+    Remove-Item Env:AURA_EDGE_TTS_PYTHONPATH -ErrorAction SilentlyContinue
+}
+if ($EnableIphoneAncs) {
+    $env:AURA_ANCS_ENABLED = '1'
+}
+if ($TraceIphoneAncs) {
+    $env:AURA_ANCS_TRACE = '1'
+}
 # The Codex desktop app ships its CLI outside PATH; the newest copy is used
 # for this run only, unless AURA_CODEX_PATH or a codex on PATH already exists.
 if ($Provider -eq 'codex' -and -not $env:AURA_CODEX_PATH -and -not (Get-Command codex -ErrorAction SilentlyContinue)) {
@@ -68,9 +141,13 @@ try {
     }
     if (-not $ready) { throw 'AURA development control panel did not become ready.' }
 
-    $controlUrl = "http://127.0.0.1:4777/?token=$token"
+    $controlProvider = $Provider
+    $controlUrl = "http://127.0.0.1:4777/?token=$token&provider=$controlProvider"
     Write-Host "AURA control panel: $controlUrl"
     Write-Host "Provider: $Provider"
+    Write-Host "Speech recognition: $SpeechProvider"
+    Write-Host "Speech synthesis: $TtsProvider"
+    if ($EnableIphoneAncs) { Write-Host 'iPhone ANCS: ON (private in-memory Windows transport)' }
     if ($env:AURA_AORATON_MODE -eq 'live') {
         Write-Host 'Aoraton: your aoraton.com account (Aoraton > Sign in with Google)'
         if ($env:AURA_INCO_ENABLED -eq '1') {

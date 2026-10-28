@@ -1,5 +1,7 @@
 #pragma once
 
+#include "aura/language.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -130,6 +132,9 @@ public:
     // mailbox inside a command that wipes them; neither is kept in a snapshot.
     virtual bool unlock_keys(const std::string&) { return false; }
     virtual bool add_invite_key(const std::string&) { return false; }
+    // Mock/demo copy follows the selected UI language. Real transports keep
+    // server-provided room names and message text unchanged.
+    virtual void set_interface_language(InterfaceLanguage) {}
     virtual const AoratonSnapshot& snapshot() const noexcept = 0;
 };
 
@@ -147,17 +152,20 @@ public:
     void reject_invalid_payload(const std::string& reason) override;
     void tick(std::uint32_t elapsed_ms) override;
     void reset_mock() override;
+    void set_interface_language(InterfaceLanguage language) override;
     const AoratonSnapshot& snapshot() const noexcept override { return snapshot_; }
 
 private:
     AoratonRoom* find_room(const std::string& room_id);
     void touch();
     void update_preview(AoratonRoom& room, const std::string& text);
+    void localize_mock_copy();
 
     AoratonSnapshot snapshot_{};
     bool network_available_{true};
     std::uint32_t reconnect_elapsed_ms_{0};
     std::uint32_t next_id_{1};
+    InterfaceLanguage language_{InterfaceLanguage::Greek};
 };
 
 const char* aoraton_connection_name(AoratonConnectionState state) noexcept;

@@ -198,6 +198,26 @@ PhoneCategory category_from_id(std::uint8_t category) noexcept {
     return category <= 11 ? static_cast<PhoneCategory>(category) : PhoneCategory::Other;
 }
 
+void FetchScheduler::enqueue(std::uint32_t uid) {
+    if (queue_.size() >= kMaxQueued || std::find(queue_.begin(), queue_.end(), uid) != queue_.end()) return;
+    queue_.push_back(uid);
+}
+
+void FetchScheduler::remove(std::uint32_t uid) {
+    queue_.erase(std::remove(queue_.begin(), queue_.end(), uid), queue_.end());
+}
+
+std::optional<std::uint32_t> FetchScheduler::next(std::uint64_t now_ms) {
+    if (in_flight_ && now_ms - started_ms_ < kTimeoutMs) return std::nullopt;
+    in_flight_ = false;
+    if (queue_.empty()) return std::nullopt;
+    const auto uid = queue_.front();
+    queue_.pop_front();
+    in_flight_ = true;
+    started_ms_ = now_ms;
+    return uid;
+}
+
 std::string app_display_name(const std::string& identifier) {
     static constexpr std::pair<const char*, const char*> kKnown[]{
         {"com.apple.MobileSMS", "Messages"}, {"com.apple.mobilephone", "Phone"},

@@ -11,7 +11,7 @@ namespace aura::simulator {
 
 class OpenMeteoWeatherService {
 public:
-    std::future<WeatherGeocodingResult> search(std::string query);
+    std::future<WeatherGeocodingResult> search(std::string query, std::string language = "el");
     std::future<WeatherFetchResult> fetch(WeatherLocation location);
     void cancel() noexcept;
     const char* name() const noexcept { return "Open-Meteo"; }

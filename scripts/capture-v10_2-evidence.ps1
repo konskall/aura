@@ -21,7 +21,8 @@ $scenarios = @(
     'home','listening','thinking','speaking','answer','answer-long',
     'quick-actions','notifications','settings','audio','aoraton','aoraton-chat',
     'aoraton-compose','aoraton-confirm','offline','error','battery','diagnostics',
-    'wifi','wifi-password','wifi-connecting','wifi-failed','wifi-details','wifi-unavailable'
+    'wifi','wifi-password','wifi-connecting','wifi-failed','wifi-details','wifi-unavailable',
+    'system','system-restart','system-power-off','system-factory-reset','boot','power-off'
 )
 foreach ($scenario in $scenarios) {
     & $exe --capture $scenario --screenshot (Join-Path $screens ("aura-{0}.bmp" -f $scenario))

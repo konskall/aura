@@ -2,6 +2,7 @@
 
 #include "aura/ota_update.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -44,7 +45,7 @@ private:
 
     std::string manifest_url_;
     UpdateManifest pending_;
-    bool busy_{false};
+    std::atomic<bool> busy_{false};
     std::mutex mutex_;
     std::vector<OtaEvent> events_;
 };

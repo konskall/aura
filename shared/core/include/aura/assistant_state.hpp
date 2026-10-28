@@ -23,6 +23,7 @@ enum class EventType {
     WakeDetected,
     BeginRecording,
     EndRecording,
+    ListeningExpired,
     TurnStarted,
     PartialResult,
     FinalResult,

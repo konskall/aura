@@ -18,9 +18,42 @@ Briefing build_briefing(const BriefingInput& input) {
     if (input.status && input.status->clock_valid) briefing.period = briefing_period(input.status->hour);
     if (input.status && input.status->date_valid) {
         briefing.date_valid = true;
+        briefing.year = input.status->year;
         briefing.weekday = input.status->weekday;
         briefing.day = input.status->day;
         briefing.month = input.status->month;
+
+        const auto calendar = greek_calendar_day(input.status->year, input.status->month, input.status->day);
+        if (!calendar.namedays.empty()) {
+            BriefingItem item;
+            item.kind = BriefingItemKind::Namedays;
+            item.text = join_namedays(calendar.namedays);
+            briefing.items.push_back(std::move(item));
+        }
+        if (const auto next = next_greek_holiday(input.status->year, input.status->month, input.status->day)) {
+            BriefingItem item;
+            item.kind = BriefingItemKind::NextHoliday;
+            item.value = next->days_until;
+            item.date_year = next->date.year;
+            item.date_month = next->date.month;
+            item.date_day = next->date.day;
+            item.text = input.language == InterfaceLanguage::English ? greek_holiday_name_en(next->kind) :
+                                                                      greek_holiday_name_el(next->kind);
+            briefing.items.push_back(std::move(item));
+        }
+    }
+
+    if (input.fuel && input.fuel->state == FuelPriceState::Ready) {
+        const auto& data = input.fuel->data;
+        BriefingItem item;
+        item.kind = BriefingItemKind::FuelPrices;
+        item.value = data.unleaded95_millieur_per_litre;
+        item.high = data.diesel_millieur_per_litre;
+        item.low = data.lpg_millieur_per_litre.value_or(-1);
+        item.rain_percent = data.stale ? 1 : 0;
+        item.demo = data.demo;
+        item.text = data.period_date;
+        briefing.items.push_back(std::move(item));
     }
 
     if (input.weather && input.weather->has_data) {

@@ -10,11 +10,15 @@ simulator/runtime/*.pid
 simulator/runtime/companion/
 simulator/screenshots/*.bmp
 simulator/screenshots/*.png
+simulator/screenshots/
 shared/assets/fonts/source/
 firmware/build/
+firmware/build-production/
 firmware/managed_components/
 firmware/dependencies.lock
 firmware/sdkconfig
+firmware/sdkconfig.old
+simulator/runtime/edge-control-qa/
 .env
 *.user
 *.suo

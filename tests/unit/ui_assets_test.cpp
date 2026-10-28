@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdlib>
+#include <initializer_list>
 #include <iostream>
 #include <string_view>
 
@@ -48,6 +49,35 @@ void expect_complete_table(const Table& table, const char* name) {
                 glyph.resolved_font != aura::ui::font_caption()) {
                 std::cerr << "FAILED: " << name << " field " << index << " uses U+" << std::hex << codepoint
                           << std::dec << " which the UI fonts cannot draw: " << text << '\n';
+                std::exit(1);
+            }
+        }
+    }
+}
+
+template <typename Table>
+void expect_no_greek_copy(const Table& table, const char* name,
+                          std::initializer_list<const char*> intentional_greek = {}) {
+    const auto* fields = reinterpret_cast<const char* const*>(&table);
+    for (std::size_t index = 0; index < sizeof(Table) / sizeof(const char*); ++index) {
+        const std::string_view text(fields[index]);
+        for (std::size_t offset = 0; offset < text.size();) {
+            const auto lead = static_cast<unsigned char>(text[offset]);
+            std::uint32_t codepoint = lead;
+            std::size_t length = 1;
+            if (lead >= 0xF0) { codepoint = lead & 0x07U; length = 4; }
+            else if (lead >= 0xE0) { codepoint = lead & 0x0FU; length = 3; }
+            else if (lead >= 0xC0) { codepoint = lead & 0x1FU; length = 2; }
+            for (std::size_t next = 1; next < length && offset + next < text.size(); ++next) {
+                codepoint = (codepoint << 6U) | (static_cast<unsigned char>(text[offset + next]) & 0x3FU);
+            }
+            offset += length;
+            if (codepoint >= 0x0370 && codepoint <= 0x03FF) {
+                bool allowed = false;
+                for (const auto* value : intentional_greek) allowed = allowed || value == fields[index];
+                if (allowed) continue;
+                std::cerr << "FAILED: " << name << " field " << index
+                          << " contains untranslated Greek copy: " << text << '\n';
                 std::exit(1);
             }
         }
@@ -148,6 +178,17 @@ int main() {
     expect_complete_table(aura::l10n::visual_en_us(), "VisualStrings en_us");
     expect_complete_table(aura::l10n::companion_el_gr(), "CompanionStrings el_gr");
     expect_complete_table(aura::l10n::companion_en_us(), "CompanionStrings en_us");
+    expect_no_greek_copy(aura::l10n::en_us(), "Strings en_us");
+    const auto& visual_en = aura::l10n::visual_en_us();
+    expect_no_greek_copy(visual_en, "VisualStrings en_us",
+        {visual_en.typography_sample_1, visual_en.typography_sample_2, visual_en.typography_sample_3,
+         visual_en.typography_sample_4, visual_en.typography_sample_5, visual_en.typography_sample_6,
+         visual_en.typography_sample_7, visual_en.typography_sample_8});
+    expect(std::string_view(aura::l10n::companion_en_us().system_power_off_hint) ==
+               "Press and hold the screen to power on" &&
+           std::string_view(aura::l10n::companion_en_us().language_change_note) ==
+               "The change applies immediately across AURA.",
+           "English companion and language settings copy is populated");
 
     aura::ui::AuraMercuryView mercury;
     expect(mercury.buffer_bytes() == static_cast<std::size_t>(176 * 176 * 3),

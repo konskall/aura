@@ -39,6 +39,40 @@ test('health and authorization boundary', async () => {
   });
 });
 
+test('fuel endpoint is authenticated and fails closed when its cache is invalid', async () => {
+  const runner = { health: async () => ({ installed: true, loggedIn: true }) };
+  const snapshot = {
+    schema: 1, country: 'GR', period_date: '2026-10-19',
+    source: 'European Commission Weekly Oil Bulletin',
+    source_url: 'https://energy.ec.europa.eu/data-and-analysis/weekly-oil-bulletin_en',
+    unleaded95_millieur_per_litre: 2191, diesel_millieur_per_litre: 2126,
+    lpg_millieur_per_litre: null,
+  };
+  const server = createBridgeServer({ runner, token, speech: fakeSpeech(), fuelReader: async () => snapshot });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assert.equal((await fetch(`${base}/v1/fuel/prices`)).status, 401);
+    const response = await fetch(`${base}/v1/fuel/prices`, { headers: headers() });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, ...snapshot });
+  } finally {
+    server.cancelAll();
+    await new Promise((resolve) => server.close(resolve));
+  }
+
+  const missing = createBridgeServer({ runner, token, speech: fakeSpeech(), fuelReader: async () => null });
+  await new Promise((resolve) => missing.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${missing.address().port}/v1/fuel/prices`, { headers: headers() });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).code, 'FUEL_DATA_UNAVAILABLE');
+  } finally {
+    missing.cancelAll();
+    await new Promise((resolve) => missing.close(resolve));
+  }
+});
+
 test('one active turn, cancellation, and recovery', async () => {
   const runner = {
     health: async () => ({ installed: true, loggedIn: true }),
@@ -108,6 +142,95 @@ test('turns send device facts, history and translation as built instructions', a
   });
 });
 
+test('web search is passed only to a runner with a real search capability', async () => {
+  const seen = [];
+  const runner = {
+    supportsWebSearch: true,
+    health: async () => ({ installed: true, loggedIn: true }),
+    runTurn: async (request) => { seen.push(request); return { ok: true, text: 'results' }; },
+  };
+  await withServer(runner, async (base) => {
+    const response = await fetch(`${base}/v1/assistant/turn`, {
+      method: 'POST', headers: headers(),
+      body: JSON.stringify({ id: 'web-one', prompt: 'Ψάξε για πίτσα στη Σπάρτη', web_search: true }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(seen[0].webSearch, true);
+    assert.match(seen[0].instructions, /live web-search tool/);
+  });
+
+  // Without a search tool the question is still answered: the model says it
+  // cannot search right now and never claims live results.
+  const fallback = [];
+  const unavailable = {
+    supportsWebSearch: false,
+    health: async () => ({ provider: 'test' }),
+    runTurn: async (request) => { fallback.push(request); return { ok: true, text: 'Δεν μπορώ να ψάξω τώρα.' }; },
+  };
+  await withServer(unavailable, async (base) => {
+    const response = await fetch(`${base}/v1/assistant/turn`, {
+      method: 'POST', headers: headers(),
+      body: JSON.stringify({ id: 'web-two', prompt: 'search the web', web_search: true }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(fallback[0].webSearch, false);
+    assert.match(fallback[0].instructions, /cannot search the web right now/);
+    assert.doesNotMatch(fallback[0].instructions, /live web-search tool/);
+  });
+});
+
+test('a runner that throws frees the turn slot', async () => {
+  let calls = 0;
+  const runner = {
+    health: async () => ({ provider: 'test' }),
+    runTurnStream: async ({ onDelta }) => {
+      calls += 1;
+      if (calls === 1) {
+        onDelta('Μισή ');
+        throw new Error('provider crashed');
+      }
+      return { ok: true, text: 'Εντάξει.' };
+    },
+  };
+  await withServer(runner, async (base) => {
+    const first = await fetch(`${base}/v1/assistant/stream`, {
+      method: 'POST', headers: headers(), body: JSON.stringify({ id: 'crash-one', prompt: 'hello' }),
+      signal: AbortSignal.timeout(3000),
+    });
+    assert.match(await first.text(), /"type":"error"/);
+    const second = await fetch(`${base}/v1/assistant/stream`, {
+      method: 'POST', headers: headers(), body: JSON.stringify({ id: 'crash-two', prompt: 'hello' }),
+      signal: AbortSignal.timeout(3000),
+    });
+    assert.equal(second.status, 200);
+    assert.match(await second.text(), /"type":"done"/);
+  });
+});
+
+test('stream endpoint emits bounded NDJSON deltas and an authoritative final reply', async () => {
+  const runner = {
+    health: async () => ({ provider: 'test', configured: true }),
+    runTurnStream: async ({ onDelta }) => {
+      onDelta('Καλησπέρα. ');
+      onDelta('Τι κάνεις;');
+      return { ok: true, text: 'Καλησπέρα. Τι κάνεις;' };
+    },
+  };
+  await withServer(runner, async (base) => {
+    const response = await fetch(`${base}/v1/assistant/stream`, {
+      method: 'POST', headers: headers(), body: JSON.stringify({ id: 'stream-one', prompt: 'hello' }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /application\/x-ndjson/);
+    const events = (await response.text()).trim().split('\n').map((line) => JSON.parse(line));
+    assert.deepEqual(events, [
+      { type: 'delta', text: 'Καλησπέρα. ' },
+      { type: 'delta', text: 'Τι κάνεις;' },
+      { type: 'done', text: 'Καλησπέρα. Τι κάνεις;' },
+    ]);
+  });
+});
+
 test('speech endpoints: media type, busy guard and binary WAV replies', async () => {
   let release;
   const slow = new Promise((resolve) => { release = resolve; });
@@ -153,5 +276,29 @@ test('speech endpoints: media type, busy guard and binary WAV replies', async ()
       method: 'POST', headers: { ...headers(), 'content-type': 'audio/wav' }, body: Buffer.alloc(1_200_000),
     });
     assert.equal(tooLarge.status, 413);
+  }, speech);
+});
+
+test('speech synthesis forwards the selected profile and serves neural MP3', async () => {
+  let received;
+  const speech = fakeSpeech({
+    synthesize: async (request) => {
+      received = request;
+      return { ok: true, audio: Buffer.from('ID3neural-audio'), contentType: 'audio/mpeg' };
+    },
+  });
+  const runner = { health: async () => ({ installed: true, loggedIn: true }) };
+  await withServer(runner, async (base) => {
+    const response = await fetch(`${base}/v1/speech/synthesize`, {
+      method: 'POST', headers: headers(),
+      body: JSON.stringify({ text: 'Καλημέρα', lang: 'el', voice: 'nestoras' }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'audio/mpeg');
+    assert.equal(Buffer.from(await response.arrayBuffer()).toString('ascii', 0, 3), 'ID3');
+    assert.equal(received.text, 'Καλημέρα');
+    assert.equal(received.lang, 'el');
+    assert.equal(received.voice, 'nestoras');
+    assert.ok(received.signal instanceof AbortSignal);
   }, speech);
 });

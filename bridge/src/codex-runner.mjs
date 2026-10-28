@@ -56,7 +56,7 @@ export function createCodexRunner(options = {}) {
 
   // `instructions` is the complete text built by turn-prompt.mjs; a bare
   // `prompt` gets the default chat instructions.
-  async function runTurn({ prompt, instructions, signal }) {
+  async function runTurn({ prompt, instructions, signal, webSearch = false }) {
     if (instructions === undefined) {
       if (typeof prompt !== 'string' || Buffer.byteLength(prompt, 'utf8') === 0) {
         return { ok: false, code: 'INVALID_REQUEST' };
@@ -74,6 +74,7 @@ export function createCodexRunner(options = {}) {
 
     const args = [
       ...prefixArgs,
+      ...(webSearch ? ['--search'] : []),
       'exec', '--sandbox', 'read-only', '--ephemeral', '--ignore-user-config', '--ignore-rules',
       '--skip-git-repo-check', '--color', 'never', '-C', workdir, '-',
     ];
@@ -157,6 +158,7 @@ export function createCodexRunner(options = {}) {
   }
 
   return {
+    supportsWebSearch: true,
     runTurn,
     async health() {
       const installed = await probe(['--version']);
@@ -167,4 +169,3 @@ export function createCodexRunner(options = {}) {
 }
 
 export const limits = { MAX_PROMPT_BYTES, MAX_OUTPUT_BYTES };
-

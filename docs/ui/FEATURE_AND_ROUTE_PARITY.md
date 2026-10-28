@@ -26,6 +26,7 @@ The supplied seed and v8 directives were reviewed as history. No v9 or v9.1 dire
 | Assistant: Speaking (04) | Pause/resume; mute; stop | Audio service callbacks | LIVE SDL audio when playing | Preserve envelope-driven state |
 | Assistant: Answer (05–06) | New question; scroll long answer | `on_ask`; LVGL scroll | LIVE/MOCK text | Preserve readable, scrollable untrusted text |
 | Launcher / Quick actions (07) | Assistant; Aoraton; Audio; Notifications; Settings | Typed `UiView` navigation or `on_ask` | Mixed, truthfully labelled | Whole tile remains one hit target |
+| Launcher edit mode | Pencil → pick an app → pick its new place; ✓/Back/swipe ends | `on_launcher_app_move(from, to)`; shared `LauncherLayoutModel` | Persisted on simulator and device | Edit mode never survives leaving the grid |
 | Notifications (08) | Open message; clear | AoratonRooms; `on_notifications_clear` | DEMO | Preserve dismiss and destination |
 | Settings (09) | Provider toggle; reduced motion; Audio; Device status; Diagnostics | Typed callbacks/routes | LIVE setting state | Preserve leave/reopen state |
 | Audio (10) | Tone; DEMO WAV; pause/resume; stop; mute; volume | Audio service callbacks | LIVE Windows backend | Preserve actual PCM/WAV control |
@@ -40,7 +41,7 @@ The supplied seed and v8 directives were reviewed as history. No v9 or v9.1 dire
 
 ## Additional enum routes
 
-`Cards`, `Navigation`, `Weather`, `Tools`, `Calendar`, `Camera`, and `VoiceSettings` exist in `UiView`, but the current render switch intentionally routes them to an unavailable screen. They are **DISABLED**, not feature claims. v10 must not add decorative icons that make them appear enabled. `VoiceSettings` has a dormant prototype renderer but no working TTS/voice provider and remains unavailable.
+`Cards`, `Navigation` and `Camera` still route to explicit unavailable/setup screens and are **DISABLED**, not feature claims; the unreachable legacy `Tools` placeholder was removed on 2026-10-28, and `Calendar` is the working Organizer. Weather is backed by its validated provider model. `VoiceSettings` is now a working localized screen with persisted Athina/Nestoras profiles and a capability-gated preview callback; the optional host neural adapter and the offline Windows path both reuse the real PCM audio service.
 
 ## Event ownership invariants
 

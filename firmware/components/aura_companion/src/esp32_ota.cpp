@@ -11,6 +11,7 @@
 #include "mbedtls/sha256.h"
 #include "nvs.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 
@@ -19,6 +20,7 @@ namespace {
 
 constexpr const char* kTag = "aura-ota";
 constexpr std::size_t kManifestLimit = 2048;
+constexpr std::size_t kMaximumEvents = 24;
 
 esp_http_client_handle_t open_https(const std::string& url) {
     esp_http_client_config_t config{};
@@ -58,8 +60,8 @@ std::string Esp32Ota::running_version() const {
 }
 
 bool Esp32Ota::request_check() {
-    if (!configured() || busy_) return false;
-    busy_ = true;
+    bool expected = false;
+    if (!configured() || !busy_.compare_exchange_strong(expected, true)) return false;
     if (xTaskCreate(&Esp32Ota::check_task, "aura_ota_check", 6144, this, 3, nullptr) != pdPASS) {
         busy_ = false;
         return false;
@@ -68,8 +70,8 @@ bool Esp32Ota::request_check() {
 }
 
 bool Esp32Ota::request_install(const UpdateManifest& manifest) {
-    if (busy_) return false;
-    busy_ = true;
+    bool expected = false;
+    if (!busy_.compare_exchange_strong(expected, true)) return false;
     pending_ = manifest;
     if (xTaskCreate(&Esp32Ota::install_task, "aura_ota_install", 8192, this, 3, nullptr) != pdPASS) {
         busy_ = false;
@@ -192,6 +194,21 @@ void Esp32Ota::confirm_running_image() {
 
 void Esp32Ota::push(OtaEvent event) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (event.kind == OtaEvent::Kind::Progress && !events_.empty() &&
+        events_.back().kind == OtaEvent::Kind::Progress) {
+        events_.back() = std::move(event);
+        return;
+    }
+    if (events_.size() >= kMaximumEvents) {
+        const auto progress = std::find_if(events_.begin(), events_.end(), [](const OtaEvent& queued) {
+            return queued.kind == OtaEvent::Kind::Progress;
+        });
+        if (progress != events_.end()) events_.erase(progress);
+        else {
+            ESP_LOGE(kTag, "event queue full; preserving existing terminal events");
+            return;
+        }
+    }
     events_.push_back(std::move(event));
 }
 

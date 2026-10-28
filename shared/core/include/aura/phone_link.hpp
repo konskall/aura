@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <vector>
@@ -119,6 +120,33 @@ private:
     std::vector<std::uint8_t> buffer_;
     std::uint32_t uid_{0};
     std::string values_[5];
+};
+
+// Fetches the attributes of one notification at a time. A request whose
+// answer never arrives is given up after kTimeoutMs, so one lost reply cannot
+// stall every later notification.
+class FetchScheduler {
+public:
+    static constexpr std::uint64_t kTimeoutMs = 5000;
+    static constexpr std::size_t kMaxQueued = 32;
+
+    void enqueue(std::uint32_t uid);
+    void remove(std::uint32_t uid);
+    // The notification to request now: none while one is in flight, unless
+    // that one has timed out.
+    std::optional<std::uint32_t> next(std::uint64_t now_ms);
+    // Its answer arrived, or it could not be sent.
+    void finished() noexcept { in_flight_ = false; }
+    bool in_flight() const noexcept { return in_flight_; }
+    void clear() noexcept {
+        queue_.clear();
+        in_flight_ = false;
+    }
+
+private:
+    std::deque<std::uint32_t> queue_;
+    bool in_flight_{false};
+    std::uint64_t started_ms_{0};
 };
 
 PhoneCategory category_from_id(std::uint8_t category) noexcept;

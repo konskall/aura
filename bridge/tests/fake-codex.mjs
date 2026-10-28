@@ -19,5 +19,8 @@ if (input.includes('[large]')) {
   console.log('x'.repeat(13000));
   process.exit(0);
 }
+if (args.includes('--search')) {
+  console.log('Δοκιμαστική ασφαλής απάντηση με web search.');
+  process.exit(0);
+}
 console.log('Δοκιμαστική ασφαλής απάντηση από fake Codex.');
-

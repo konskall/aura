@@ -2,13 +2,20 @@ set(AURA_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../..")
 
 idf_component_register(
     SRCS
+        "${AURA_ROOT}/shared/core/src/app_layout.cpp"
         "${AURA_ROOT}/shared/core/src/aoraton.cpp"
         "${AURA_ROOT}/shared/core/src/assistant_companion.cpp"
         "${AURA_ROOT}/shared/core/src/briefing.cpp"
         "${AURA_ROOT}/shared/core/src/clock_services.cpp"
         "${AURA_ROOT}/shared/core/src/display_power.cpp"
         "${AURA_ROOT}/shared/core/src/sounds.cpp"
+        "${AURA_ROOT}/shared/core/src/radio.cpp"
+        "${AURA_ROOT}/shared/core/src/mp3_decoder.cpp"
+        "${AURA_ROOT}/shared/core/src/greek_calendar.cpp"
+        "${AURA_ROOT}/shared/core/src/fuel_prices.cpp"
         "${AURA_ROOT}/shared/core/src/notes.cpp"
+        "${AURA_ROOT}/shared/core/src/organizer.cpp"
+        "${AURA_ROOT}/shared/core/src/offline_commands.cpp"
         "${AURA_ROOT}/shared/core/src/ota_update.cpp"
         "${AURA_ROOT}/shared/core/src/phone_link.cpp"
         "${AURA_ROOT}/shared/core/src/text_util.cpp"
@@ -22,6 +29,7 @@ idf_component_register(
         "${AURA_ROOT}/shared/core/src/aoraton_inco.cpp"
         "${AURA_ROOT}/shared/core/src/audio_service.cpp"
         "${AURA_ROOT}/shared/core/src/assistant_state.cpp"
+        "${AURA_ROOT}/shared/core/src/assistant_stream.cpp"
         "${AURA_ROOT}/shared/core/src/device_status.cpp"
         "${AURA_ROOT}/shared/core/src/motion_model.cpp"
         "${AURA_ROOT}/shared/core/src/mock_provider.cpp"

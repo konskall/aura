@@ -38,6 +38,13 @@ bool AssistantController::dispatch(const AssistantEvent& event) {
             if (snapshot_.state != AssistantState::Listening) { accepted = false; break; }
             snapshot_.state = AssistantState::Transcribing;
             break;
+        case EventType::ListeningExpired:
+            if (snapshot_.state != AssistantState::Listening) { accepted = false; break; }
+            // An automatic follow-up window is allowed to close silently. The
+            // completed answer remains visible instead of becoming an error.
+            snapshot_.state = snapshot_.answer_text.empty() ? AssistantState::Idle : AssistantState::Responding;
+            snapshot_.partial_text.clear();
+            break;
         case EventType::TurnStarted:
             if (is_turn_active(snapshot_.state) && snapshot_.state != AssistantState::Transcribing) {
                 accepted = false;

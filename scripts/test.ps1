@@ -6,6 +6,7 @@ $repo = Split-Path -Parent $PSScriptRoot
 # The evidence validators need Python with Pillow; fail early with a clear message.
 & python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('PIL') else 1)"
 if ($LASTEXITCODE -ne 0) { throw 'Python with Pillow is required: python -m pip install --user pillow==12.2.0' }
+& (Join-Path $PSScriptRoot 'test-aura-env.ps1')
 & (Join-Path $PSScriptRoot 'build-simulator.ps1') -Configuration Release
 & (Join-Path $PSScriptRoot 'check-firmware-flags.ps1')
 

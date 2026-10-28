@@ -6,12 +6,16 @@
 
     ClockSnapshot clock{};
     NotesSnapshot notes{};
+    OrganizerSnapshot organizer{};
     VoiceSnapshot voice{};
     TranslationSnapshot translation{};
     PhoneSnapshot phone{};
     UpdateSnapshot update{};
     DisplaySnapshot display_power{};
+    RadioSnapshot radio{};
+    FuelPriceSnapshot fuel{};
     AssistantExtras extras{};
+    LauncherLayoutSnapshot launcher_layout{};
     CompanionCapabilities capabilities{};
     std::uint64_t clock_signature{0};
     UiView aod_return_view{UiView::Home};
@@ -22,6 +26,17 @@
     std::uint32_t selected_phone_uid{0};
     std::string reminder_draft;
     std::string note_draft;
+    OrganizerKind organizer_kind{OrganizerKind::Event};
+    std::string organizer_draft;
+    int organizer_step{0};
+    int organizer_day_offset{0};
+    int organizer_hour{9};
+    int organizer_minute{0};
+    std::string radio_query_draft;
+    bool radio_typing{false};
+    bool radio_reordering{false};
+    bool launcher_reordering{false};
+    std::optional<std::size_t> launcher_selected_app;
     int reminder_step{0};
     std::array<std::int64_t, 6> reminder_choices{};
     int alarm_hour{7};
@@ -40,10 +55,15 @@
     lv_obj_t* translate_ring{};
     lv_obj_t* reminder_area{};
     lv_obj_t* note_area{};
+    lv_obj_t* organizer_area{};
     lv_obj_t* update_bar{};
     lv_obj_t* update_label{};
+    lv_obj_t* radio_search_area{};
 
-    const l10n::CompanionStrings& c() const { return l10n::companion_el_gr(); }
+    const l10n::CompanionStrings& c() const {
+        return interface_language == InterfaceLanguage::English ? l10n::companion_en_us() :
+                                                                  l10n::companion_el_gr();
+    }
 
     void reset_companion_pointers() {
         timer_labels.clear();
@@ -55,8 +75,10 @@
         translate_ring = nullptr;
         reminder_area = nullptr;
         note_area = nullptr;
+        organizer_area = nullptr;
         update_bar = nullptr;
         update_label = nullptr;
+        radio_search_area = nullptr;
     }
 
     static int language_index(const std::string& code) {
@@ -159,6 +181,84 @@
         lv_obj_set_user_data(object, reinterpret_cast<void*>(value));
     }
 
+    const RadioStation* radio_station(std::uintptr_t value) const {
+        constexpr std::uintptr_t kResult = 1U << 16U;
+        const bool result = (value & kResult) != 0;
+        const auto index = static_cast<std::size_t>(value & ~kResult);
+        const auto& stations = result ? radio.results : radio.favorites;
+        return index < stations.size() ? &stations[index] : nullptr;
+    }
+
+    static void radio_station_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action() || !self->callbacks.on_radio_play) return;
+        const auto* station = self->radio_station(user_value(event));
+        if (!station) return;
+        self->callbacks.on_radio_play(*station);
+        self->return_to(UiView::Radio);
+    }
+
+    static void radio_stop_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (self->accept_action() && self->callbacks.on_radio_stop) self->callbacks.on_radio_stop();
+    }
+
+    static void radio_favorite_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action() || !self->callbacks.on_radio_favorite || self->radio.station.id.empty()) return;
+        self->callbacks.on_radio_favorite(self->radio.station);
+    }
+
+    static void radio_reorder_toggle_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        self->radio_reordering = !self->radio_reordering;
+        self->render(UiView::Radio);
+    }
+
+    static void radio_move_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action() || !self->callbacks.on_radio_move) return;
+        constexpr std::uintptr_t kDown = 1U << 16U;
+        const auto value = user_value(event);
+        self->callbacks.on_radio_move(static_cast<std::size_t>(value & ~kDown), (value & kDown) ? 1 : -1);
+    }
+
+    static void radio_search_open_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action()) return;
+        self->radio_typing = true;
+        self->navigate(UiView::RadioSearch);
+    }
+
+    void submit_radio_search() {
+        if (!radio_search_area || !callbacks.on_radio_search) return;
+        const char* value = lv_textarea_get_text(radio_search_area);
+        const std::string query = value ? value : "";
+        if (query.size() < 2) return;
+        radio_query_draft = query;
+        radio_typing = false;
+        callbacks.on_radio_search(query);
+        render(UiView::RadioSearch);
+    }
+
+    static void radio_search_submit_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action()) return;
+        self->submit_radio_search();
+    }
+
+    static void radio_search_ready_event(lv_event_t* event) {
+        lv_async_call([](void* data) { static_cast<Impl*>(data)->submit_radio_search(); },
+                      lv_event_get_user_data(event));
+    }
+
+    static void radio_query_changed_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        const char* value = lv_textarea_get_text(lv_event_get_current_target_obj(event));
+        self->radio_query_draft = value ? value : "";
+    }
+
     lv_obj_t* add_switch(lv_obj_t* row, bool checked) {
         auto* toggle = lv_switch_create(row);
         lv_obj_set_size(toggle, 64, 36);
@@ -222,8 +322,11 @@
         auto* self = self_of(event);
         auto* roller = lv_event_get_target_obj(event);
         const auto selected = static_cast<int>(lv_roller_get_selected(roller));
-        if (user_value(event) == 0) self->alarm_hour = selected;
-        else self->alarm_minute = selected;
+        const auto which = user_value(event);
+        if (which == 0) self->alarm_hour = selected;
+        else if (which == 1) self->alarm_minute = selected;
+        else if (which == 2) self->organizer_hour = selected;
+        else self->organizer_minute = selected;
     }
 
     static void alarm_daily_event(lv_event_t* event) {
@@ -416,16 +519,38 @@
         if (self->callbacks.on_ask) self->callbacks.on_ask();
     }
 
+    static void conversation_history_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        self->navigate(UiView::ConversationHistory);
+    }
+
+    static void conversation_open_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        if (!self->extras.conversation_history.empty()) self->navigate(UiView::ConversationHistory);
+        else if (self->callbacks.on_ask) self->callbacks.on_ask();
+    }
+
+    static void conversation_history_clear_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        if (self->callbacks.on_conversation_clear) self->callbacks.on_conversation_clear();
+        self->render(UiView::ConversationHistory);
+    }
+
     static void speak_answer_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (!self->accept_action() || !self->callbacks.on_speak || self->snapshot.answer_text.empty()) return;
-        self->callbacks.on_speak(self->snapshot.answer_text, "el");
+        self->callbacks.on_speak(self->snapshot.answer_text,
+                                 interface_language_code(self->interface_language));
     }
 
     static void briefing_speak_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (!self->accept_action() || !self->callbacks.on_speak) return;
-        self->callbacks.on_speak(self->briefing_speech(), "el");
+        self->callbacks.on_speak(self->briefing_speech(),
+                                 interface_language_code(self->interface_language));
     }
 
     static void translate_record_event(lv_event_t* event) {
@@ -486,7 +611,7 @@
         if (self->accept_action() && self->callbacks.on_phone_forget) self->callbacks.on_phone_forget();
     }
 
-    // value: 0 always-on, 1 raise, 2 flip, 3 timeout
+    // value: 0 always-on, 1 raise, 2 flip, 3 timeout, 4 brightness
     static void display_setting_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (!self->accept_action() || !self->callbacks.on_display_settings) return;
@@ -495,8 +620,12 @@
             case 0: settings.always_on = !settings.always_on; break;
             case 1: settings.raise_to_wake = !settings.raise_to_wake; break;
             case 2: settings.flip_to_mute = !settings.flip_to_mute; break;
-            default:
+            case 3:
                 settings.timeout_ms = settings.timeout_ms <= 15000 ? 30000 : (settings.timeout_ms <= 30000 ? 60000 : 15000);
+                break;
+            default:
+                settings.active_brightness_percent = settings.active_brightness_percent >= 100 ? 25 :
+                    ((settings.active_brightness_percent / 25) + 1) * 25;
                 break;
         }
         self->callbacks.on_display_settings(settings);
@@ -563,22 +692,82 @@
         lv_obj_add_event_cb(home_date, briefing_event, LV_EVENT_CLICKED, this);
     }
 
-    lv_obj_t* app_cell_in(lv_obj_t* parent, int column, int row, const char* title, ui::IconRole role,
-                          std::uint32_t accent, UiView view, lv_event_cb_t special = nullptr) {
+    // Edit modes belong to the screen that started them. Leaving it by any
+    // route (back, swipe, Home, a voice command) ends them; the dark always-on
+    // clock is the exception, because it only covers the screen while the
+    // owner pauses and returns to the same view.
+    void leave_edit_modes(UiView next) {
+        if (next == UiView::AlwaysOn) return;
+        if (current_view == UiView::Launcher && next != UiView::Launcher) {
+            launcher_reordering = false;
+            launcher_selected_app.reset();
+        }
+        if (current_view == UiView::Radio && next != UiView::Radio) radio_reordering = false;
+    }
+
+    static void launcher_reorder_toggle_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action() || !self->callbacks.on_launcher_app_move) return;
+        self->launcher_reordering = !self->launcher_reordering;
+        self->launcher_selected_app.reset();
+        self->render(UiView::Launcher);
+        self->show_toast(self->launcher_reordering ? self->c().app_layout_pick : self->c().app_layout_saved,
+                         self->launcher_reordering ? ui::tokens::lilac : ui::tokens::mint);
+    }
+
+    static void launcher_app_reorder_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action() || !self->launcher_reordering || !self->callbacks.on_launcher_app_move) return;
+        const auto target = static_cast<std::size_t>(user_value(event));
+        if (target >= kLauncherAppCount) return;
+        if (!self->launcher_selected_app) {
+            self->launcher_selected_app = target;
+            self->render(UiView::Launcher);
+            self->show_toast(self->c().app_layout_place, ui::tokens::lilac);
+            return;
+        }
+        const auto from = *self->launcher_selected_app;
+        self->launcher_selected_app.reset();
+        if (from == target) {
+            self->render(UiView::Launcher);
+            self->show_toast(self->c().app_layout_pick, ui::tokens::text_secondary);
+            return;
+        }
+        self->callbacks.on_launcher_app_move(from, target);
+    }
+
+    lv_obj_t* app_cell_in(lv_obj_t* parent, int column, int row, std::size_t app_index, const char* title,
+                           ui::IconRole role, std::uint32_t accent, UiView view,
+                           lv_event_cb_t special = nullptr) {
+        // Edit mode outlines every cell; a small inset keeps the outlines from
+        // touching, so the grid reads as separate tiles.
+        const int inset = launcher_reordering ? 4 : 0;
+        const int width = 144 - inset * 2;
         auto* cell = lv_button_create(parent);
         ui::reset(cell);
         lv_obj_set_clickable(cell, true);
-        lv_obj_set_size(cell, 144, 164);
-        lv_obj_set_pos(cell, kGutter + column * 144, 8 + row * 172);
+        lv_obj_set_size(cell, width, 164 - inset * 2);
+        lv_obj_set_pos(cell, kGutter + column * 144 + inset, 8 + row * 172 + inset);
         lv_obj_set_style_radius(cell, ui::tokens::radius_large, 0);
         lv_obj_set_style_bg_color(cell, ui::color(ui::tokens::surface), LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
         auto* circle = make_dot(cell, 104, accent, kTint);
-        lv_obj_align(circle, LV_ALIGN_TOP_MID, 0, 8);
+        lv_obj_align(circle, LV_ALIGN_TOP_MID, 0, 8 - inset);
         auto* icon = icon_view(circle, role, 46, accent);
         lv_obj_center(icon);
-        line(cell, title, 0, 120, 144, ui::font_caption(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);
-        if (special) {
+        line(cell, title, 0, 120 - inset, width, ui::font_caption(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);
+        if (launcher_reordering) {
+            const bool selected = launcher_selected_app && *launcher_selected_app == app_index;
+            lv_obj_set_style_border_width(cell, selected ? 3 : 1, 0);
+            lv_obj_set_style_border_color(cell, ui::color(selected ? accent : ui::tokens::surface_high), 0);
+            lv_obj_set_style_border_opa(cell, selected ? LV_OPA_COVER : LV_OPA_40, 0);
+            char position[8];
+            std::snprintf(position, sizeof(position), "%u", static_cast<unsigned>(app_index + 1));
+            auto* badge = ui::make_tag(cell, position, selected ? accent : ui::tokens::text_tertiary);
+            lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -8, 4);
+            set_value(cell, app_index);
+            lv_obj_add_event_cb(cell, launcher_app_reorder_event, LV_EVENT_CLICKED, this);
+        } else if (special) {
             lv_obj_add_event_cb(cell, special, LV_EVENT_CLICKED, this);
         } else {
             set_target(cell, view);
@@ -587,31 +776,313 @@
         return cell;
     }
 
-    // Nine apps in a 3-column grid that scrolls; the third row peeks.
+    // Apps use a 3-column scrolling grid; later rows intentionally peek.
     void render_launcher_grid() {
-        make_header(v().applications);
+        make_header(launcher_reordering ? c().app_layout_title : v().applications,
+                    launcher_reordering ? ui::IconRole::Check : ui::IconRole::Edit,
+                    launcher_reorder_toggle_event, launcher_reordering ? ui::tokens::mint : ui::tokens::lilac,
+                    static_cast<bool>(callbacks.on_launcher_app_move));
         auto* grid = make_list();
-        app_cell_in(grid, 0, 0, v().conversation, ui::IconRole::Sparkles, ui::tokens::lilac, UiView::Assistant, ask_event);
-        app_cell_in(grid, 1, 0, v().weather, ui::IconRole::Weather, ui::tokens::amber, UiView::Weather,
-                    weather_open_event);
-        app_cell_in(grid, 2, 0, v().apps_messages, ui::IconRole::Message, ui::tokens::mint, UiView::AoratonRooms);
-        app_cell_in(grid, 0, 1, c().app_clock, ui::IconRole::Timer, ui::tokens::coral, UiView::Clock);
-        app_cell_in(grid, 1, 1, c().app_notes, ui::IconRole::Notebook, ui::tokens::pink, UiView::Notes);
-        app_cell_in(grid, 2, 1, c().app_translate, ui::IconRole::Languages, ui::tokens::ice, UiView::Translate);
-        app_cell_in(grid, 0, 2, c().app_today, ui::IconRole::Sunrise, ui::tokens::magenta, UiView::Briefing,
-                    briefing_event);
-        auto* alerts = app_cell_in(grid, 1, 2, v().notifications, ui::IconRole::Notification, ui::tokens::indigo,
-                                   UiView::Notifications);
-        app_cell_in(grid, 2, 2, t().settings_title, ui::IconRole::Settings, ui::tokens::blue, UiView::Settings);
-        list_end(grid, 8 + 3 * 172, 8);
-        if (notification_total() > 0) {
-            char count[12];
-            std::snprintf(count, sizeof(count), "%d", notification_total());
-            auto* badge = ui::make_tag(alerts, count, ui::tokens::pink);
-            lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
-            lv_obj_set_style_text_color(badge, ui::color(ui::tokens::text), 0);
-            lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -12, 4);
+        for (std::size_t index = 0; index < launcher_layout.order.size(); ++index) {
+            const int column = static_cast<int>(index % 3);
+            const int row = static_cast<int>(index / 3);
+            lv_obj_t* cell = nullptr;
+            switch (launcher_layout.order[index]) {
+                case LauncherApp::Conversation:
+                    cell = app_cell_in(grid, column, row, index, v().conversation, ui::IconRole::Sparkles,
+                                       ui::tokens::lilac, UiView::Assistant, conversation_open_event);
+                    if (!launcher_reordering && !extras.conversation_history.empty()) {
+                        char count[8];
+                        std::snprintf(count, sizeof(count), "%u",
+                                      static_cast<unsigned>(extras.conversation_history.size()));
+                        auto* badge = ui::make_tag(cell, count, ui::tokens::lilac);
+                        lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -10, 6);
+                    }
+                    break;
+                case LauncherApp::Weather:
+                    cell = app_cell_in(grid, column, row, index, v().weather, ui::IconRole::Weather,
+                                       ui::tokens::amber, UiView::Weather, weather_open_event);
+                    break;
+                case LauncherApp::Messages:
+                    cell = app_cell_in(grid, column, row, index, v().apps_messages, ui::IconRole::Message,
+                                       ui::tokens::mint, UiView::AoratonRooms);
+                    break;
+                case LauncherApp::Clock:
+                    cell = app_cell_in(grid, column, row, index, c().app_clock, ui::IconRole::Timer,
+                                       ui::tokens::coral, UiView::Clock);
+                    break;
+                case LauncherApp::Notes:
+                    cell = app_cell_in(grid, column, row, index, c().app_notes, ui::IconRole::Notebook,
+                                       ui::tokens::pink, UiView::Notes);
+                    break;
+                case LauncherApp::Translate:
+                    cell = app_cell_in(grid, column, row, index, c().app_translate, ui::IconRole::Languages,
+                                       ui::tokens::ice, UiView::Translate);
+                    break;
+                case LauncherApp::Today:
+                    cell = app_cell_in(grid, column, row, index, c().app_today, ui::IconRole::Sunrise,
+                                       ui::tokens::magenta, UiView::Briefing, briefing_event);
+                    break;
+                case LauncherApp::Radio: {
+                    cell = app_cell_in(grid, column, row, index, c().app_radio, ui::IconRole::Audio,
+                                       ui::tokens::magenta, UiView::Radio);
+                    const bool ready = callbacks.on_radio_play && callbacks.on_radio_stop && callbacks.on_radio_search;
+                    ui::set_button_disabled(cell, !launcher_reordering && !ready);
+                    break;
+                }
+                case LauncherApp::Notifications:
+                    cell = app_cell_in(grid, column, row, index, v().notifications, ui::IconRole::Notification,
+                                       ui::tokens::indigo, UiView::Notifications);
+                    if (!launcher_reordering && notification_total() > 0) {
+                        char count[12];
+                        std::snprintf(count, sizeof(count), "%d", notification_total());
+                        auto* badge = ui::make_tag(cell, count, ui::tokens::pink);
+                        lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
+                        lv_obj_set_style_text_color(badge, ui::color(ui::tokens::text), 0);
+                        lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -12, 4);
+                    }
+                    break;
+                case LauncherApp::Settings:
+                    cell = app_cell_in(grid, column, row, index, t().settings_title, ui::IconRole::Settings,
+                                       ui::tokens::blue, UiView::Settings);
+                    break;
+                case LauncherApp::Organizer:
+                    cell = app_cell_in(grid, column, row, index, c().app_organizer, ui::IconRole::Calendar,
+                                       ui::tokens::indigo, UiView::Calendar);
+                    break;
+                case LauncherApp::Count: break;
+            }
+            (void)cell;
         }
+        const int rows = static_cast<int>((launcher_layout.order.size() + 2U) / 3U);
+        list_end(grid, 8 + rows * 172, 8);
+    }
+
+    static std::uintptr_t organizer_value(OrganizerKind kind, std::uint32_t id) {
+        return (static_cast<std::uintptr_t>(kind) << 30U) | id;
+    }
+
+    static OrganizerKind organizer_kind_from(std::uintptr_t value) {
+        return static_cast<OrganizerKind>((value >> 30U) & 0x3U);
+    }
+
+    static std::uint32_t organizer_id_from(std::uintptr_t value) {
+        return static_cast<std::uint32_t>(value & 0x3FFFFFFFU);
+    }
+
+    static void organizer_tab_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        self->organizer_kind = static_cast<OrganizerKind>(user_value(event));
+        self->render(UiView::Calendar);
+    }
+
+    static void organizer_new_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        self->organizer_step = 0;
+        self->organizer_draft.clear();
+        // Every new event starts from today: an earlier "Tomorrow" never sticks.
+        self->organizer_day_offset = 0;
+        if (self->clock.clock_valid) {
+            const auto now = self->clock.now_minute;
+            const auto start = organizer_default_start(now);
+            const auto when = from_minute_index(start);
+            self->organizer_day_offset = static_cast<int>(start / 1440 - now / 1440);
+            self->organizer_hour = when.hour;
+            self->organizer_minute = when.minute;
+        }
+        self->navigate(UiView::OrganizerNew);
+    }
+
+    static void organizer_text_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        const char* text = lv_textarea_get_text(lv_event_get_current_target_obj(event));
+        self->organizer_draft = text ? text : "";
+    }
+
+    static void organizer_save_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        const auto clean = sanitize_text(self->organizer_draft, OrganizerModel::kMaxTextBytes, true);
+        if (clean.empty()) return;
+        if (self->organizer_kind == OrganizerKind::Event && self->organizer_step == 0) {
+            if (!self->clock.clock_valid) {
+                self->show_toast(self->c().organizer_no_time, ui::tokens::coral);
+                return;
+            }
+            self->organizer_step = 1;
+            self->render(UiView::OrganizerNew);
+            return;
+        }
+        bool saved = false;
+        if (self->organizer_kind == OrganizerKind::Event && self->callbacks.on_organizer_event_add) {
+            const auto day = self->clock.now_minute / 1440 + self->organizer_day_offset;
+            const auto start = day * 1440 + self->organizer_hour * 60 + self->organizer_minute;
+            if (start < self->clock.now_minute) {
+                self->show_toast(self->c().organizer_past_time, ui::tokens::coral);
+                return;
+            }
+            saved = self->callbacks.on_organizer_event_add(clean, start, 60);
+        } else if (self->organizer_kind == OrganizerKind::Task && self->callbacks.on_organizer_task_add) {
+            saved = self->callbacks.on_organizer_task_add(clean);
+        } else if (self->organizer_kind == OrganizerKind::Shopping && self->callbacks.on_organizer_shopping_add) {
+            saved = self->callbacks.on_organizer_shopping_add(clean);
+        }
+        if (saved) {
+            self->organizer_draft.clear();
+            self->organizer_step = 0;
+            self->return_to(UiView::Calendar);
+            self->show_toast(self->c().organizer_saved, ui::tokens::mint);
+        } else {
+            self->show_toast(self->c().organizer_full, ui::tokens::coral);
+        }
+    }
+
+    static void organizer_day_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        self->organizer_day_offset = static_cast<int>(user_value(event));
+        self->render(UiView::OrganizerNew);
+    }
+
+    static void organizer_toggle_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action() || !self->callbacks.on_organizer_toggle) return;
+        const auto value = user_value(event);
+        self->callbacks.on_organizer_toggle(organizer_kind_from(value), organizer_id_from(value));
+    }
+
+    static void organizer_remove_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action() || !self->callbacks.on_organizer_remove) return;
+        const auto value = user_value(event);
+        self->callbacks.on_organizer_remove(organizer_kind_from(value), organizer_id_from(value));
+    }
+
+    const char* radio_status_text() const {
+        switch (radio.state) {
+            case RadioState::Connecting: return c().radio_connecting;
+            case RadioState::Playing: return radio.title.empty() ? c().radio_playing : radio.title.c_str();
+            case RadioState::Error: return c().radio_stream_error;
+            case RadioState::Idle: break;
+        }
+        return c().radio_stopped;
+    }
+
+    void render_radio_station_rows(lv_obj_t* list, const std::vector<RadioStation>& stations,
+                                   int& y, bool results) {
+        constexpr std::uintptr_t kResult = 1U << 16U;
+        for (std::size_t index = 0; index < stations.size(); ++index) {
+            const auto& station = stations[index];
+            char detail[48];
+            const char* subtitle = nullptr;
+            if (station.bitrate > 0) {
+                std::snprintf(detail, sizeof(detail), c().radio_kbps_format, station.bitrate);
+                subtitle = detail;
+            }
+            const bool reorder = !results && radio_reordering && callbacks.on_radio_move;
+            auto* row = list_row(list, y, station.name.c_str(), subtitle, ui::IconRole::Audio,
+                                 kIconAccents[index % kIconAccents.size()], kRowHeight, reorder ? 218 : 0);
+            if (reorder) {
+                constexpr std::uintptr_t kDown = 1U << 16U;
+                auto* up = round_button(row, 326, 24, 40, ui::IconRole::ChevronLeft, ui::tokens::ice,
+                                        radio_move_event);
+                auto* down = round_button(row, 374, 24, 40, ui::IconRole::ChevronLeft, ui::tokens::lilac,
+                                          radio_move_event);
+                set_value(up, index);
+                set_value(down, kDown | index);
+                if (auto* icon = lv_obj_get_child(up, 0)) lv_image_set_rotation(icon, 900);
+                if (auto* icon = lv_obj_get_child(down, 0)) lv_image_set_rotation(icon, 2700);
+                ui::set_button_disabled(up, index == 0);
+                ui::set_button_disabled(down, index + 1 == stations.size());
+            } else {
+                add_chevron(row);
+                set_value(row, (results ? kResult : 0U) | index);
+                lv_obj_set_clickable(row, true);
+                lv_obj_add_event_cb(row, radio_station_event, LV_EVENT_CLICKED, this);
+            }
+            y += kRowPitch;
+        }
+    }
+
+    void render_radio() {
+        make_header(c().radio_title, ui::IconRole::Search, radio_search_open_event, ui::tokens::blue,
+                    static_cast<bool>(callbacks.on_radio_search));
+        auto* list = make_list();
+        int y = 8;
+        if (!radio.station.id.empty()) {
+            auto* current = list_row(list, y, radio.station.name.c_str(), radio_status_text(), ui::IconRole::Audio,
+                                     radio.state == RadioState::Error ? ui::tokens::coral : ui::tokens::magenta,
+                                     104, 300);
+            if (radio.state == RadioState::Playing) {
+                auto* playing = make_dot(current, 12, ui::tokens::mint);
+                lv_obj_align(playing, LV_ALIGN_RIGHT_MID, -4, 0);
+            }
+            y += 116;
+            auto* stop = pill(list, c().radio_stop, ui::ButtonTone::Secondary, kGutter, y, kHalfWidth,
+                              radio_stop_event);
+            ui::set_button_disabled(stop, radio.state == RadioState::Idle || !callbacks.on_radio_stop);
+            const bool favorite = std::any_of(radio.favorites.begin(), radio.favorites.end(), [&](const auto& item) {
+                return item.id == radio.station.id;
+            });
+            auto* fav = pill(list, favorite ? c().radio_remove_favorite : c().radio_add_favorite,
+                             ui::ButtonTone::Secondary, kGutter + kHalfWidth + 16, y, kHalfWidth,
+                             radio_favorite_event);
+            ui::set_button_disabled(fav, !callbacks.on_radio_favorite);
+            y += kButtonHeight + 20;
+        }
+        line(list, c().radio_favorites, kGutter + 4, y, kWidth - 8, ui::font_caption(),
+             ui::tokens::text_secondary);
+        y += 40;
+        if (radio.favorites.size() > 1 && callbacks.on_radio_move) {
+            pill(list, radio_reordering ? c().radio_reorder_done : c().radio_reorder,
+                 ui::ButtonTone::Secondary, kGutter, y, kWidth, radio_reorder_toggle_event);
+            y += kButtonHeight + 12;
+        }
+        render_radio_station_rows(list, radio.favorites, y, false);
+        list_end(list, y);
+    }
+
+    void render_radio_search() {
+        if (radio_typing) {
+            make_header(c().radio_search, ui::IconRole::Search, radio_search_submit_event, ui::tokens::blue,
+                        static_cast<bool>(callbacks.on_radio_search));
+            radio_search_area = make_text_input(kGutter, 100, kWidth, 72, c().radio_search_placeholder, true);
+            lv_textarea_set_max_length(radio_search_area, 60);
+            if (!radio_query_draft.empty()) lv_textarea_set_text(radio_search_area, radio_query_draft.c_str());
+            lv_obj_add_event_cb(radio_search_area, radio_query_changed_event, LV_EVENT_VALUE_CHANGED, this);
+            lv_obj_add_event_cb(radio_search_area, radio_search_ready_event, LV_EVENT_READY, this);
+            make_form_keyboard(radio_search_area, ui::KeyboardProfile::Text, 184);
+            return;
+        }
+        make_header(c().radio_search, ui::IconRole::Search, radio_search_open_event, ui::tokens::blue,
+                    static_cast<bool>(callbacks.on_radio_search));
+        if (radio.searching) {
+            auto* spinner = spinner_arc(content, 96, ui::tokens::blue, 6);
+            lv_obj_align(spinner, LV_ALIGN_CENTER, 0, -16);
+            state_text(300, c().radio_search, radio.query.c_str());
+            return;
+        }
+        if (!radio.search_error.empty()) {
+            state_symbol(72, 128, ui::IconRole::Offline, ui::tokens::coral);
+            // The internal code is for developers; the owner reads what to do.
+            state_text(228, c().radio_directory_error,
+                       developer_mode ? radio.search_error.c_str() : c().radio_search_retry);
+            return;
+        }
+        if (radio.results.empty()) {
+            state_symbol(72, 132, ui::IconRole::Search, ui::tokens::text_tertiary);
+            state_text(236, c().radio_no_results, radio.query.empty() ? nullptr : radio.query.c_str());
+            return;
+        }
+        auto* list = make_list();
+        int y = 8;
+        line(list, c().radio_results, kGutter + 4, y, kWidth - 8, ui::font_caption(),
+             ui::tokens::text_secondary);
+        y += 40;
+        render_radio_station_rows(list, radio.results, y, true);
+        list_end(list, y);
     }
 
     std::string phone_summary() const {
@@ -641,10 +1112,6 @@
         auto* wake = list_row(list, y, c().wake_word, capabilities.wake_word ? c().enabled : c().wake_word_unavailable,
                               ui::IconRole::Ear, ui::tokens::lilac);
         if (!capabilities.wake_word) lv_obj_set_style_opa(wake, LV_OPA_60, 0);
-        y += kRowPitch;
-        char version[64];
-        std::snprintf(version, sizeof(version), c().update_version_format, update.current_version.c_str());
-        settings_row(list, y, c().update_title, version, ui::IconRole::Download, ui::tokens::blue, UiView::Update);
         return y + kRowPitch;
     }
 
@@ -699,6 +1166,26 @@
             }
             case AssistantActionType::Note:
                 return {ui::IconRole::Notebook, ui::tokens::pink, c().action_note_title, action.text};
+            case AssistantActionType::Task:
+                return {ui::IconRole::Confirmation, ui::tokens::mint, c().action_task_title, action.text};
+            case AssistantActionType::Shopping:
+                return {ui::IconRole::List, ui::tokens::amber, c().action_shopping_title, action.text};
+            case AssistantActionType::CalendarEvent: {
+                const auto when = from_minute_index(action.start_minute);
+                std::snprintf(text, sizeof(text), "%02d/%02d · %02d:%02d", when.day, when.month,
+                              when.hour, when.minute);
+                return {ui::IconRole::Calendar, ui::tokens::blue, action.text, text};
+            }
+            case AssistantActionType::Volume:
+                std::snprintf(text, sizeof(text), "%d%%", action.value);
+                return {ui::IconRole::VolumeUp, ui::tokens::mint, c().action_volume_title, text};
+            case AssistantActionType::Brightness:
+                std::snprintf(text, sizeof(text), "%d%%", action.value);
+                return {ui::IconRole::Brightness, ui::tokens::amber, c().action_brightness_title, text};
+            case AssistantActionType::Mute:
+                return {action.value != 0 ? ui::IconRole::Muted : ui::IconRole::VolumeUp,
+                        ui::tokens::lilac,
+                        action.value != 0 ? c().action_mute_title : c().action_unmute_title, {}};
             case AssistantActionType::Message:
             case AssistantActionType::None: break;
         }
@@ -738,8 +1225,8 @@
                  action_decline_event);
         } else if (extras.memory_turns > 0 && callbacks.on_conversation_clear) {
             pill(content, t().ask_again, ui::ButtonTone::Primary, kGutter, kActionY, kHalfWidth, ask_event);
-            pill(content, c().new_conversation, ui::ButtonTone::Secondary, kGutter + kHalfWidth + 16, kActionY,
-                 kHalfWidth, conversation_clear_event);
+            pill(content, c().conversation_history, ui::ButtonTone::Secondary, kGutter + kHalfWidth + 16, kActionY,
+                 kHalfWidth, conversation_history_event);
         } else {
             pill(content, t().ask_again, ui::ButtonTone::Primary, kGutter, kActionY, kWidth, ask_event);
         }
@@ -1048,6 +1535,165 @@
         }
     }
 
+    // ---- Calendar, tasks and shopping --------------------------------------
+
+    void organizer_delete_button(lv_obj_t* row, OrganizerKind kind, std::uint32_t id) {
+        auto* remove = round_button(row, 356, 16, 56, ui::IconRole::Delete, ui::tokens::coral,
+                                    organizer_remove_event, true);
+        set_value(remove, organizer_value(kind, id));
+    }
+
+    int conversation_bubble(lv_obj_t* list, int y, const char* speaker, const std::string& text,
+                            std::uint32_t accent, bool mine) {
+        auto* card = lv_obj_create(list);
+        ui::reset(card);
+        ui::style_platter(card, accent, ui::tokens::radius_large, false);
+        lv_obj_set_size(card, 384, LV_SIZE_CONTENT);
+        lv_obj_set_pos(card, mine ? 80 : kGutter, y);
+        lv_obj_set_layout(card, LV_LAYOUT_FLEX);
+        lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_all(card, 16, 0);
+        lv_obj_set_style_pad_row(card, 8, 0);
+        auto* who = ui::make_label(card, speaker, accent, ui::font_caption());
+        lv_obj_set_width(who, 352);
+        auto* body = ui::make_label(card, text.c_str(), ui::tokens::text, ui::font_body());
+        lv_obj_set_width(body, 352);
+        lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
+        lv_obj_update_layout(card);
+        return y + lv_obj_get_height(card) + 12;
+    }
+
+    void render_conversation_history() {
+        make_header(c().conversation_history, ui::IconRole::Delete, conversation_history_clear_event,
+                    ui::tokens::coral, !extras.conversation_history.empty() &&
+                    static_cast<bool>(callbacks.on_conversation_clear));
+        if (extras.conversation_history.empty()) {
+            state_symbol(112, 128, ui::IconRole::Chat, ui::tokens::lilac);
+            state_text(264, c().conversation_empty, nullptr);
+            pill(content, c().conversation_ask, ui::ButtonTone::Primary, kGutter, kActionY, kWidth, ask_event);
+            return;
+        }
+        auto* list = make_list();
+        int y = 8;
+        for (const auto& turn : extras.conversation_history) {
+            y = conversation_bubble(list, y, c().conversation_you, turn.question, ui::tokens::blue, true);
+            y = conversation_bubble(list, y, c().conversation_aura, turn.answer, ui::tokens::lilac, false);
+        }
+        y += 4;
+        pill(list, c().conversation_ask, ui::ButtonTone::Primary, kGutter, y, kHalfWidth, ask_event);
+        pill(list, c().new_conversation, ui::ButtonTone::Secondary, kGutter + kHalfWidth + 16, y,
+             kHalfWidth, conversation_clear_event);
+        list_end(list, y + kButtonHeight, 20);
+        lv_obj_update_layout(list);
+        lv_obj_scroll_to_y(list, lv_obj_get_scroll_bottom(list), LV_ANIM_OFF);
+    }
+
+    void render_organizer() {
+        make_header(c().app_organizer, ui::IconRole::Plus, organizer_new_event, ui::tokens::blue);
+        struct Tab { OrganizerKind kind; const char* title; };
+        const Tab tabs[]{{OrganizerKind::Event, c().organizer_events},
+                         {OrganizerKind::Task, c().organizer_tasks},
+                         {OrganizerKind::Shopping, c().organizer_shopping}};
+        for (int index = 0; index < 3; ++index) {
+            // Compact tabs end at y 132, above the list that starts at 140.
+            auto* tab = pill(content, tabs[index].title,
+                             organizer_kind == tabs[index].kind ? ui::ButtonTone::Primary : ui::ButtonTone::Secondary,
+                             kGutter + index * 144, 76, 136, organizer_tab_event);
+            lv_obj_set_height(tab, 56);
+            if (auto* tab_label = lv_obj_get_child(tab, 0)) {
+                lv_obj_set_style_text_font(tab_label, ui::font_caption(), 0);
+            }
+            set_value(tab, static_cast<std::uintptr_t>(tabs[index].kind));
+        }
+
+        auto* list = make_list(140, 328);
+        int y = 0;
+        if (organizer_kind == OrganizerKind::Event) {
+            for (const auto& event : organizer.events) {
+                if (clock.clock_valid && event.start_minute + event.duration_minutes < clock.now_minute) continue;
+                const auto when = when_text(event.start_minute);
+                // "45 λεπτά", "1 h": short enough beside the delete button.
+                const auto minutes = static_cast<unsigned>(event.duration_minutes);
+                char duration[32];
+                if (minutes >= 60U && minutes % 60U == 0U) {
+                    std::snprintf(duration, sizeof(duration), "%u %s", minutes / 60U,
+                                  minutes == 60U ? c().unit_hour_short : c().unit_hours_short);
+                } else {
+                    std::snprintf(duration, sizeof(duration), "%u %s", minutes, c().unit_minutes_short);
+                }
+                char detail[128];
+                std::snprintf(detail, sizeof(detail), "%s · %s", when.c_str(), duration);
+                auto* row = list_row(list, y, event.title.c_str(), detail, ui::IconRole::Calendar,
+                                     ui::tokens::indigo, kRowHeight, 248);
+                organizer_delete_button(row, OrganizerKind::Event, event.id);
+                y += kRowPitch;
+            }
+        } else if (organizer_kind == OrganizerKind::Task) {
+            for (const auto& item : organizer.tasks) {
+                auto* row = list_row(list, y, item.text.c_str(),
+                                     item.completed ? c().done : c().organizer_tap_complete,
+                                     item.completed ? ui::IconRole::Check : ui::IconRole::List,
+                                     item.completed ? ui::tokens::mint : ui::tokens::ice,
+                                     kRowHeight, 248);
+                tappable(row, organizer_toggle_event, organizer_value(OrganizerKind::Task, item.id));
+                organizer_delete_button(row, OrganizerKind::Task, item.id);
+                y += kRowPitch;
+            }
+        } else {
+            for (const auto& item : organizer.shopping) {
+                auto* row = list_row(list, y, item.text.c_str(),
+                                     item.checked ? c().done : c().organizer_tap_complete,
+                                     item.checked ? ui::IconRole::Check : ui::IconRole::List,
+                                     item.checked ? ui::tokens::mint : ui::tokens::amber,
+                                     kRowHeight, 248);
+                tappable(row, organizer_toggle_event, organizer_value(OrganizerKind::Shopping, item.id));
+                organizer_delete_button(row, OrganizerKind::Shopping, item.id);
+                y += kRowPitch;
+            }
+        }
+        if (y == 0) {
+            const char* empty = organizer_kind == OrganizerKind::Event ? c().organizer_events_empty :
+                                (organizer_kind == OrganizerKind::Task ? c().organizer_tasks_empty :
+                                                                        c().organizer_shopping_empty);
+            line(list, empty, 24, 116, kWidth - 48, ui::font_body(), ui::tokens::text_secondary,
+                 LV_TEXT_ALIGN_CENTER);
+            y = 260;
+        }
+        list_end(list, y);
+    }
+
+    void render_organizer_new() {
+        const char* title = organizer_kind == OrganizerKind::Event ? c().organizer_new_event :
+                            (organizer_kind == OrganizerKind::Task ? c().organizer_new_task :
+                                                                    c().organizer_new_shopping);
+        if (organizer_kind != OrganizerKind::Event || organizer_step == 0) {
+            make_header(title, ui::IconRole::Check, organizer_save_event, ui::tokens::blue);
+            const char* placeholder = organizer_kind == OrganizerKind::Event ? c().organizer_event_placeholder :
+                                      (organizer_kind == OrganizerKind::Task ? c().organizer_task_placeholder :
+                                                                              c().organizer_shopping_placeholder);
+            organizer_area = make_text_input(kGutter, 100, kWidth, 72, placeholder, true);
+            if (!organizer_draft.empty()) lv_textarea_set_text(organizer_area, organizer_draft.c_str());
+            lv_textarea_set_max_length(organizer_area, static_cast<std::uint32_t>(OrganizerModel::kMaxTextBytes));
+            lv_obj_add_event_cb(organizer_area, organizer_text_event, LV_EVENT_VALUE_CHANGED, this);
+            lv_obj_add_event_cb(organizer_area, organizer_save_event, LV_EVENT_READY, this);
+            make_form_keyboard(organizer_area, ui::KeyboardProfile::Text, 184);
+            return;
+        }
+        make_header(c().organizer_choose_time);
+        make_roller(24, organizer_hour, 72, 2);
+        make_roller(60, organizer_minute, 256, 3);
+        label(content, ":", 224, 150, 32, ui::font_title(), ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
+        auto* today = pill(content, c().today,
+                           organizer_day_offset == 0 ? ui::ButtonTone::Primary : ui::ButtonTone::Secondary,
+                           kGutter, 300, kHalfWidth, organizer_day_event);
+        set_value(today, 0);
+        auto* tomorrow = pill(content, c().tomorrow,
+                              organizer_day_offset == 1 ? ui::ButtonTone::Primary : ui::ButtonTone::Secondary,
+                              kGutter + kHalfWidth + 16, 300, kHalfWidth, organizer_day_event);
+        set_value(tomorrow, 1);
+        pill(content, c().save, ui::ButtonTone::Primary, kGutter, kActionY, kWidth, organizer_save_event);
+    }
+
     // ---- Notes -------------------------------------------------------------
 
     static std::string first_line(const std::string& text) {
@@ -1190,15 +1836,18 @@
         std::string title;
         std::string detail;
         UiView target;
+        bool interactive{true};
     };
 
     Briefing current_briefing() const {
         BriefingInput input;
         input.status = &status;
         input.weather = &weather;
+        input.fuel = &fuel;
         input.clock = &clock;
         input.unread_messages = static_cast<int>(aoraton.notifications.size()) + snapshot.notification_count;
         input.phone_notifications = static_cast<int>(phone.notifications.size());
+        input.language = interface_language;
         return build_briefing(input);
     }
 
@@ -1218,6 +1867,45 @@
         char detail[160];
         for (const auto& item : briefing.items) {
             switch (item.kind) {
+                case BriefingItemKind::Namedays:
+                    lines.push_back({ui::IconRole::Sparkles, ui::tokens::lilac, c().briefing_namedays_title,
+                                     item.text, UiView::Briefing, false});
+                    break;
+                case BriefingItemKind::NextHoliday:
+                    std::snprintf(title, sizeof(title), "%s", c().briefing_next_holiday_format);
+                    if (item.value == 0) {
+                        std::snprintf(detail, sizeof(detail), c().briefing_holiday_today, item.text.c_str());
+                    } else {
+                        std::snprintf(detail, sizeof(detail), c().briefing_holiday_date_format,
+                                      item.text.c_str(), item.date_day, item.date_month);
+                    }
+                    lines.push_back({ui::IconRole::Calendar, ui::tokens::ice, title, detail,
+                                     UiView::Briefing, false});
+                    break;
+                case BriefingItemKind::FuelPrices: {
+                    const auto price = [](int millieur) {
+                        if (millieur < 0) return std::string("—");
+                        char value[16];
+                        std::snprintf(value, sizeof(value), "%d,%03d", millieur / 1000, millieur % 1000);
+                        return std::string(value);
+                    };
+                    std::snprintf(detail, sizeof(detail), c().briefing_fuel_prices_format,
+                                  price(item.value).c_str(), price(item.high).c_str(), price(item.low).c_str());
+                    lines.push_back({ui::IconRole::Droplet, ui::tokens::amber, c().briefing_fuel_title,
+                                     detail, UiView::Briefing, false});
+                    std::string period = item.text;
+                    if (period.size() == 10 && period[4] == '-' && period[7] == '-') {
+                        period = period.substr(8, 2) + "/" + period.substr(5, 2);
+                    }
+                    std::string badge;
+                    if (item.demo) badge += " · DEMO";
+                    if (item.rain_percent > 0) badge += c().briefing_fuel_stale;
+                    std::snprintf(detail, sizeof(detail), c().briefing_fuel_source_date_format,
+                                  period.c_str(), badge.c_str());
+                    lines.push_back({ui::IconRole::Information, ui::tokens::ice, c().briefing_fuel_source,
+                                     detail, UiView::Briefing, false});
+                    break;
+                }
                 case BriefingItemKind::Weather: {
                     std::snprintf(title, sizeof(title), "%d° · %s", item.value, weather_condition_text(item.condition));
                     std::snprintf(detail, sizeof(detail), c().briefing_weather_detail_format, item.text.c_str(),
@@ -1325,8 +2013,10 @@
         for (const auto& item : lines) {
             auto* row = list_row(list, y, item.title.c_str(), item.detail.empty() ? nullptr : item.detail.c_str(),
                                  item.role, item.accent);
-            add_chevron(row);
-            tappable(row, briefing_line_event, static_cast<std::uintptr_t>(item.target));
+            if (item.interactive) {
+                add_chevron(row);
+                tappable(row, briefing_line_event, static_cast<std::uintptr_t>(item.target));
+            }
             y += kRowPitch;
         }
         list_end(list, y);
@@ -1343,25 +2033,30 @@
     // its own microphone. The top half is drawn upside down for the other person.
     void translate_half(lv_obj_t* parent, int top, TranslateSide side, int language, const std::string& text,
                         bool placeholder) {
-        line(parent, c().language_names[language], kGutter, top + 12, 300, ui::font_caption(),
-             ui::tokens::text_tertiary);
-        auto* body = label(parent, text.c_str(), kGutter, top + 44, 320, text.size() > 60 ? ui::font_body() :
-                           ui::font_title(), placeholder ? ui::tokens::text_secondary : ui::tokens::text);
-        lv_obj_set_height(body, 152);
-        lv_label_set_long_mode(body, LV_LABEL_LONG_DOT);
         const bool recording = voice.state == VoiceCaptureState::Recording && voice.purpose == VoicePurpose::Translate &&
                                translation_active_side() == side;
         const std::uint32_t accent = recording ? ui::tokens::coral :
             (side == TranslateSide::Mine ? ui::tokens::ice : ui::tokens::magenta);
-        auto* mic = round_button(parent, 368, top + 88, 88, recording ? ui::IconRole::Stop : ui::IconRole::Microphone,
+        auto* card = lv_obj_create(parent);
+        ui::reset(card);
+        ui::style_platter(card, accent, ui::tokens::radius_large, false);
+        lv_obj_set_size(card, kWidth, 188);
+        lv_obj_set_pos(card, kGutter, top + 8);
+        auto* language_tag = ui::make_tag(card, c().language_names[language], accent);
+        lv_obj_set_pos(language_tag, 16, 14);
+        auto* body = label(card, text.c_str(), 16, 52, 316, text.size() > 60 ? ui::font_body() :
+                           ui::font_title(), placeholder ? ui::tokens::text_secondary : ui::tokens::text);
+        lv_obj_set_height(body, 118);
+        lv_label_set_long_mode(body, LV_LABEL_LONG_DOT);
+        auto* mic = round_button(card, 344, 56, 72, recording ? ui::IconRole::Stop : ui::IconRole::Microphone,
                                  accent, translate_record_event);
         set_value(mic, side == TranslateSide::Mine ? 0U : 1U);
         ui::set_button_disabled(mic, !capabilities.microphone || !capabilities.speech_recognition ||
                                      !callbacks.on_translate_record);
         if (recording) {
-            translate_ring = spinner_arc(parent, 104, ui::tokens::coral, 4);
+            translate_ring = spinner_arc(card, 84, ui::tokens::coral, 4);
             lv_arc_set_angles(translate_ring, 0, 360);
-            lv_obj_set_pos(translate_ring, 360, top + 80);
+            lv_obj_set_pos(translate_ring, 338, 50);
         }
     }
 
@@ -1429,7 +2124,7 @@
         char languages[32];
         std::snprintf(languages, sizeof(languages), "%s  \xE2\x86\x92  %s", c().language_codes[mine],
                       c().language_codes[theirs]);
-        auto* swap = pill(content, languages, ui::ButtonTone::Secondary, 152, 208, 176, translate_language_event);
+        auto* swap = pill(content, languages, ui::ButtonTone::Secondary, 124, 208, 232, translate_language_event);
         lv_obj_set_height(swap, ui::tokens::HEADER_BUTTON);
         ui::set_button_disabled(swap, !callbacks.on_translate_language);
     }
@@ -1470,13 +2165,15 @@
         const std::uint32_t tint = has_weather && sky.is_day ? weather_condition_accent(sky.condition) :
                                                                ui::tokens::indigo;
         const int total = notification_total();
+        const bool radio_on = radio.state == RadioState::Playing || radio.state == RadioState::Connecting;
         const auto alarm = next_alarm(clock);
         // The rows stack from the weather down; the whole block is centred on
         // the screen whichever rows are present.
         const int weather_height = has_weather ? 90 : 0;
         int block_height = weather_height + 118;  // clock and date
         if (total > 0) block_height += 62;
-        if (alarm) block_height += total > 0 ? 40 : 62;
+        if (radio_on) block_height += (total > 0 ? 40 : 62);
+        if (alarm) block_height += (total > 0 || radio_on) ? 40 : 62;
         const int top = ui::tokens::display_height / 2 - block_height / 2;
         // A faint halo in the colour of the sky behind the clock: eight thin
         // steps read as one soft glow, and only its core rises above black.
@@ -1544,6 +2241,16 @@
             auto* note = ui::make_label(row, text.c_str(), kDim, ui::font_caption());
             lv_label_set_long_mode(note, LV_LABEL_LONG_DOT);
             lv_obj_set_style_max_width(note, 340, 0);
+            y += 40;
+        }
+        if (radio_on) {
+            auto* row = centered_row(y, 8);
+            icon_view(row, ui::IconRole::Audio, 24, ui::tokens::magenta);
+            char now_playing[128];
+            std::snprintf(now_playing, sizeof(now_playing), c().radio_aod_format, radio.station.name.c_str());
+            auto* station = ui::make_label(row, now_playing, kDim, ui::font_caption());
+            lv_label_set_long_mode(station, LV_LABEL_LONG_DOT);
+            lv_obj_set_style_max_width(station, 330, 0);
             y += 40;
         }
         if (alarm) {
@@ -1658,7 +2365,13 @@
         auto* row = list_row(list, kRowPitch * 3, c().screen_timeout, timeout, ui::IconRole::Display, ui::tokens::blue);
         add_chevron(row);
         tappable(row, display_setting_event, 3);
-        list_end(list, kRowPitch * 4);
+        char brightness[24];
+        std::snprintf(brightness, sizeof(brightness), "%d%%", settings.active_brightness_percent);
+        row = list_row(list, kRowPitch * 4, t().brightness, brightness,
+                       ui::IconRole::Brightness, ui::tokens::amber);
+        add_chevron(row);
+        tappable(row, display_setting_event, 4);
+        list_end(list, kRowPitch * 5);
     }
 
     void render_update() {
@@ -1772,24 +2485,36 @@
             case UiView::ReminderNew: render_reminder_new(); break;
             case UiView::ClockItem: render_clock_item(); break;
             case UiView::ClockAlert: render_clock_alert(); break;
+            case UiView::Calendar: render_organizer(); break;
+            case UiView::OrganizerNew: render_organizer_new(); break;
             case UiView::Notes: render_notes(); break;
             case UiView::NoteNew: render_note_new(); break;
             case UiView::NoteDetail: render_note_detail(); break;
             case UiView::NoteRecord: render_note_record(); break;
             case UiView::Briefing: render_briefing(); break;
             case UiView::Translate: render_translate(); break;
+            case UiView::ConversationHistory: render_conversation_history(); break;
             case UiView::AlwaysOn: render_always_on(); break;
             case UiView::PhoneCall: render_phone_call(); break;
             case UiView::PhoneNotification: render_phone_notification(); break;
             case UiView::PhoneLink: render_phone_link(); break;
             case UiView::DisplaySettings: render_display_settings(); break;
             case UiView::Update: render_update(); break;
+            case UiView::Radio: render_radio(); break;
+            case UiView::RadioSearch: render_radio_search(); break;
             default: break;
         }
     }
 
     // Back from a companion screen; returns true when it was handled here.
     bool companion_back() {
+        if (current_view == UiView::Launcher && launcher_reordering) {
+            launcher_reordering = false;
+            launcher_selected_app.reset();
+            render(UiView::Launcher);
+            show_toast(c().app_layout_saved, ui::tokens::mint);
+            return true;
+        }
         if (current_view == UiView::ReminderNew && reminder_step == 1) {
             reminder_step = 0;
             render(UiView::ReminderNew);
@@ -1799,6 +2524,16 @@
         if (current_view == UiView::Translate && voice.state != VoiceCaptureState::Idle &&
             voice.purpose == VoicePurpose::Translate && callbacks.on_translate_stop) {
             callbacks.on_translate_stop();
+        }
+        if (current_view == UiView::OrganizerNew && organizer_kind == OrganizerKind::Event && organizer_step == 1) {
+            organizer_step = 0;
+            render(UiView::OrganizerNew);
+            return true;
+        }
+        if (current_view == UiView::RadioSearch && radio_typing) {
+            radio_typing = false;
+            render(UiView::RadioSearch);
+            return true;
         }
         return false;
     }
@@ -1823,15 +2558,17 @@
 
     // Dimmed screens: a translucent black veil (the panel brightness on device).
     void update_dim_overlay() {
-        const bool dim = display_power.mode == DisplayMode::Dimmed;
+        const bool dim = display_power.mode == DisplayMode::Dimmed ||
+                         (display_power.mode == DisplayMode::Active && display_power.brightness_percent < 100);
         if (!dim && !dim_overlay) return;
         if (!dim_overlay) {
             dim_overlay = lv_obj_create(lv_layer_top());
             ui::reset(dim_overlay);
             lv_obj_set_size(dim_overlay, ui::tokens::display_width, ui::tokens::display_height);
             lv_obj_set_style_bg_color(dim_overlay, ui::color(ui::tokens::canvas), 0);
-            lv_obj_set_style_bg_opa(dim_overlay, 150, 0);
             lv_obj_set_clickable(dim_overlay, false);
         }
+        const int darkness = std::clamp(255 - display_power.brightness_percent * 255 / 100, 0, 220);
+        lv_obj_set_style_bg_opa(dim_overlay, static_cast<lv_opa_t>(darkness), 0);
         lv_obj_set_hidden(dim_overlay, !dim);
     }

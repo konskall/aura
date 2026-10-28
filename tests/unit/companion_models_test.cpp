@@ -44,6 +44,15 @@ void text_tests() {
     expect(sanitize_text("\xC0\xAF" "ok", 64) == "ok", "overlong UTF-8 is dropped");
     expect(fold_text("ΣΗΜΕΊΩΣΗ Άλφα") == "σημειωση αλφα", "Greek folding drops case and tonos");
     expect(fold_text("Σημειώσεις") == "σημειωσεισ", "final sigma folds");
+    const auto words = folded_words(fold_text("Βάλε «ΣΚΑΪ» 100.3, παρακαλώ; display-mode"));
+    expect(words == std::vector<std::string>{"βαλε", "σκαι", "100.3", "παρακαλω", "display", "mode"},
+           "words split on punctuation and keep decimal numbers whole");
+    expect(!folded_has_word(words, {"play"}) && folded_has_word(words, {"display"}), "a word matches whole");
+    expect(folded_has_word_prefix(words, {"παρακαλ"}) && !folded_has_word_prefix(words, {"λαβ", "ισπλ"}),
+           "a stem matches only the start of a word");
+    expect(folded_contains_phrase(fold_text("Τι ώρα είναι;"), "τι ωρα ειναι") &&
+               !folded_contains_phrase(fold_text("κάτι ωραίο"), "τι ωρα"),
+           "a phrase matches whole words");
     expect(json_escape("a\"b\n") == "a\\\"b\\n", "JSON escaping");
 
     const auto object = parse_flat_json(R"({"type":"timer","seconds":600,"ok":true,"label":"Μακ","x":null})");
@@ -183,6 +192,12 @@ void assistant_tests() {
     expect(memory.recent(5000).size() == ConversationMemory::kMaxTurns, "memory is bounded");
     expect(memory.recent(5000 + ConversationMemory::kExpiryMs + 1).empty() && memory.size() == 0,
            "quiet minutes forget the conversation");
+    expect(question_requests_web_search("Ψάξε για πίτσα στη Σπάρτη") &&
+           question_requests_web_search("look up restaurants in Sparta"),
+           "explicit Greek and English searches request the web tool");
+    expect(!question_requests_web_search("Ψάξε στις σημειώσεις μου το τηλέφωνο") &&
+           !question_requests_web_search("Πες μου για τη Σπάρτη"),
+           "private collections and ordinary questions do not enable web search");
 
     auto parsed = parse_assistant_answer("Βάζω χρονόμετρο.\nACTION: {\"type\":\"timer\",\"seconds\":600,\"label\":\"Ζυμαρικά\"}");
     expect(parsed.text == "Βάζω χρονόμετρο." && parsed.action && parsed.action->type == AssistantActionType::Timer &&
@@ -200,6 +215,18 @@ void assistant_tests() {
     parsed = parse_assistant_answer("x\nACTION: {\"type\":\"reminder\",\"time\":\"18:00\",\"day\":\"tomorrow\",\"text\":\"Φάρμακα\"}");
     expect(parsed.action && parsed.action->type == AssistantActionType::Reminder && parsed.action->tomorrow,
            "a reminder for tomorrow");
+    parsed = parse_assistant_answer("x\nACTION: {\"type\":\"task\",\"text\":\"Πάρε χαρτί\"}");
+    expect(parsed.action && parsed.action->type == AssistantActionType::Task &&
+           parsed.action->text == "Πάρε χαρτί", "a task action is parsed");
+    parsed = parse_assistant_answer(
+        "x\nACTION: {\"type\":\"calendar_event\",\"start\":\"2026-10-28T18:30\",\"duration_minutes\":45,\"text\":\"Οδοντίατρος\"}");
+    expect(parsed.action && parsed.action->type == AssistantActionType::CalendarEvent &&
+           parsed.action->duration_minutes == 45 &&
+           from_minute_index(parsed.action->start_minute).hour == 18, "a calendar action is parsed");
+    parsed = parse_assistant_answer(
+        "x\nACTION: {\"type\":\"calendar_event\",\"start\":\"2026-02-31T18:30\",\"text\":\"invalid\"}");
+    expect(!parsed.action && parsed.action_rejected, "an invalid calendar date is rejected");
+    parsed = parse_assistant_answer("x\nACTION: {\"type\":\"reminder\",\"time\":\"18:00\",\"day\":\"tomorrow\",\"text\":\"Φάρμακα\"}");
     const auto now = minute_index(at(2026, 10, 22, 19, 0));
     expect(reminder_due_minute(*parsed.action, now) == minute_index(at(2026, 10, 23, 18, 0)), "tomorrow 18:00");
     AssistantAction today;
@@ -230,6 +257,16 @@ void assistant_tests() {
     request.prompt = "Βάλε χρονόμετρο";
     const auto demo = mock_answer(request);
     expect(demo.ok && parse_assistant_answer(demo.text).action, "the demo provider can propose an action");
+    request.interface_language = InterfaceLanguage::English;
+    request.prompt = "Set a timer";
+    const auto english_demo = mock_answer(request);
+    expect(english_demo.ok && english_demo.text.find("I can set") != std::string::npos,
+           "the demo provider follows the selected English interface language");
+    request.prompt = "Tell me about Taygetos";
+    const auto english_taygetos = mock_answer(request);
+    expect(english_taygetos.ok && english_taygetos.text.find("Taygetos") != std::string::npos &&
+               english_taygetos.text.find("Ταΰγετος") == std::string::npos,
+           "the Taygetos demo answer follows the selected English interface language");
 }
 
 void briefing_tests() {
@@ -246,10 +283,22 @@ void briefing_tests() {
     input.clock = &clock.snapshot();
     input.unread_messages = 2;
     const auto briefing = build_briefing(input);
-    expect(briefing.period == BriefingPeriod::Morning && briefing.date_valid && briefing.items.size() == 3,
-           "the morning briefing gathers alarm, reminders and messages");
-    expect(briefing.items[0].kind == BriefingItemKind::Alarm && briefing.items[1].count == 1 &&
-           briefing.items[2].count == 2, "briefing order");
+    expect(briefing.period == BriefingPeriod::Morning && briefing.date_valid && briefing.items.size() == 4,
+           "the morning briefing gathers calendar, alarm, reminders and messages");
+    const auto item = [&](BriefingItemKind kind) {
+        return std::find_if(briefing.items.begin(), briefing.items.end(),
+                            [kind](const BriefingItem& value) { return value.kind == kind; });
+    };
+    expect(item(BriefingItemKind::NextHoliday) != briefing.items.end() &&
+           item(BriefingItemKind::Alarm) != briefing.items.end() &&
+           item(BriefingItemKind::Reminders)->count == 1 && item(BriefingItemKind::Messages)->count == 2,
+           "briefing contains each expected fact");
+    input.language = InterfaceLanguage::English;
+    const auto english_briefing = build_briefing(input);
+    const auto english_holiday = std::find_if(english_briefing.items.begin(), english_briefing.items.end(),
+        [](const BriefingItem& value) { return value.kind == BriefingItemKind::NextHoliday; });
+    expect(english_holiday != english_briefing.items.end() && english_holiday->text == "Ohi Day",
+           "holiday names follow the selected English interface language");
     const auto today = days_from_civil(2026, 10, 22);
     expect(should_auto_show_briefing(status.snapshot(), today - 1) && !should_auto_show_briefing(status.snapshot(), today),
            "the briefing opens once a morning");
@@ -317,6 +366,25 @@ void motion_tests() {
     expect(display.snapshot().mode == DisplayMode::Dimmed && display.snapshot().brightness_percent == 30, "dims");
     display.tick(1500);
     expect(display.snapshot().mode == DisplayMode::AlwaysOn, "then the always-on clock");
+    expect(display.snapshot().brightness_percent == 12, "the always-on clock at full brightness setting");
+
+    // Dimming never brightens a screen the owner set darker than the dim level.
+    DisplayPowerModel dark;
+    DisplaySettings dark_settings = settings;
+    dark_settings.active_brightness_percent = 10;
+    dark.set_settings(dark_settings);
+    dark.user_activity(0);
+    dark.tick(1000);
+    const int dark_dimmed = dark.snapshot().brightness_percent;
+    expect(dark.snapshot().mode == DisplayMode::Dimmed && dark_dimmed > 0 && dark_dimmed < 10,
+           "a dark screen dims below its own level");
+    dark.tick(1500);
+    expect(dark.snapshot().mode == DisplayMode::AlwaysOn && dark.snapshot().brightness_percent > 0 &&
+               dark.snapshot().brightness_percent <= dark_dimmed,
+           "the always-on clock is no brighter than the dimmed screen");
+    dark_settings.active_brightness_percent = 5;
+    dark.set_settings(dark_settings);
+    expect(dark.snapshot().brightness_percent <= 5, "a darker setting applies to the always-on clock at once");
     expect(display.user_activity(2000) && display.snapshot().mode == DisplayMode::Active,
            "the first touch only wakes the screen");
     expect(!display.user_activity(2100), "later touches act normally");
@@ -339,6 +407,18 @@ void motion_tests() {
     display.tick(101000);
     display.tick(102000);
     expect(display.snapshot().mode == DisplayMode::Off, "without always-on the screen turns off");
+    DisplaySettings persisted;
+    persisted.always_on = false;
+    persisted.raise_to_wake = false;
+    persisted.flip_to_mute = false;
+    persisted.active_brightness_percent = 65;
+    persisted.timeout_ms = 45000;
+    persisted.dim_ms = 8000;
+    const auto restored = parse_display_settings(serialize_display_settings(persisted));
+    expect(!restored.always_on && !restored.raise_to_wake && !restored.flip_to_mute &&
+               restored.active_brightness_percent == 65 &&
+               restored.timeout_ms == 45000 && restored.dim_ms == 8000,
+           "display settings round-trip through bounded persistence");
     const int x = display.snapshot().shift_x;
     display.set_minute(1);
     display.set_minute(2);
@@ -383,6 +463,22 @@ void phone_tests() {
     const std::uint8_t bad[]{1, 0, 0, 0, 0};
     assembler.reset();
     expect(assembler.push(bad, sizeof(bad)) == ancs::AttributeAssembler::Result::Invalid, "wrong command is invalid");
+
+    // One notification is fetched at a time; a reply that never comes is given
+    // up, so it cannot stall every later notification.
+    ancs::FetchScheduler fetches;
+    fetches.enqueue(11);
+    fetches.enqueue(12);
+    fetches.enqueue(11);
+    expect(fetches.next(0) == std::optional<std::uint32_t>(11), "the first notification is requested");
+    expect(!fetches.next(1000) && fetches.in_flight(), "one request at a time");
+    expect(fetches.next(ancs::FetchScheduler::kTimeoutMs + 1) == std::optional<std::uint32_t>(12),
+           "a lost reply times out and the queue moves on");
+    fetches.finished();
+    expect(!fetches.in_flight() && !fetches.next(ancs::FetchScheduler::kTimeoutMs + 2), "a queued duplicate is not fetched twice");
+    fetches.enqueue(13);
+    fetches.remove(13);
+    expect(!fetches.next(10000), "a removed notification is not fetched");
 
     PhoneNotificationModel phone;
     phone.set_link(PhoneLinkState::Connected, PhonePlatform::Iphone, "iPhone");
@@ -450,6 +546,68 @@ void ota_tests() {
 
 void voice_tests() {
     using namespace aura;
+    const auto rms = [](const std::vector<std::int16_t>& samples) {
+        double energy = 0.0;
+        for (const auto sample : samples) energy += static_cast<double>(sample) * sample;
+        return samples.empty() ? 0.0 : std::sqrt(energy / static_cast<double>(samples.size()));
+    };
+    VoiceFrontEnd front_end;
+    front_end.reset();
+    std::vector<std::int16_t> room_noise(320);
+    for (std::size_t index = 0; index < room_noise.size(); ++index) {
+        room_noise[index] = static_cast<std::int16_t>(180.0 * std::sin(static_cast<double>(index) * 0.71));
+    }
+    std::vector<std::int16_t> processed;
+    for (int index = 0; index < 30; ++index) front_end.process(room_noise.data(), room_noise.size(), processed);
+    expect(rms(processed) < rms(room_noise) * 0.65, "stationary room noise is suppressed");
+    std::vector<std::int16_t> quiet_voice(320);
+    for (std::size_t index = 0; index < quiet_voice.size(); ++index) {
+        quiet_voice[index] = static_cast<std::int16_t>(900.0 * std::sin(static_cast<double>(index) * 0.19));
+    }
+    for (int index = 0; index < 20; ++index) front_end.process(quiet_voice.data(), quiet_voice.size(), processed);
+    expect(front_end.diagnostics().gain > 1.2F && front_end.diagnostics().speech_probability > 0.5F,
+           "bounded AGC raises a quiet voice after noise calibration");
+
+    AcousticEchoCanceller canceller;
+    std::vector<std::int16_t> reference(1600);
+    std::vector<std::int16_t> echoed_voice(1600);
+    for (std::size_t index = 0; index < reference.size(); ++index) {
+        reference[index] = static_cast<std::int16_t>(5000.0 * std::sin(static_cast<double>(index) * 0.12));
+        echoed_voice[index] = static_cast<std::int16_t>(0.65 * reference[index] +
+            1500.0 * std::sin(static_cast<double>(index) * 0.31));
+    }
+    expect(canceller.process(echoed_voice.data(), reference.data(), reference.size(), processed) &&
+           canceller.reference_active() && canceller.suppression() > 0.5F && rms(processed) < rms(echoed_voice),
+           "render-reference echo is measurably suppressed");
+    canceller.reset();
+    expect(!canceller.process(echoed_voice.data(), nullptr, echoed_voice.size(), processed) &&
+           processed == echoed_voice, "AEC stays inactive without a real playback reference");
+
+    // The real delay between rendering and the microphone is unknown: the
+    // canceller finds it within the reference window instead of assuming one.
+    std::vector<std::int16_t> rendered(1600 + 4000);
+    std::uint32_t noise = 12345;
+    double smooth = 0.0;
+    for (auto& sample : rendered) {
+        // Low-passed noise: speech-like, with most energy below 1 kHz.
+        noise = noise * 1103515245U + 12345U;
+        smooth = 0.85 * smooth + 0.15 * (static_cast<double>((noise >> 16) & 0x7FFFU) - 16384.0);
+        sample = static_cast<std::int16_t>(std::clamp(smooth * 0.9, -12000.0, 12000.0));
+    }
+    const std::size_t true_offset = 2500;
+    std::vector<std::int16_t> delayed_echo(1600);
+    for (std::size_t index = 0; index < delayed_echo.size(); ++index) {
+        delayed_echo[index] = static_cast<std::int16_t>(0.6 * rendered[true_offset + index] +
+            900.0 * std::sin(static_cast<double>(index) * 0.31));
+    }
+    AcousticEchoCanceller searching;
+    searching.process(delayed_echo.data(), rendered.data(), delayed_echo.size(), 4000, processed);
+    searching.process(delayed_echo.data(), rendered.data(), delayed_echo.size(), 4000, processed);
+    const auto found = searching.delay_offset();
+    expect(found + 2 >= true_offset && found <= true_offset + 2, "the echo delay is found");
+    expect(searching.reference_active() && searching.suppression() > 0.5F && rms(processed) < rms(delayed_echo) * 0.6,
+           "a delayed echo is suppressed");
+
     VoiceRecorder recorder;
     recorder.start();
     std::vector<std::int16_t> quiet(1600, 40);
@@ -472,12 +630,53 @@ void voice_tests() {
     expect(recorder.no_speech() && recorder.should_stop(), "no speech at all stops after six seconds");
     const std::uint8_t garbage[48]{};
     expect(!parse_wav(garbage, sizeof(garbage), clip), "garbage is not a WAV");
+
+    BargeInGate gate;
+    std::vector<std::int16_t> speaker_bleed(1600, 420);
+    for (int index = 0; index < 7; ++index) {
+        expect(!gate.observe(speaker_bleed.data(), speaker_bleed.size(), 0.35F),
+               "speaker calibration does not interrupt playback");
+    }
+    expect(gate.calibrated(), "barge-in gate calibrates against playback bleed");
+    std::vector<std::int16_t> interruption(1600);
+    for (std::size_t index = 0; index < interruption.size(); ++index) {
+        interruption[index] = static_cast<std::int16_t>(6500.0 * std::sin(static_cast<double>(index) * 0.17));
+    }
+    expect(!gate.observe(interruption.data(), interruption.size(), 0.35F),
+           "one short sound cannot interrupt an answer");
+    expect(!gate.observe(interruption.data(), interruption.size(), 0.35F),
+           "barge-in requires sustained speech");
+    expect(gate.observe(interruption.data(), interruption.size(), 0.35F),
+           "sustained speech triggers barge-in");
+
+    // Talking during calibration must not make a later interruption need a shout.
+    BargeInGate talked_over;
+    std::vector<std::int16_t> quiet_bleed(320, 300);
+    std::vector<std::int16_t> loud_voice(320);
+    std::vector<std::int16_t> normal_voice(320);
+    for (std::size_t index = 0; index < loud_voice.size(); ++index) {
+        loud_voice[index] = static_cast<std::int16_t>(6000.0 * std::sin(static_cast<double>(index) * 0.17));
+        normal_voice[index] = static_cast<std::int16_t>(3000.0 * std::sin(static_cast<double>(index) * 0.17));
+    }
+    for (int index = 0; index < 18; ++index) talked_over.observe(quiet_bleed.data(), quiet_bleed.size(), 0.3F);
+    for (int index = 0; index < 15; ++index) talked_over.observe(loud_voice.data(), loud_voice.size(), 0.3F);
+    expect(talked_over.calibrated(), "calibrated after 650 ms");
+    bool triggered = false;
+    for (int index = 0; index < 25 && !triggered; ++index) {
+        triggered = talked_over.observe(normal_voice.data(), normal_voice.size(), 0.3F);
+    }
+    expect(triggered, "speech during calibration does not raise the barge-in bar");
 }
 
 }  // namespace
 
 void sound_tests() {
     using namespace aura;
+    // A dragged volume slider is written once it rests, not on every step.
+    SettingSettle settle(500);
+    expect(!settle.settled("v=51", 10) && !settle.settled("v=52", 20) && !settle.settled("v=53", 400),
+           "a value that keeps changing waits");
+    expect(!settle.settled("v=53", 899) && settle.settled("v=53", 900), "it is written once it rests");
     const auto peak = [](const PcmClip& clip) {
         int loudest = 0;
         for (const auto sample : clip.samples) loudest = std::max(loudest, std::abs(static_cast<int>(sample)));
@@ -522,12 +721,18 @@ void sound_tests() {
     chosen.muted = true;
     chosen.message_chime = false;
     chosen.spoken_replies = false;
+    chosen.continuous_conversation = false;
+    chosen.barge_in = false;
+    chosen.assistant_voice = AssistantVoice::Athina;
     const auto restored = parse_sound_settings(serialize_sound_settings(chosen));
     expect(std::fabs(restored.volume - 0.8F) < 0.01F && restored.muted && !restored.message_chime &&
-           !restored.spoken_replies, "sound settings survive a restart");
+           !restored.spoken_replies && !restored.continuous_conversation && !restored.barge_in &&
+           restored.assistant_voice == AssistantVoice::Athina,
+           "sound settings and the selected voice survive a restart");
     const SoundSettings defaults;
     const auto garbage = parse_sound_settings("aura-sound 1\nvolume=7\nmuted=yes\nchime=0\nother=1\n");
-    expect(garbage.volume == defaults.volume && !garbage.muted && !garbage.message_chime && garbage.spoken_replies,
+    expect(garbage.volume == defaults.volume && !garbage.muted && !garbage.message_chime && garbage.spoken_replies &&
+           garbage.continuous_conversation && garbage.barge_in,
            "bad sound values keep their defaults");
     const auto foreign = parse_sound_settings("volume=0.1\n");
     expect(foreign.volume == defaults.volume && foreign.message_chime, "a file without the header is ignored");

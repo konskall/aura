@@ -3,6 +3,7 @@
 #include "aura/audio_service.hpp"
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -35,6 +36,22 @@ public:
     void tick(std::uint32_t elapsed_ms) override;
     AudioDiagnostics diagnostics() const override;
 
+    // A continuous music channel (the radio) under the clips. Chimes, alarms
+    // and speech play over it while it is turned down; volume and mute apply
+    // to both. Safe to feed from another thread.
+    bool stream_open(std::uint32_t sample_rate, std::uint8_t channels);
+    // Takes interleaved samples; returns false when the format is not open.
+    bool stream_push(const std::int16_t* samples, std::size_t frames);
+    std::uint32_t stream_buffered_ms() const;
+    void stream_close();
+    // Silences the music without stopping it (the microphone is open).
+    void stream_hold(bool hold);
+    // Copies the recent 16 kHz mono render reference for acoustic echo
+    // cancellation: the `samples` that end `acoustic_delay_ms` before now.
+    // False means the ring does not yet contain enough audio.
+    bool copy_echo_reference(std::size_t samples, std::vector<std::int16_t>& output,
+                             std::uint32_t acoustic_delay_ms = 80) const;
+
 private:
     static void audio_callback(void* userdata, Uint8* stream, int length);
     void render(Uint8* stream, int length);
@@ -56,6 +73,18 @@ private:
     std::atomic<bool> completed_{false};
     std::string error_code_;
     bool owns_audio_subsystem_{false};
+
+    mutable std::mutex stream_mutex_;
+    SDL_AudioStream* stream_{nullptr};
+    std::uint32_t stream_rate_{0};
+    std::uint8_t stream_channels_{0};
+    std::vector<std::int16_t> stream_scratch_;
+    std::atomic<bool> stream_hold_{false};
+    std::atomic<float> stream_duck_{1.0F};
+    static constexpr std::size_t kEchoReferenceSamples = 16000U * 2U;
+    std::array<std::atomic<std::int16_t>, kEchoReferenceSamples> echo_reference_{};
+    std::atomic<std::uint64_t> echo_reference_total_{0};
+    std::uint32_t echo_resample_phase_{0};
 };
 
 }  // namespace aura::simulator

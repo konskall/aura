@@ -1,5 +1,7 @@
 #include "aura/assistant_companion.hpp"
 
+#include "aura/greek_calendar.hpp"
+
 #include "aura/text_util.hpp"
 
 #include <algorithm>
@@ -73,6 +75,29 @@ bool parse_clock_text(const std::string& text, int& hour, int& minute) {
     return true;
 }
 
+bool parse_local_minute(const std::string& text, std::int64_t& minute) {
+    // Exact, timezone-free local timestamp supplied by the device context.
+    if (text.size() != 16 || text[4] != '-' || text[7] != '-' || text[10] != 'T' || text[13] != ':') return false;
+    auto number = [&](std::size_t first, std::size_t count, int& value) {
+        value = 0;
+        for (std::size_t index = first; index < first + count; ++index) {
+            if (text[index] < '0' || text[index] > '9') return false;
+            value = value * 10 + (text[index] - '0');
+        }
+        return true;
+    };
+    LocalDateTime date;
+    if (!number(0, 4, date.year) || !number(5, 2, date.month) || !number(8, 2, date.day) ||
+        !number(11, 2, date.hour) || !number(14, 2, date.minute) || date.year < 2020 || date.year > 2100 ||
+        date.month < 1 || date.month > 12 || date.day < 1 || date.day > 31 || date.hour > 23 || date.minute > 59) {
+        return false;
+    }
+    minute = minute_index(date);
+    const auto roundtrip = from_minute_index(minute);
+    return roundtrip.year == date.year && roundtrip.month == date.month && roundtrip.day == date.day &&
+           roundtrip.hour == date.hour && roundtrip.minute == date.minute;
+}
+
 std::optional<AssistantAction> validate_action(const FlatJsonObject& object) {
     const auto type = object.string("type");
     if (!type) return std::nullopt;
@@ -126,6 +151,24 @@ std::optional<AssistantAction> validate_action(const FlatJsonObject& object) {
         if (action.text.empty()) return std::nullopt;
         return action;
     }
+    if (*type == "task" || *type == "shopping") {
+        action.type = *type == "task" ? AssistantActionType::Task : AssistantActionType::Shopping;
+        action.text = sanitize_text(object.string("text").value_or(""), OrganizerModel::kMaxTextBytes, true);
+        if (action.text.empty()) return std::nullopt;
+        return action;
+    }
+    if (*type == "calendar_event") {
+        action.type = AssistantActionType::CalendarEvent;
+        action.text = sanitize_text(object.string("text").value_or(""), OrganizerModel::kMaxTextBytes, true);
+        const auto start = object.string("start");
+        const auto duration = object.integer("duration_minutes").value_or(60);
+        if (action.text.empty() || !start || !parse_local_minute(*start, action.start_minute) ||
+            duration < 1 || duration > OrganizerModel::kMaxDurationMinutes) {
+            return std::nullopt;
+        }
+        action.duration_minutes = static_cast<std::uint32_t>(duration);
+        return action;
+    }
     if (*type == "message") {
         action.type = AssistantActionType::Message;
         action.text = sanitize_text(object.string("text").value_or(""), 500, true);
@@ -164,6 +207,22 @@ bool ConversationMemory::active(std::uint64_t now_ms) const noexcept {
     return now_ms < last_activity_ms_ || now_ms - last_activity_ms_ <= kExpiryMs;
 }
 
+bool question_requests_web_search(std::string_view question) {
+    const auto folded = fold_text(question);
+    if (folded.empty()) return false;
+    const auto has = [&](std::string_view token) { return folded.find(token) != std::string::npos; };
+    // Requests that explicitly name private/local collections stay on-device.
+    if (has("σημειω") || has("λιστα αγορ") || has("εργασι") || has("μηνυμα") ||
+        has("notification") || has("my notes") || has("shopping list") || has("my tasks")) {
+        return false;
+    }
+    const bool greek = has("ψαξε") || has("αναζητησε") || has("βρες στο ιντερνετ") ||
+                       has("βρες online") || has("βρες στο web");
+    const bool english = has("search for") || has("search the web") || has("look up") ||
+                         has("find online") || has("find on the web");
+    return greek || english;
+}
+
 std::string build_device_context(const DeviceContextInput& input) {
     std::string out;
     auto add = [&out](const std::string& line) {
@@ -184,6 +243,18 @@ std::string build_device_context(const DeviceContextInput& input) {
                        status->power_origin == StatusOrigin::Simulated ? " (simulated)" : ""));
         }
         if (status->connection_known) add(status->online ? "internet: connected" : "internet: offline");
+        if (status->date_valid) {
+            const auto calendar = greek_calendar_day(status->year, status->month, status->day);
+            add(calendar.namedays.empty() ? "Greek namedays today: none in the local common-name calendar" :
+                                           "Greek namedays today: " + join_namedays(calendar.namedays));
+            if (calendar.holiday != GreekHolidayKind::None) {
+                add(std::string("Greek public holiday today: ") + greek_holiday_name_en(calendar.holiday));
+            }
+            if (const auto next = next_greek_holiday(status->year, status->month, status->day, false)) {
+                add(format("next Greek public holiday: %04d-%02d-%02d, %s", next->date.year, next->date.month,
+                           next->date.day, greek_holiday_name_en(next->kind)));
+            }
+        }
     }
     if (const auto* weather = input.weather) {
         if (weather->has_data) {
@@ -221,6 +292,21 @@ std::string build_device_context(const DeviceContextInput& input) {
         } else {
             add("weather: no city configured on the device");
         }
+    }
+    if (const auto* fuel = input.fuel; fuel && fuel->state == FuelPriceState::Ready) {
+        const auto& data = fuel->data;
+        std::string line = format("Greece weekly average fuel prices: unleaded 95 %.3f EUR/l, diesel %.3f EUR/l",
+                                  data.unleaded95_millieur_per_litre / 1000.0,
+                                  data.diesel_millieur_per_litre / 1000.0);
+        if (data.lpg_millieur_per_litre) {
+            line += format(", LPG %.3f EUR/l", *data.lpg_millieur_per_litre / 1000.0);
+        } else {
+            line += ", LPG unavailable from source";
+        }
+        line += "; period " + data.period_date + "; source: " + data.source;
+        if (data.stale) line += " (cached, may be outdated)";
+        if (data.demo) line += " DEMO sample data, not live";
+        add(line);
     }
     if (const auto* clock = input.clock) {
         const auto& snapshot = clock->snapshot();
@@ -261,6 +347,12 @@ std::string build_device_context(const DeviceContextInput& input) {
         const auto notes = input.notes->context_for(input.question);
         if (!notes.empty()) out += "notes (newest first):\n" + notes;
         else if (question_mentions_notes(input.question)) add("notes: none saved");
+    }
+    if (input.organizer) {
+        const auto organizer = input.organizer->context_for(input.question,
+            input.clock ? input.clock->snapshot().now_minute : 0);
+        if (!organizer.empty()) out += "organizer:\n" + organizer;
+        else if (question_mentions_organizer(input.question)) add("organizer: no matching saved items");
     }
     if (input.phone && question_mentions_phone(input.question)) {
         const auto& phone = input.phone->snapshot();
@@ -330,6 +422,12 @@ const char* assistant_action_name(AssistantActionType type) noexcept {
         case AssistantActionType::Alarm: return "alarm";
         case AssistantActionType::Reminder: return "reminder";
         case AssistantActionType::Note: return "note";
+        case AssistantActionType::Task: return "task";
+        case AssistantActionType::Shopping: return "shopping";
+        case AssistantActionType::CalendarEvent: return "calendar_event";
+        case AssistantActionType::Volume: return "volume";
+        case AssistantActionType::Brightness: return "brightness";
+        case AssistantActionType::Mute: return "mute";
         case AssistantActionType::Message: return "message";
     }
     return "none";

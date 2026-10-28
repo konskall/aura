@@ -26,6 +26,9 @@
 #define LV_FONT_MONTSERRAT_24 1
 #define LV_FONT_MONTSERRAT_28 1
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
+/* LVGL's default list without ':', so a time ("19:30") never wraps at its
+ * colon. Keep in step with CONFIG_LV_TXT_BREAK_CHARS in the firmware. */
+#define LV_TXT_BREAK_CHARS " ,.;-_)]}"
 
 #define LV_USE_ANIMIMG 1
 #define LV_USE_ARC 1

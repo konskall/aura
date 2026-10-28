@@ -11,8 +11,8 @@
 
 namespace aura::simulator {
 
-// Speech through the loopback bridge: local whisper.cpp for recognition and
-// the installed Windows voices for synthesis. Nothing leaves the PC.
+// Speech through the loopback bridge: local/Groq recognition and selected
+// local or neural synthesis. The bridge owns every remote provider boundary.
 class BridgeSpeechService final : public ISpeechService {
 public:
     BridgeSpeechService(std::string token, std::uint16_t port);
@@ -20,8 +20,10 @@ public:
     void refresh_health();
     bool stt_available() const override { return stt_->load(); }
     bool tts_available(const std::string& language) const override;
+    const char* stt_provider_name() const noexcept;
+    const char* tts_provider_name() const noexcept;
     std::future<TranscriptResult> transcribe(std::vector<std::uint8_t> wav, std::string language) override;
-    std::future<SpeechResult> synthesize(std::string text, std::string language) override;
+    std::future<SpeechResult> synthesize(std::string text, std::string language, std::string voice) override;
 
 private:
     std::string token_;
@@ -29,6 +31,8 @@ private:
     std::shared_ptr<std::atomic<bool>> stt_{std::make_shared<std::atomic<bool>>(false)};
     std::shared_ptr<std::atomic<bool>> tts_el_{std::make_shared<std::atomic<bool>>(false)};
     std::shared_ptr<std::atomic<bool>> tts_en_{std::make_shared<std::atomic<bool>>(false)};
+    std::shared_ptr<std::atomic<int>> stt_provider_{std::make_shared<std::atomic<int>>(0)};
+    std::shared_ptr<std::atomic<int>> tts_provider_{std::make_shared<std::atomic<int>>(0)};
 };
 
 // The PC microphone through SDL2, opened only while recording, at 16 kHz mono.

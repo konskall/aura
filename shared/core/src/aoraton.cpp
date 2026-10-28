@@ -71,9 +71,9 @@ bool MockAoratonService::inject_incoming(const std::string& room_id, const std::
     AoratonMessage message;
     message.id = "mock-in-" + std::to_string(next_id_++);
     message.room_id = room_id;
-    message.author = "Ελένη • DEMO";
+    message.author = language_ == InterfaceLanguage::English ? "Elena • DEMO" : "Ελένη • DEMO";
     message.local_display_text = fictional_text;
-    message.received_at = "τώρα";
+    message.received_at = language_ == InterfaceLanguage::English ? "now" : "τώρα";
     message.direction = AoratonDirection::Incoming;
     message.delivery = AoratonDelivery::Received;
     snapshot_.messages.push_back(std::move(message));
@@ -120,9 +120,9 @@ bool MockAoratonService::confirm_send() {
     AoratonMessage message;
     message.id = "mock-out-" + std::to_string(next_id_++);
     message.room_id = snapshot_.pending_room_id;
-    message.author = "Εσύ • DEMO";
+    message.author = language_ == InterfaceLanguage::English ? "You • DEMO" : "Εσύ • DEMO";
     message.local_display_text = snapshot_.pending_text;
-    message.received_at = "τώρα";
+    message.received_at = language_ == InterfaceLanguage::English ? "now" : "τώρα";
     message.direction = AoratonDirection::Outgoing;
     message.delivery = AoratonDelivery::Sent;
     snapshot_.messages.push_back(std::move(message));
@@ -184,21 +184,63 @@ void MockAoratonService::reset_mock() {
     snapshot_.sequence = sequence;
     snapshot_.mock_mode = true;
     snapshot_.rooms = {
-        {"demo-family", "Οικογένεια • DEMO", "Ραντεβού στις 19:30", 1, true, true, true, false, "18:44"},
-        {"demo-lab", "Εργαστήριο • DEMO", "Το πρωτότυπο είναι έτοιμο", 0, true, true, true, false, "17:10"},
+        {"demo-family", {}, {}, 1, true, true, true, false, "18:44"},
+        {"demo-lab", {}, {}, 0, true, true, true, false, "17:10"},
     };
     snapshot_.messages = {
-        {"fixture-1", "demo-family", "Ελένη • DEMO", "Θα είμαστε εκεί στις 19:30.", "18:42",
+        {"fixture-1", "demo-family", {}, {}, "18:42",
          AoratonDirection::Incoming, AoratonDelivery::Received, ""},
-        {"fixture-2", "demo-family", "Εσύ • DEMO", "Τέλεια, τα λέμε τότε.", "18:44",
+        {"fixture-2", "demo-family", {}, {}, "18:44",
          AoratonDirection::Outgoing, AoratonDelivery::Sent, ""},
-        {"fixture-3", "demo-lab", "Νίκος • DEMO", "Το πρωτότυπο είναι έτοιμο για έλεγχο.", "17:10",
+        {"fixture-3", "demo-lab", {}, {}, "17:10",
          AoratonDirection::Incoming, AoratonDelivery::Received, ""},
     };
+    localize_mock_copy();
     network_available_ = true;
     reconnect_elapsed_ms_ = 0;
     next_id_ = 1;
     connect();
+}
+
+void MockAoratonService::set_interface_language(InterfaceLanguage language) {
+    if (language_ == language) return;
+    language_ = language;
+    localize_mock_copy();
+    touch();
+}
+
+void MockAoratonService::localize_mock_copy() {
+    const bool english = language_ == InterfaceLanguage::English;
+    for (auto& room : snapshot_.rooms) {
+        if (room.id == "demo-family") room.display_name = english ? "Family • DEMO" : "Οικογένεια • DEMO";
+        else if (room.id == "demo-lab") room.display_name = english ? "Workshop • DEMO" : "Εργαστήριο • DEMO";
+    }
+    for (auto& message : snapshot_.messages) {
+        if (message.id == "fixture-1") {
+            message.author = english ? "Elena • DEMO" : "Ελένη • DEMO";
+            message.local_display_text = english ? "We will be there at 19:30." : "Θα είμαστε εκεί στις 19:30.";
+        } else if (message.id == "fixture-2") {
+            message.author = english ? "You • DEMO" : "Εσύ • DEMO";
+            message.local_display_text = english ? "Great, see you then." : "Τέλεια, τα λέμε τότε.";
+        } else if (message.id == "fixture-3") {
+            message.author = english ? "Nikos • DEMO" : "Νίκος • DEMO";
+            message.local_display_text = english ? "The prototype is ready for review." :
+                                                    "Το πρωτότυπο είναι έτοιμο για έλεγχο.";
+        } else if (message.direction == AoratonDirection::Outgoing) {
+            message.author = english ? "You • DEMO" : "Εσύ • DEMO";
+        } else if (message.direction == AoratonDirection::Incoming) {
+            message.author = english ? "Elena • DEMO" : "Ελένη • DEMO";
+        }
+        if (message.received_at == "now" || message.received_at == "τώρα") {
+            message.received_at = english ? "now" : "τώρα";
+        }
+    }
+    for (auto& room : snapshot_.rooms) {
+        const auto message = std::find_if(snapshot_.messages.rbegin(), snapshot_.messages.rend(),
+            [&](const AoratonMessage& item) { return item.room_id == room.id; });
+        room.preview = message == snapshot_.messages.rend() ? std::string{} :
+                       bounded(message->local_display_text, 64);
+    }
 }
 
 const char* aoraton_connection_name(AoratonConnectionState state) noexcept {

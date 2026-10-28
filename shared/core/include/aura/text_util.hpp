@@ -16,12 +16,28 @@ std::string utf8_truncate(std::string_view text, std::size_t max_bytes);
 // Untrusted text for display or storage: drops control bytes (except '\n'
 // when `keep_newlines`), invalid UTF-8 and surrounding whitespace.
 std::string sanitize_text(std::string_view text, std::size_t max_bytes, bool keep_newlines = false);
+// sanitize_text's per-character rules without trimming or a size limit, for
+// text that arrives in pieces (pass complete_utf8_prefix() bytes).
+std::string sanitize_fragment(std::string_view text, bool keep_newlines);
+// The length of the longest prefix of `bytes` that does not end inside a
+// UTF-8 sequence.
+std::size_t complete_utf8_prefix(std::string_view bytes) noexcept;
 
 // Lower-case ASCII and Greek, without tonos/dialytika, for keyword matching.
 std::string fold_text(std::string_view text);
 
 // True when the folded `text` contains any of the (already folded) needles.
 bool folded_contains_any(std::string_view folded, std::initializer_list<std::string_view> needles);
+
+// The words of folded text: runs of letters and digits. A '.' or ',' between
+// two digits stays inside a number ("92.9"); everything else separates.
+std::vector<std::string> folded_words(std::string_view folded);
+// True when one of `words` is exactly one of the (folded) needles.
+bool folded_has_word(const std::vector<std::string>& words, std::initializer_list<std::string_view> needles);
+// True when one of `words` starts with one of the stems (Greek words inflect).
+bool folded_has_word_prefix(const std::vector<std::string>& words, std::initializer_list<std::string_view> stems);
+// True when folded text contains the folded `phrase` as whole, adjacent words.
+bool folded_contains_phrase(std::string_view folded, std::string_view phrase);
 
 std::string json_escape(std::string_view text);
 

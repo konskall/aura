@@ -14,7 +14,7 @@ SCREENS = (
     "weather-sunny", "weather-cloudy", "weather-rainy", "weather-stormy",
     "weather-snowy", "weather-night", "weather-forecast", "weather-loading",
     "weather-no-city", "weather-offline", "weather-error", "weather-location",
-    "weather-results",
+    "weather-results", "weather-settings",
 )
 MOTION_STATES = (
     "weather-clear", "weather-cloudy", "weather-rain",

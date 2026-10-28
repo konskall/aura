@@ -20,28 +20,10 @@
 #include <ctime>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace {
 constexpr const char* kTag = "aura";
 
-std::vector<aura::WeatherLocation> known_weather_locations(const std::string& query) {
-    const auto contains = [&](const char* value) { return query.find(value) != std::string::npos; };
-    if (contains("Αθήνα") || contains("Αθηνα") || contains("Athens") || contains("athens")) {
-        return {{"Αθήνα", "Αττική", "Ελλάδα", "GR", "Europe/Athens", 37.9838, 23.7275}};
-    }
-    if (contains("Σπάρτη") || contains("Σπαρτη") || contains("Sparta") || contains("sparta")) {
-        return {{"Σπάρτη", "Πελοπόννησος", "Ελλάδα", "GR", "Europe/Athens", 37.0733, 22.4297}};
-    }
-    if (contains("Θεσσαλονίκη") || contains("Θεσσαλονικη") || contains("Thessaloniki") ||
-        contains("thessaloniki")) {
-        return {{"Θεσσαλονίκη", "Κεντρική Μακεδονία", "Ελλάδα", "GR", "Europe/Athens", 40.6401, 22.9444}};
-    }
-    if (contains("Πάτρα") || contains("Πατρα") || contains("Patras") || contains("patras")) {
-        return {{"Πάτρα", "Δυτική Ελλάδα", "Ελλάδα", "GR", "Europe/Athens", 38.2466, 21.7346}};
-    }
-    return {};
-}
 }
 
 extern "C" void app_main(void) {
@@ -49,7 +31,8 @@ extern "C" void app_main(void) {
              aura_board::profile_name);
     ESP_LOGW(kTag, "Hardware behavior is unverified until physical board bring-up");
 
-    // NVS holds the Wi-Fi credentials and the weather server/city provisioning.
+    // NVS holds Wi-Fi credentials, the weather city, and an optional enhanced
+    // tlesdetector endpoint. Core weather uses Open-Meteo directly when absent.
     esp_err_t nvs = nvs_flash_init();
     if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_LOGW(kTag, "NVS layout unreadable (%s); erasing", esp_err_to_name(nvs));
@@ -76,10 +59,11 @@ extern "C" void app_main(void) {
     static aura::firmware::Esp32Companion companion(audio, device_status);
     const bool audio_ready = audio.initialize();
     const bool weather_backend_ready = weather_backend.initialize();
+    if (weather_backend_ready) weather.set_refresh_interval(weather_backend.refresh_interval());
     const bool network_started = network.start();
     ESP_LOGI(kTag, "Audio backend initialization: %s", audio_ready ? "ready" : "unavailable");
     ESP_LOGI(kTag, "Weather backend initialization: %s",
-             weather_backend_ready && weather_backend.configured() ? "configured" : "not configured");
+             weather_backend_ready && weather_backend.configured() ? "ready" : "unavailable");
     ESP_LOGI(kTag, "Network: %s", network_started ? "Wi-Fi radio started" : "radio unavailable");
     companion.start();
     if (network_started) {
@@ -95,7 +79,7 @@ extern "C" void app_main(void) {
     // Starts a fetch or records why it cannot run; never claims data it lacks.
     const auto request_weather = [](const aura::WeatherLocation& location) {
         if (!weather_backend.configured()) {
-            weather.fetch_failed("TLESDETECTOR_NOT_CONFIGURED", false);
+            weather.fetch_failed("WEATHER_BACKEND_UNAVAILABLE", false);
         } else if (!network.connected()) {
             weather.fetch_failed("NETWORK_UNAVAILABLE", true);
         } else if (!weather_backend.request(location)) {
@@ -104,6 +88,7 @@ extern "C" void app_main(void) {
     };
     // The saved city is fetched once the station first obtains an IP address.
     bool boot_weather_pending = false;
+    std::uint32_t weather_refresh_ms = 0;
     if (weather_backend_ready && weather_backend.configured()) {
         if (const auto location = weather_backend.saved_location()) {
             weather.restore_location(*location);
@@ -132,37 +117,48 @@ extern "C" void app_main(void) {
         };
         callbacks.on_aoraton_confirm = [] { return aoraton.confirm_send(); };
         callbacks.on_aoraton_cancel = [] { aoraton.cancel_send(); };
-        callbacks.on_weather_open = [request_weather] {
+        callbacks.on_weather_open = [request_weather, &weather_refresh_ms] {
             if (!weather_backend.configured() || weather.snapshot().state != aura::WeatherState::Unconfigured) return;
             if (const auto location = weather_backend.saved_location()) {
                 weather.begin_fetch(*location, true);
+                weather_refresh_ms = 0;
                 request_weather(*location);
                 ui.apply_weather(weather.snapshot());
             }
         };
-        callbacks.on_weather_refresh = [request_weather] {
+        callbacks.on_weather_refresh = [request_weather, &weather_refresh_ms] {
             const auto& snapshot = weather.snapshot();
             if (!weather_backend.configured()) {
-                weather.fetch_failed("TLESDETECTOR_NOT_CONFIGURED", false);
+                weather.fetch_failed("WEATHER_BACKEND_UNAVAILABLE", false);
             } else if (snapshot.has_data || snapshot.has_saved_location) {
                 const auto location = snapshot.has_data ? snapshot.data.location : snapshot.saved_location;
                 weather.begin_fetch(location, false);
+                weather_refresh_ms = 0;
                 request_weather(location);
             }
             ui.apply_weather(weather.snapshot());
         };
-        callbacks.on_weather_search = [](const std::string& query) {
-            if (!weather.begin_search(query)) return;
-            auto matches = known_weather_locations(query);
-            if (matches.empty()) weather.search_failed("CITY_NOT_FOUND", false);
-            else weather.search_succeeded(matches);
+        callbacks.on_weather_refresh_interval = [&weather_refresh_ms](aura::WeatherRefreshInterval interval) {
+            if (!weather.set_refresh_interval(interval)) return;
+            weather_refresh_ms = 0;
+            weather_backend.save_refresh_interval(interval);
             ui.apply_weather(weather.snapshot());
         };
-        callbacks.on_weather_select_result = [request_weather](std::size_t index) {
+        callbacks.on_weather_search = [](const std::string& query) {
+            if (!weather.begin_search(query)) return;
+            if (!network.connected()) {
+                weather.search_failed("NETWORK_UNAVAILABLE", true);
+            } else if (!weather_backend.request_search(weather.snapshot().search_query, companion.language())) {
+                weather.search_failed("WEATHER_BUSY", false);
+            }
+            ui.apply_weather(weather.snapshot());
+        };
+        callbacks.on_weather_select_result = [request_weather, &weather_refresh_ms](std::size_t index) {
             const auto& snapshot = weather.snapshot();
             if (index >= snapshot.suggestion_count) return;
             const auto location = snapshot.suggestions[index];
             weather.begin_fetch(location, true);
+            weather_refresh_ms = 0;
             weather_backend.save_location(location);
             request_weather(location);
             ui.apply_weather(weather.snapshot());
@@ -193,6 +189,7 @@ extern "C" void app_main(void) {
             wifi.forget_saved_network();
         };
         companion.install(callbacks);
+        ui.set_language(companion.language());
         ui.create(display, std::move(callbacks));
         companion.apply(ui);
         ui.apply(controller.snapshot());
@@ -222,6 +219,11 @@ extern "C" void app_main(void) {
                 if (weather_result.ok) weather.fetch_succeeded(weather_result.data);
                 else weather.fetch_failed(weather_result.error_code, weather_result.offline);
             }
+            aura::WeatherGeocodingResult geocoding_result;
+            if (weather_backend.poll_search(geocoding_result)) {
+                if (geocoding_result.ok) weather.search_succeeded(geocoding_result.locations);
+                else weather.search_failed(geocoding_result.error_code, geocoding_result.offline);
+            }
             aura::firmware::WifiEvent wifi_event;
             while (network.poll(wifi_event)) {
                 switch (wifi_event.kind) {
@@ -244,6 +246,7 @@ extern "C" void app_main(void) {
                 }
             }
             status_ms += elapsed_ms;
+            weather_refresh_ms = std::min<std::uint32_t>(weather_refresh_ms + elapsed_ms, 24U * 60U * 60U * 1000U);
             if (status_ms >= 1000) {
                 status_ms = 0;
                 if (network_started) {
@@ -256,7 +259,18 @@ extern "C" void app_main(void) {
                         boot_weather_pending = false;
                         const auto location = weather.snapshot().saved_location;
                         weather.begin_fetch(location, true);
+                        weather_refresh_ms = 0;
                         request_weather(location);
+                    }
+                    const auto& weather_snapshot = weather.snapshot();
+                    const auto refresh_due_ms = aura::weather_refresh_interval_minutes(
+                        weather_snapshot.refresh_interval) * 60U * 1000U;
+                    if (online && weather_refresh_ms >= refresh_due_ms && weather_snapshot.has_saved_location &&
+                        weather_snapshot.state != aura::WeatherState::Loading &&
+                        weather_snapshot.state != aura::WeatherState::Searching) {
+                        weather_refresh_ms = 0;
+                        weather.begin_fetch(weather_snapshot.saved_location, false);
+                        request_weather(weather_snapshot.saved_location);
                     }
                 }
                 if (network.time_valid()) {
@@ -280,6 +294,9 @@ extern "C" void app_main(void) {
             companion.confirm_image_after(static_cast<std::uint32_t>(esp_timer_get_time() / 1000));
             bsp_display_unlock();
         }
+        // Confirmed power actions can block, restart or enter deep sleep. They
+        // must never execute while the single LVGL/BSP display lock is held.
+        companion.run_deferred_system_action();
         vTaskDelay(pdMS_TO_TICKS(33));
     }
 }

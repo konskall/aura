@@ -11,6 +11,12 @@ struct CompanionStrings {
     const char* app_notes;
     const char* app_translate;
     const char* app_today;
+    const char* app_radio;
+    const char* app_organizer;
+    const char* app_layout_title;
+    const char* app_layout_pick;
+    const char* app_layout_place;
+    const char* app_layout_saved;
     const char* confirm;
     const char* decline;
     const char* done;
@@ -22,11 +28,45 @@ struct CompanionStrings {
     const char* today;
     const char* tomorrow;
 
+    // Internet radio
+    const char* radio_title;
+    const char* radio_search;
+    const char* radio_search_placeholder;
+    const char* radio_favorites;
+    const char* radio_results;
+    const char* radio_connecting;
+    const char* radio_playing;
+    const char* radio_stopped;
+    const char* radio_stop;
+    const char* radio_add_favorite;
+    const char* radio_remove_favorite;
+    const char* radio_no_results;
+    const char* radio_directory_error;
+    const char* radio_stream_error;
+    const char* radio_demo_title;
+    const char* radio_kbps_format;  // %d
+    const char* radio_search_retry;
+    const char* radio_aod_format;   // station name
+    const char* radio_reorder;
+    const char* radio_reorder_done;
+
     // Assistant
     const char* transcribing_title;
     const char* transcribing_detail;
     const char* new_conversation;
     const char* memory_format;  // %u earlier questions
+    const char* conversation_history;
+    const char* conversation_empty;
+    const char* conversation_ask;
+    const char* conversation_clear;
+    const char* conversation_you;
+    const char* conversation_aura;
+    const char* device_ai_services;
+    const char* assistant_service;
+    const char* recognition_service;
+    const char* voice_service;
+    const char* service_unavailable;
+    const char* web_search_unavailable;
     const char* action_question;
     const char* action_timer_format;  // duration text
     const char* action_alarm_format;  // %02d:%02d
@@ -34,6 +74,12 @@ struct CompanionStrings {
     const char* action_in_minutes_format;  // %d
     const char* action_at_format;  // day word, %02d:%02d
     const char* action_note_title;
+    const char* action_task_title;
+    const char* action_shopping_title;
+    const char* action_volume_title;
+    const char* action_brightness_title;
+    const char* action_mute_title;
+    const char* action_unmute_title;
     const char* action_done;
     const char* action_failed;
     const char* voice_error_title;
@@ -61,6 +107,9 @@ struct CompanionStrings {
     const char* hours_format;  // %d
     const char* unit_minute;
     const char* unit_minutes;
+    const char* unit_minutes_short;  // where a row has little room
+    const char* unit_hour_short;
+    const char* unit_hours_short;
     const char* unit_hour;
     const char* new_timer;
     const char* new_alarm;
@@ -97,6 +146,36 @@ struct CompanionStrings {
     const char* note_saved;
     const char* note_needs_voice;
 
+    // Calendar, tasks and shopping
+    const char* organizer_events;
+    const char* organizer_tasks;
+    const char* organizer_shopping;
+    const char* organizer_events_empty;
+    const char* organizer_tasks_empty;
+    const char* organizer_shopping_empty;
+    const char* organizer_new_event;
+    const char* organizer_new_task;
+    const char* organizer_new_shopping;
+    const char* organizer_event_placeholder;
+    const char* organizer_task_placeholder;
+    const char* organizer_shopping_placeholder;
+    const char* organizer_choose_time;
+    const char* organizer_no_time;
+    const char* organizer_full;
+    const char* organizer_past_time;
+    const char* organizer_saved;
+    const char* organizer_tap_complete;
+
+    // Deterministic offline assistant replies
+    const char* offline_time_format;       // %02d:%02d
+    const char* offline_battery_format;    // %d
+    const char* offline_battery_charging;  // appended while charging
+    const char* offline_status_unknown;
+    const char* offline_volume_format;     // %d
+    const char* offline_brightness_format; // %d
+    const char* offline_muted;
+    const char* offline_unmuted;
+
     // Translation: the prompts are shown in each person's own language.
     const char* translate_title;
     const char* translate_needs_voice;
@@ -113,6 +192,22 @@ struct CompanionStrings {
     const char* greeting_evening;
     const char* greeting_night;
     const char* briefing_empty;
+    const char* briefing_namedays_title;
+    const char* briefing_namedays_format;  // names
+    const char* briefing_no_namedays;
+    const char* briefing_next_holiday_format;
+    const char* briefing_holiday_today;  // holiday
+    const char* briefing_holiday_date_format;  // holiday, day, month, days until
+    const char* calendar_date_unavailable;
+    const char* calendar_holiday_today_answer;  // holiday
+    const char* calendar_next_holiday_answer;  // holiday, day, month
+    const char* calendar_nameday_of_answer;  // name, days ("23/4")
+    const char* calendar_and;
+    const char* briefing_fuel_title;
+    const char* briefing_fuel_prices_format;  // unleaded, diesel, LPG
+    const char* briefing_fuel_source;
+    const char* briefing_fuel_source_date_format;  // date, optional DEMO badge
+    const char* briefing_fuel_stale;
     const char* briefing_weather_detail_format;  // city, max, min, rain
     const char* briefing_reminders_one;
     const char* briefing_reminders_format;  // %d
@@ -160,6 +255,18 @@ struct CompanionStrings {
     const char* wake_word;
     const char* wake_word_unavailable;
     const char* muted_face_down;
+
+    // Weather settings
+    const char* weather_settings_title;
+    const char* weather_location;
+    const char* weather_location_detail;
+    const char* weather_refresh_frequency;
+    const char* weather_refresh_15;
+    const char* weather_refresh_30;
+    const char* weather_refresh_60;
+    const char* weather_refresh_180;
+    const char* weather_refresh_note;
+    const char* weather_settings_summary_format;  // city, interval
 
     // Software update
     const char* update_title;
@@ -224,8 +331,21 @@ struct CompanionStrings {
     const char* sound_chime_detail;
     const char* sound_spoken;
     const char* sound_spoken_detail;
+    const char* sound_continuous;
+    const char* sound_continuous_detail;
+    const char* sound_barge_in;
+    const char* sound_barge_in_detail;
+    const char* sound_voice;
     const char* sound_preview;
     const char* sound_alarm_note;
+    const char* voice_settings_title;
+    const char* voice_athina;
+    const char* voice_athina_detail;
+    const char* voice_nestoras;
+    const char* voice_nestoras_detail;
+    const char* voice_online_note;
+    const char* voice_preview;
+    const char* voice_preview_phrase;
     const char* system_title;
     const char* system_software;
     const char* system_software_format;  // %s
@@ -245,6 +365,22 @@ struct CompanionStrings {
     const char* system_reset_detail;
     const char* system_reset_confirm;
     const char* system_starting;
+    const char* system_restarting;
+    const char* system_restarting_detail;
+    const char* system_resetting;
+    const char* system_resetting_detail;
+    const char* system_powering_on;
+    const char* system_powering_on_detail;
+    const char* system_power_off_hint;
+
+    // Interface language. Language names are endonyms; all explanatory copy
+    // follows the currently selected interface language.
+    const char* language_settings_title;
+    const char* language_greek;
+    const char* language_english;
+    const char* language_greek_detail;
+    const char* language_english_detail;
+    const char* language_change_note;
 };
 
 const CompanionStrings& companion_el_gr() noexcept;

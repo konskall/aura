@@ -18,7 +18,7 @@ New-Item -ItemType Directory -Force -Path $screens,$motion,$performance,$interac
 $scenarios = @(
     'weather-sunny','weather-cloudy','weather-rainy','weather-stormy','weather-snowy','weather-night',
     'weather-forecast','weather-loading','weather-no-city','weather-offline','weather-error',
-    'weather-location','weather-results'
+    'weather-location','weather-results','weather-settings'
 )
 foreach ($scenario in $scenarios) {
     & $exe --capture $scenario --screenshot (Join-Path $screens ("aura-{0}.bmp" -f $scenario))

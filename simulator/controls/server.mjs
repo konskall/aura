@@ -8,7 +8,7 @@ const host = '127.0.0.1';
 const port = Number.parseInt(process.env.AURA_CONTROLS_PORT ?? '4777', 10);
 const token = process.env.AURA_BRIDGE_TOKEN ?? '';
 const eventPath = process.env.AURA_CONTROL_EVENTS ?? path.resolve(here, '..', 'runtime', 'control-events.log');
-const allowedTypes = new Set([
+export const supportedEventTypes = Object.freeze([
   'wake_detected', 'begin_recording', 'end_recording', 'prompt', 'partial', 'final',
   'provider_unavailable', 'error', 'notification', 'wifi', 'wifi_fail_next', 'bluetooth', 'battery',
   'battery_unknown', 'charging',
@@ -16,7 +16,9 @@ const allowedTypes = new Set([
   'reset', 'ui_view', 'review_long_answer', 'review_speaking',
   'audio_test', 'audio_wav', 'audio_pause', 'audio_resume', 'audio_stop', 'audio_mute', 'audio_volume',
   'audio_complete', 'audio_fail', 'input_amplitude',
+  'voice_preview',
   'weather_city', 'weather_refresh',
+  'language', 'radio_play', 'radio_stop', 'radio_search', 'fuel_refresh',
   'aoraton_incoming', 'aoraton_unread', 'aoraton_disconnect', 'aoraton_reconnect',
   'aoraton_invalid', 'aoraton_pairing_failure', 'aoraton_reset', 'aoraton_prepare',
   'aoraton_confirm', 'aoraton_sound',
@@ -25,6 +27,7 @@ const allowedTypes = new Set([
   'phone_notification', 'phone_call', 'phone_call_end', 'phone_clear', 'phone_pair',
   'update_available', 'translate_text', 'note_text',
 ]);
+const allowedTypes = new Set(supportedEventTypes);
 
 export function validateEvent(value) {
   if (!value || typeof value !== 'object' || !allowedTypes.has(value.type)) return null;

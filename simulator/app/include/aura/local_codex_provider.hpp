@@ -11,14 +11,15 @@ namespace aura::simulator {
 
 class LocalCodexProvider final : public IAssistantProvider {
 public:
-    LocalCodexProvider(std::string token, std::uint16_t port);
+    LocalCodexProvider(std::string token, std::uint16_t port, std::string provider_name = "Local Codex CLI");
     std::future<AssistantReply> start_turn(TurnRequest request) override;
     void cancel() override;
-    const char* name() const noexcept override { return "Local Codex CLI"; }
+    const char* name() const noexcept override { return provider_name_.c_str(); }
 
 private:
     std::string token_;
     std::uint16_t port_;
+    std::string provider_name_;
     // Shared with in-flight tasks so a turn may outlive a replaced provider.
     std::shared_ptr<std::atomic<std::uint64_t>> generation_{
         std::make_shared<std::atomic<std::uint64_t>>(0)};
@@ -26,4 +27,3 @@ private:
 };
 
 }  // namespace aura::simulator
-

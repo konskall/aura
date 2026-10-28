@@ -46,6 +46,7 @@ private:
     AudioStateMachine machine_{};
     AudioDiagnostics diagnostics_{};
     PcmClip clip_{};
+    std::string pending_wav_path_;
     std::size_t cursor_{0};
     std::uint32_t generation_{0};
     bool shutting_down_{false};

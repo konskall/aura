@@ -18,6 +18,23 @@ codex login status
 .\scripts\dev-simulator.ps1 -Provider codex
 ```
 
+The same native UI can use the opt-in Groq development backend. The local bridge streams chat deltas and sends the validated utterance WAV to the official Whisper endpoint. Speech synthesis is independently selectable:
+
+```powershell
+$env:GROQ_API_KEY = '<a newly rotated key>'
+.\scripts\dev-simulator.ps1 -Provider groq
+Remove-Item Env:GROQ_API_KEY
+```
+
+To keep Codex CLI for answers and use Groq only for speech recognition:
+
+```powershell
+$env:GROQ_API_KEY = '<a newly rotated key>'
+.\scripts\dev-simulator.ps1 -Provider codex -SpeechProvider groq
+```
+
+The secret is process-only and is not shown in bridge health or logs. Never reuse a key pasted into a prompt: it is already exposed. This loopback bridge is not the production ESP32 gateway.
+
 The second command starts hidden loopback helpers, opens the control panel and runs the visible simulator in the foreground. Closing the simulator tears down helpers owned by the script. When `codex` is not on `PATH`, the script uses the newest `codex.exe` shipped with the Codex desktop app (`%LOCALAPPDATA%\OpenAI\Codex\bin\…`) for that run only; `AURA_CODEX_PATH` overrides it.
 
 ## Your aoraton.com account
@@ -38,13 +55,42 @@ Then a message like «@inco τι ώρα είναι;» sent from AURA, in a room 
 
 ## Voice and companion features (v13)
 
+For repeat Groq + Azure tests, put newly rotated credentials in the repository's ignored `.env`:
+
+```text
+GROQ_API_KEY=<new Groq key>
+AZURE_SPEECH_KEY=<new Azure key>
+AZURE_SPEECH_REGION=swedencentral
+AURA_GROQ_MODEL=openai/gpt-oss-120b
+```
+
+Run `.\scripts\dev-simulator.ps1 -Provider groq`. The launcher imports only its fixed allowlist of names, never evaluates the file as PowerShell, validates key shape, and lets an explicit process environment value override the file. This is plaintext local development storage; it is Git-ignored and must never be committed, copied to firmware or shared.
+
 Speech stays on this PC. Install the local recogniser once (about 800 MB under the ignored `.tools\whisper`, SHA-256 pinned). It uses whisper `large-v3-turbo`, which gets Greek right (about 8–9 s for a short question on an i7-4790K), and falls back to `small` (faster but error-prone) when turbo is missing:
 
 ```powershell
 .\scripts\setup-voice.ps1
 ```
 
-With the bridge running (`dev-simulator.ps1`), tapping the orb records from the PC microphone, stops after a pause, recognises Greek with whisper.cpp, asks the provider with the device facts and the recent conversation, and speaks the answer with the installed Windows voice (Greek "Stefanos"; English "Zira" for translations). Without the recogniser, Listening falls back to the labelled synthetic input. Voice notes, translation and "read aloud" use the same path.
+Install the optional neural voices once, then start normally:
+
+```powershell
+.\scripts\setup-neural-voice.ps1
+.\scripts\dev-simulator.ps1 -Provider codex -TtsProvider neural
+```
+
+For the supported Azure Speech path, first rotate any key that has appeared in chat, then copy the resource **Region** or the Speech endpoint from its **Keys and Endpoint** page. A Foundry project endpoint and an Azure OpenAI endpoint are not Speech synthesis endpoints. Start with one of:
+
+```powershell
+.\scripts\start-azure-speech-simulator.ps1 -Region westeurope -Provider codex
+.\scripts\start-azure-speech-simulator.ps1 -Endpoint https://YOUR-RESOURCE.cognitiveservices.azure.com -Provider codex
+```
+
+The script asks for the replacement key with hidden input, validates that a one-character console paste is not accepted, passes the key only through the child-process environment and clears it when the simulator closes. If the Windows console cannot paste into hidden input, first copy the key and add `-KeyFromClipboard`; the launcher reads the complete value without displaying it and immediately clears the clipboard. `-TtsProvider auto` is the default: it prefers configured Azure Speech, otherwise selects the optional local neural adapter when installed, and finally uses Windows voices. `-TtsProvider windows`, `neural`, or `azure` forces one path. In AURA, open **Ρυθμίσεις → Ήχος → Φωνή βοηθού** to choose **Αθηνά** or **Νέστορας** and preview the localized phrase. The simulator control page exposes the same two real preview requests under Audio Engine.
+
+With the bridge running (`dev-simulator.ps1`), tapping the orb records from the PC microphone, stops after a pause, recognises Greek with whisper.cpp or Groq, asks the provider with device facts and recent conversation, and speaks the answer through the selected TTS path. Explicit Greek or English requests such as `ψάξε για πίτσα στη Σπάρτη` opt the single Codex turn into live web search; ordinary turns remain non-browsing and Groq chat fails closed because it has no search tool. Without the recogniser, Listening falls back to the labelled synthetic input. Voice notes, translation and "read aloud" use the same path.
+
+Neural audio is returned as bounded MP3 and decoded to PCM by the shared `minimp3` path. It requires Internet access. Nestoras is the verified default. Athina can fail on the optional consumer Edge endpoint; official Azure Speech is the supported path for both Azure voice identifiers. No neural client or provider credential is placed in firmware.
 
 The apps grid now holds Ρολόι, Σημειώσεις, Μετάφραση and Σήμερα. Alarms, reminders and notes are kept in the ignored `simulator\runtime\companion` folder. The AURA LAB "Companion" section drives what the PC cannot do: a 10 s timer, an alarm or reminder a minute ahead, the morning briefing, IMU raise / face down / face up, screen sleep, DEMO phone notifications and calls, DEMO pairing, a DEMO update, typed translation input and typed notes. After 30 s without input the screen dims and then shows the always-on clock; the first click only wakes it.
 
@@ -62,6 +108,12 @@ The apps grid now holds Ρολόι, Σημειώσεις, Μετάφραση and
 - `Ρυθμίσεις → Ήχος`: volume, mute, the new-message sound, spoken replies and a test sound. The choices are kept in the ignored `simulator/runtime/companion/sound.txt`. The alarm rings even when muted. The speaker test tone and the bundled WAV are in `Σύστημα → Διαγνωστικά`.
 - `Ρυθμίσεις → Σύστημα`: software update, diagnostics, and restart, power off and factory reset, each confirmed first. In the simulator a restart happens in place: the window stays open, and the conversation, playback and recording are dropped behind a short start-up screen. Power off leaves a black screen; press and hold it to start again. Factory reset erases alarms, reminders, notes and their recordings, sound and display settings, the weather city and cache, the saved Wi‑Fi, the phone link and the Aoraton sign-in with its keys, then restarts. It never changes the PC's own Wi‑Fi.
 - Back returns a list to where it was scrolled.
+- Conversation shows the last four in-memory turns for five minutes. `Ιστορικό` can ask a follow-up, start a new topic or clear the bounded memory; it is not persisted to disk. Cancelling an active conversation returns to the apps launcher.
+- Radio favourites can be reordered one position at a time from `Ραδιόφωνο → Αλλαγή σειράς`; the stored order is restored on the next run.
+- A radio stream that drops is joined again automatically (pauses of 1, 2, 4 and 8 s, shown as `Σύνδεση…`) before an error is shown; switching stations cuts a blocked read short; Shoutcast v1 servers that answer `ICY 200 OK` play through a small HTTP/1.0 fallback.
+- Fuel prices refresh on their own: `dev-simulator.ps1` renews the ignored EU bulletin cache in the background when it is missing or more than a week old, and the simulator asks the bridge again every 6 hours (every 15 minutes while prices are missing or stale).
+- The apps grid can be rearranged: tap the pencil in `Εφαρμογές`, tap an app, then tap the place it should move to (the others shift). Tap ✓, Back or swipe away to finish. The order is saved at once in the ignored `simulator/runtime/companion/app-layout.txt` (device: `app-layout.txt` on the microSD card) and factory reset restores the default order.
+- `Ρυθμίσεις → Κατάσταση συσκευής` reports the trusted local assistant, recognition and voice provider names after their health checks. It never displays credentials.
 - Home `Aoraton`: open fictional local `DEMO` rooms, conversation, compose and confirmation screens.
 - Home `Εργαλεία`: open the compact launcher for Assistant, Aoraton, Audio and Notifications; Settings remains available from the gear control.
 - The `DEV` marker is off in normal runs; only the status-matrix captures show it.

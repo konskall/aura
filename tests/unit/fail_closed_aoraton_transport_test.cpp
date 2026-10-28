@@ -37,6 +37,22 @@ int main() {
     expect(event.client_message_id == "synthetic-client-id", "failure reconciles the stable client id");
     expect(event.error.find("sensitive") == std::string::npos, "plaintext is absent from failure metadata");
 
+    aura::AoratonCommand unlock;
+    unlock.type = aura::AoratonCommandType::UnlockVault;
+    unlock.plaintext = "synthetic-passphrase";
+    expect(mailbox.push_command(std::move(unlock)), "vault command queued");
+    aura::AoratonCommand invite;
+    invite.type = aura::AoratonCommandType::AddInviteKey;
+    invite.plaintext = "synthetic-invite-key";
+    expect(mailbox.push_command(std::move(invite)), "invite command queued");
+    expect(transport.poll() == 2, "new key commands consumed");
+    expect(mailbox.pop_event(event) && event.type == aura::AoratonEventType::Failure &&
+               event.error == "AORATON_KEY_BACKEND_NOT_CONFIGURED",
+           "vault unlock fails closed with an explicit error");
+    expect(mailbox.pop_event(event) && event.type == aura::AoratonEventType::Failure &&
+               event.error == "AORATON_KEY_BACKEND_NOT_CONFIGURED",
+           "invite import fails closed with an explicit error");
+
     std::cout << "fail_closed_aoraton_transport_test: PASS\n";
     return 0;
 }

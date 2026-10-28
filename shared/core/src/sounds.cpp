@@ -69,6 +69,14 @@ PcmClip render(const Note* notes, std::size_t count, float peak) {
 
 }  // namespace
 
+const char* assistant_voice_id(AssistantVoice voice) noexcept {
+    return voice == AssistantVoice::Athina ? "athina" : "nestoras";
+}
+
+AssistantVoice assistant_voice_from_id(const std::string& id) noexcept {
+    return id == "athina" ? AssistantVoice::Athina : AssistantVoice::Nestoras;
+}
+
 PcmClip make_message_chime() {
     // G5 then C6: a short, rising "ding-dong".
     static constexpr Note kNotes[]{
@@ -120,6 +128,9 @@ std::string serialize_sound_settings(const SoundSettings& settings) {
     text += std::string("muted=") + (settings.muted ? "1" : "0") + "\n";
     text += std::string("chime=") + (settings.message_chime ? "1" : "0") + "\n";
     text += std::string("spoken=") + (settings.spoken_replies ? "1" : "0") + "\n";
+    text += std::string("continuous=") + (settings.continuous_conversation ? "1" : "0") + "\n";
+    text += std::string("barge_in=") + (settings.barge_in ? "1" : "0") + "\n";
+    text += std::string("voice=") + assistant_voice_id(settings.assistant_voice) + "\n";
     return text;
 }
 
@@ -133,6 +144,10 @@ SoundSettings parse_sound_settings(const std::string& data) {
         if (equals == std::string::npos) continue;
         const auto key = line.substr(0, equals);
         const auto value = line.substr(equals + 1);
+        if (key == "voice") {
+            if (value == "athina" || value == "nestoras") settings.assistant_voice = assistant_voice_from_id(value);
+            continue;
+        }
         if (key == "volume") {
             char* end = nullptr;
             const float parsed = std::strtof(value.c_str(), &end);
@@ -144,6 +159,8 @@ SoundSettings parse_sound_settings(const std::string& data) {
         if (key == "muted") settings.muted = on;
         else if (key == "chime") settings.message_chime = on;
         else if (key == "spoken") settings.spoken_replies = on;
+        else if (key == "continuous") settings.continuous_conversation = on;
+        else if (key == "barge_in") settings.barge_in = on;
     }
     return settings;
 }

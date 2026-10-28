@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -186,6 +187,15 @@ struct AuraUi::Impl {
     bool powered_off{false};
     std::uint32_t boot_remaining_ms{0};
     lv_obj_t* boot_spinner{};
+    lv_obj_t* system_core{};
+    lv_obj_t* system_ring_outer{};
+    lv_obj_t* system_ring_inner{};
+    lv_obj_t* system_orbit_dot{};
+    // The orb the dot circles: its centre, radius and dot size differ per scene.
+    int system_orbit_center_y{158};
+    int system_orbit_radius{72};
+    int system_orbit_size{10};
+    lv_obj_t* system_progress{};
     bool reduced_motion{false};
     bool capture_mode{false};
     bool input_simulated{false};
@@ -204,10 +214,16 @@ struct AuraUi::Impl {
     float weather_motion_update_rate{0.0F};
     std::uint32_t last_action_ms{0};
     bool action_seen{false};
+    bool assistant_cancel_to_launcher{false};
     unsigned typography_page{0};
+    InterfaceLanguage interface_language{InterfaceLanguage::Greek};
 
-    const l10n::Strings& t() const { return l10n::el_gr(); }
-    const l10n::VisualStrings& v() const { return l10n::visual_el_gr(); }
+    const l10n::Strings& t() const {
+        return interface_language == InterfaceLanguage::English ? l10n::en_us() : l10n::el_gr();
+    }
+    const l10n::VisualStrings& v() const {
+        return interface_language == InterfaceLanguage::English ? l10n::visual_en_us() : l10n::visual_el_gr();
+    }
 
     bool accept_action() {
         if (action_seen && phase_ms - last_action_ms < 75U) return false;
@@ -276,6 +292,7 @@ struct AuraUi::Impl {
     static void cancel_event(lv_event_t* event) {
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
         if (!self->accept_action()) return;
+        self->assistant_cancel_to_launcher = true;
         if (self->callbacks.on_cancel) self->callbacks.on_cancel();
     }
 
@@ -306,6 +323,27 @@ struct AuraUi::Impl {
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
         if (!self->accept_action()) return;
         if (self->callbacks.on_weather_refresh) self->callbacks.on_weather_refresh();
+    }
+
+    static void language_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action()) return;
+        const auto raw = reinterpret_cast<std::uintptr_t>(lv_obj_get_user_data(lv_event_get_current_target_obj(event)));
+        const auto language = raw == static_cast<std::uintptr_t>(InterfaceLanguage::English) + 1U ?
+            InterfaceLanguage::English : InterfaceLanguage::Greek;
+        const bool changed = self->interface_language != language;
+        self->interface_language = language;
+        self->scroll_memory.clear();
+        if (changed && self->callbacks.on_language_changed) self->callbacks.on_language_changed(language);
+        self->render(UiView::LanguageSettings, true);
+    }
+
+    static void weather_refresh_interval_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action() || !self->callbacks.on_weather_refresh_interval) return;
+        const auto interval = static_cast<WeatherRefreshInterval>(reinterpret_cast<std::uintptr_t>(
+            lv_obj_get_user_data(lv_event_get_current_target_obj(event))));
+        if (weather_refresh_interval_valid(interval)) self->callbacks.on_weather_refresh_interval(interval);
     }
 
     static void weather_change_city_event(lv_event_t* event) {
@@ -808,6 +846,7 @@ struct AuraUi::Impl {
         switch (self->current_view) {
             case UiView::Launcher:
             case UiView::Settings:
+            case UiView::LanguageSettings:
             case UiView::Notifications:
             case UiView::Diagnostics:
             case UiView::Battery:
@@ -818,7 +857,7 @@ struct AuraUi::Impl {
             case UiView::WifiDetails:
             case UiView::Cards:
             case UiView::Navigation:
-            case UiView::Tools:
+            case UiView::WeatherSettings:
             case UiView::Calendar:
             case UiView::Camera:
             case UiView::VoiceSettings:
@@ -858,10 +897,20 @@ struct AuraUi::Impl {
         return v().weather_unknown;
     }
 
-    ui::IconRole weather_condition_icon(WeatherCondition condition) const {
+    const char* weather_refresh_text(WeatherRefreshInterval interval) const {
+        switch (interval) {
+            case WeatherRefreshInterval::Minutes15: return c().weather_refresh_15;
+            case WeatherRefreshInterval::Minutes30: return c().weather_refresh_30;
+            case WeatherRefreshInterval::Hour1: return c().weather_refresh_60;
+            case WeatherRefreshInterval::Hours3: return c().weather_refresh_180;
+        }
+        return c().weather_refresh_30;
+    }
+
+    ui::IconRole weather_condition_icon(WeatherCondition condition, bool is_day = true) const {
         switch (condition) {
-            case WeatherCondition::Clear: return ui::IconRole::Sun;
-            case WeatherCondition::PartlyCloudy: return ui::IconRole::Weather;
+            case WeatherCondition::Clear: return is_day ? ui::IconRole::Sun : ui::IconRole::Moon;
+            case WeatherCondition::PartlyCloudy: return is_day ? ui::IconRole::Weather : ui::IconRole::Cloud;
             case WeatherCondition::Cloudy:
             case WeatherCondition::Fog: return ui::IconRole::Cloud;
             case WeatherCondition::Drizzle: return ui::IconRole::CloudDrizzle;
@@ -874,10 +923,10 @@ struct AuraUi::Impl {
         return ui::IconRole::Weather;
     }
 
-    std::uint32_t weather_condition_accent(WeatherCondition condition) const {
+    std::uint32_t weather_condition_accent(WeatherCondition condition, bool is_day = true) const {
         switch (condition) {
-            case WeatherCondition::Clear: return ui::tokens::amber;
-            case WeatherCondition::PartlyCloudy: return ui::tokens::ice;
+            case WeatherCondition::Clear: return is_day ? ui::tokens::amber : ui::tokens::ice;
+            case WeatherCondition::PartlyCloudy: return is_day ? ui::tokens::ice : ui::tokens::lilac;
             case WeatherCondition::Cloudy:
             case WeatherCondition::Fog: return ui::tokens::text_secondary;
             case WeatherCondition::Drizzle:
@@ -1239,7 +1288,8 @@ struct AuraUi::Impl {
     }
 
     lv_obj_t* make_form_keyboard(lv_obj_t* area, ui::KeyboardProfile profile, int y = kKeyboardY) {
-        auto* keyboard = ui::create_keyboard(content, area, profile);
+        auto* keyboard = ui::create_keyboard(content, area, profile,
+            interface_language == InterfaceLanguage::Greek);
         lv_obj_set_size(keyboard, ui::tokens::display_width, ui::tokens::display_height - y);
         lv_obj_set_pos(keyboard, 0, y);
         return keyboard;
@@ -1291,26 +1341,28 @@ struct AuraUi::Impl {
         status_battery = ui::make_label(status_right, "", ui::tokens::text, ui::font_caption());
         status_battery_glyph = lv_obj_create(status_right);
         ui::reset(status_battery_glyph);
-        lv_obj_set_size(status_battery_glyph, 42, 22);
+        lv_obj_set_size(status_battery_glyph, 46, 24);
         auto* outline = lv_obj_create(status_battery_glyph);
         ui::reset(outline);
-        lv_obj_set_size(outline, 36, 20);
+        lv_obj_set_size(outline, 40, 22);
         lv_obj_set_pos(outline, 0, 1);
-        lv_obj_set_style_radius(outline, 6, 0);
+        lv_obj_set_style_radius(outline, 7, 0);
+        lv_obj_set_style_bg_color(outline, ui::color(ui::tokens::surface_glass), 0);
+        lv_obj_set_style_bg_opa(outline, LV_OPA_60, 0);
         lv_obj_set_style_border_width(outline, 2, 0);
         lv_obj_set_style_border_color(outline, ui::color(ui::tokens::text_secondary), 0);
         lv_obj_set_style_border_opa(outline, LV_OPA_COVER, 0);
         status_battery_fill = lv_obj_create(outline);
         ui::reset(status_battery_fill);
-        lv_obj_set_size(status_battery_fill, 26, 12);
-        lv_obj_set_pos(status_battery_fill, 4, 4);
-        lv_obj_set_style_radius(status_battery_fill, 2, 0);
+        lv_obj_set_size(status_battery_fill, 32, 14);
+        lv_obj_set_pos(status_battery_fill, 3, 3);
+        lv_obj_set_style_radius(status_battery_fill, 5, 0);
         lv_obj_set_style_bg_color(status_battery_fill, ui::color(ui::tokens::mint), 0);
         lv_obj_set_style_bg_opa(status_battery_fill, LV_OPA_COVER, 0);
         auto* cap = lv_obj_create(status_battery_glyph);
         ui::reset(cap);
-        lv_obj_set_size(cap, 4, 8);
-        lv_obj_set_pos(cap, 38, 7);
+        lv_obj_set_size(cap, 4, 10);
+        lv_obj_set_pos(cap, 42, 7);
         lv_obj_set_style_radius(cap, 2, 0);
         lv_obj_set_style_bg_color(cap, ui::color(ui::tokens::text_secondary), 0);
         lv_obj_set_style_bg_opa(cap, LV_OPA_COVER, 0);
@@ -1416,10 +1468,21 @@ struct AuraUi::Impl {
             title = temperature;
             detail = weather.data.location.name;
             if (weather.data.origin == WeatherDataOrigin::Demo) detail += std::string(" · ") + v().demo_badge;
-            role = weather_condition_icon(weather.data.condition);
-            accent = weather_condition_accent(weather.data.condition);
+            role = weather_condition_icon(weather.data.condition, weather.data.is_day);
+            accent = weather_condition_accent(weather.data.condition, weather.data.is_day);
         }
-        chip(kGutter, 404, 344, role, accent, title, detail.c_str(), weather_open_event);
+        const auto glyph_count = [](std::string_view text) {
+            std::size_t count = 0;
+            for (const unsigned char value : text) if ((value & 0xC0U) != 0x80U) ++count;
+            return count;
+        };
+        // Size the compact chip from both labels, while keeping enough room for
+        // the icon, padding and flex gaps. This keeps short cities such as
+        // Sparta compact without truncating a live/DEMO suffix on longer text.
+        const int natural = 84 + static_cast<int>(std::min<std::size_t>(glyph_count(title), 8U)) * 16 +
+                            static_cast<int>(std::min<std::size_t>(glyph_count(detail), 18U)) * 14;
+        const int chip_width = std::clamp(natural, 220, 344);
+        chip(kGutter, 404, chip_width, role, accent, title, detail.c_str(), weather_open_event);
     }
 
     void render_home() {
@@ -1536,6 +1599,7 @@ struct AuraUi::Impl {
         if (code == "NOT_LOGGED_IN") return {t().error_provider_title, t().error_login_detail, false};
         if (code == "NO_SPEECH") return {c().voice_error_title, c().no_speech_detail, false};
         if (code == "STT_UNAVAILABLE") return {c().voice_error_title, c().stt_unavailable_detail, false};
+        if (code == "WEB_SEARCH_UNAVAILABLE") return {t().error_provider_title, c().web_search_unavailable, false};
         if (code == "MIC_UNAVAILABLE") return {c().voice_error_title, c().mic_unavailable_detail, false};
         if (code == "TIMEOUT") return {t().error_title, t().error_timeout_detail, false};
         if (code == "BUSY") return {t().error_title, t().error_busy_detail, false};
@@ -2135,7 +2199,7 @@ struct AuraUi::Impl {
         make_header(v().weather, ui::IconRole::Refresh, weather_refresh_event, ui::tokens::ice,
                     static_cast<bool>(callbacks.on_weather_refresh));
         const auto& data = weather.data;
-        const auto accent = weather_condition_accent(data.condition);
+        const auto accent = weather_condition_accent(data.condition, data.is_day);
 
         weather_scroll = lv_obj_create(content);
         ui::reset(weather_scroll);
@@ -2213,12 +2277,14 @@ struct AuraUi::Impl {
             data.condition == WeatherCondition::Drizzle || data.condition == WeatherCondition::Thunderstorm;
         const bool snow = data.condition == WeatherCondition::Snow;
         const bool wind = data.condition == WeatherCondition::Windy;
-        if (night && data.condition == WeatherCondition::Clear) {
+        if (night && (data.condition == WeatherCondition::Clear ||
+                      data.condition == WeatherCondition::PartlyCloudy)) {
             weather_icon = make_dot(weather_scene, 64, ui::tokens::ice, LV_OPA_COVER);
             lv_obj_set_pos(weather_icon, 62, 45);
             weather_moon_cutout = make_dot(weather_scene, 56, ui::tokens::canvas, LV_OPA_COVER);
             lv_obj_set_pos(weather_moon_cutout, 82, 38);
-            for (std::size_t index = 0; index < weather_stars.size(); ++index) {
+            const std::size_t star_count = data.condition == WeatherCondition::Clear ? weather_stars.size() : 3U;
+            for (std::size_t index = 0; index < star_count; ++index) {
                 weather_stars[index] = make_dot(weather_scene, index % 2 == 0 ? 4 : 3,
                                                 ui::tokens::ice, LV_OPA_80);
                 lv_obj_set_pos(weather_stars[index], 20 + static_cast<int>((index * 29) % 145),
@@ -2226,7 +2292,7 @@ struct AuraUi::Impl {
             }
         } else {
             const int size = data.condition == WeatherCondition::Clear ? 82 : 76;
-            weather_icon = icon_view(weather_scene, weather_condition_icon(data.condition), size, accent);
+            weather_icon = icon_view(weather_scene, weather_condition_icon(data.condition, data.is_day), size, accent);
             lv_obj_set_pos(weather_icon, kWeatherHaloCenterX - size / 2, kWeatherHaloCenterY - size / 2);
             lv_obj_set_style_transform_pivot_x(weather_icon, size / 2, 0);
             lv_obj_set_style_transform_pivot_y(weather_icon, size / 2, 0);
@@ -2374,12 +2440,12 @@ struct AuraUi::Impl {
         const std::size_t hourly_count = std::min<std::size_t>(data.hourly_count, weather_hour_cards.size());
         for (std::size_t index = 0; index < hourly_count; ++index) {
             const auto& hour = data.hourly[index];
-            const auto hour_accent = weather_condition_accent(hour.condition);
+            const auto hour_accent = weather_condition_accent(hour.condition, hour.is_day);
             auto* card = weather_card(hourly_strip, kGutter + static_cast<int>(index) * 132, 120, 164,
                                       hour_accent, true);
             const auto time = weather_time_label(hour.time);
             line(card, time.c_str(), 0, 0, 92, ui::font_caption(), ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
-            auto* hour_icon = icon_view(card, weather_condition_icon(hour.condition), 40, hour_accent);
+            auto* hour_icon = icon_view(card, weather_condition_icon(hour.condition, hour.is_day), 40, hour_accent);
             lv_obj_set_pos(hour_icon, 26, 32);
             char value[16];
             std::snprintf(value, sizeof(value), "%.0f°", hour.temperature_c);
@@ -2569,6 +2635,11 @@ struct AuraUi::Impl {
         lv_obj_add_event_cb(wifi_row, wifi_open_event, LV_EVENT_CLICKED, this);
         y += kRowPitch;
 
+        settings_row(list, y, t().language,
+            interface_language == InterfaceLanguage::English ? c().language_english : c().language_greek,
+            ui::IconRole::Languages, ui::tokens::ice, UiView::LanguageSettings);
+        y += kRowPitch;
+
         const bool provider_available = static_cast<bool>(callbacks.on_provider_changed);
         auto* provider_row = list_row(list, y, t().provider,
             !provider_available ? t().provider_unavailable : (live_provider ? t().live_codex : t().demo_provider),
@@ -2596,9 +2667,12 @@ struct AuraUi::Impl {
         if (reduced_motion) lv_obj_add_state(motion_switch, LV_STATE_CHECKED);
         y += kRowPitch;
 
-        settings_row(list, y, v().weather,
-            weather.has_saved_location ? weather.saved_location.name.c_str() : v().weather_choose_city,
-            ui::IconRole::Weather, ui::tokens::amber, UiView::WeatherLocation);
+        char weather_summary[192];
+        std::snprintf(weather_summary, sizeof(weather_summary), c().weather_settings_summary_format,
+                      weather.has_saved_location ? weather.saved_location.name.c_str() : v().weather_choose_city,
+                      weather_refresh_text(weather.refresh_interval));
+        settings_row(list, y, v().weather, weather_summary,
+            ui::IconRole::Weather, ui::tokens::amber, UiView::WeatherSettings);
         y += kRowPitch;
         settings_row(list, y, v().sound, nullptr, ui::IconRole::Audio, ui::tokens::pink, UiView::Audio);
         y += kRowPitch;
@@ -2608,6 +2682,92 @@ struct AuraUi::Impl {
         y += kRowPitch;
         y = render_settings_companion(list, y);
         list_end(list, y, 8);
+    }
+
+    void render_language_settings() {
+        make_header(c().language_settings_title);
+        auto* list = make_list();
+        const struct {
+            InterfaceLanguage language;
+            const char* title;
+            const char* detail;
+        } choices[] = {
+            {InterfaceLanguage::Greek, c().language_greek, c().language_greek_detail},
+            {InterfaceLanguage::English, c().language_english, c().language_english_detail},
+        };
+        int y = 0;
+        for (const auto& choice : choices) {
+            const bool selected = interface_language == choice.language;
+            auto* row = list_row(list, y, choice.title, choice.detail, ui::IconRole::Languages,
+                                 selected ? ui::tokens::ice : ui::tokens::indigo, kRowHeight, 252);
+            if (selected) {
+                auto* check = icon_view(row, ui::IconRole::Check, 28, ui::tokens::ice);
+                lv_obj_align(check, LV_ALIGN_RIGHT_MID, 0, 0);
+            }
+            lv_obj_set_user_data(row, reinterpret_cast<void*>(static_cast<std::uintptr_t>(choice.language) + 1U));
+            lv_obj_set_clickable(row, true);
+            lv_obj_add_event_cb(row, language_event, LV_EVENT_CLICKED, this);
+            y += kRowPitch;
+        }
+        auto* note = label(list, c().language_change_note, kGutter + 4, y + 12, kWidth - 8,
+                           ui::font_caption(), ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
+        lv_obj_update_layout(note);
+        list_end(list, y + 12 + lv_obj_get_height(note), 12);
+    }
+
+    void render_weather_settings() {
+        make_header(c().weather_settings_title);
+        auto* list = make_list();
+
+        auto* location = list_row(list, 0, c().weather_location,
+                                  weather.has_saved_location ? weather.saved_location.name.c_str() :
+                                                               c().weather_location_detail,
+                                  ui::IconRole::Location, ui::tokens::amber, 80);
+        add_chevron(location);
+        set_target(location, UiView::WeatherLocation);
+        lv_obj_set_clickable(location, true);
+        lv_obj_add_event_cb(location, nav_event, LV_EVENT_CLICKED, this);
+
+        line(list, c().weather_refresh_frequency, kGutter + 4, 102, kWidth - 8, ui::font_caption(),
+             ui::tokens::text_secondary);
+        const struct {
+            WeatherRefreshInterval interval;
+            const char* text;
+        } choices[] = {
+            {WeatherRefreshInterval::Minutes15, c().weather_refresh_15},
+            {WeatherRefreshInterval::Minutes30, c().weather_refresh_30},
+            {WeatherRefreshInterval::Hour1, c().weather_refresh_60},
+            {WeatherRefreshInterval::Hours3, c().weather_refresh_180},
+        };
+        constexpr int kGap = 12;
+        constexpr int kTileWidth = (kWidth - kGap) / 2;
+        for (int index = 0; index < 4; ++index) {
+            const bool selected = weather.refresh_interval == choices[index].interval;
+            auto* tile = lv_button_create(list);
+            ui::reset(tile);
+            ui::style_platter(tile, selected ? ui::tokens::ice : ui::tokens::blue,
+                              ui::tokens::radius_medium, selected);
+            lv_obj_set_size(tile, kTileWidth, 64);
+            lv_obj_set_pos(tile, kGutter + (index % 2) * (kTileWidth + kGap), 134 + (index / 2) * 76);
+            lv_obj_set_style_pad_hor(tile, 16, 0);
+            lv_obj_set_style_pad_ver(tile, 0, 0);
+            auto* title = ui::make_label(tile, choices[index].text,
+                                         selected ? ui::tokens::ice : ui::tokens::text,
+                                         ui::font_caption());
+            lv_obj_align(title, LV_ALIGN_LEFT_MID, 0, 0);
+            if (selected) {
+                auto* check = icon_view(tile, ui::IconRole::Check, 24, ui::tokens::ice);
+                lv_obj_align(check, LV_ALIGN_RIGHT_MID, 0, 0);
+            }
+            lv_obj_set_user_data(tile, reinterpret_cast<void*>(static_cast<std::uintptr_t>(choices[index].interval)));
+            lv_obj_set_clickable(tile, true);
+            lv_obj_add_event_cb(tile, weather_refresh_interval_event, LV_EVENT_CLICKED, this);
+            ui::set_button_disabled(tile, !callbacks.on_weather_refresh_interval);
+        }
+        auto* note = label(list, c().weather_refresh_note, kGutter + 4, 292, kWidth - 8, ui::font_caption(),
+                           ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
+        lv_obj_update_layout(note);
+        list_end(list, 292 + lv_obj_get_height(note), 12);
     }
 
     const char* wifi_security_text(WifiSecurity security) const {
@@ -2830,50 +2990,80 @@ struct AuraUi::Impl {
         make_header(v().status_short);
         const bool low = status.power_known && status.battery_percent <= 20 && !status.charging;
         const std::uint32_t accent = low ? ui::tokens::amber : ui::tokens::mint;
-        auto* gauge = lv_arc_create(content);
-        lv_obj_set_size(gauge, 200, 200);
-        lv_obj_set_pos(gauge, kGutter, 112);
-        lv_obj_set_style_pad_all(gauge, 0, 0);
-        lv_arc_set_rotation(gauge, 135);
-        lv_arc_set_bg_angles(gauge, 0, 270);
-        lv_arc_set_range(gauge, 0, 100);
-        lv_arc_set_value(gauge, status.power_known ? status.battery_percent : 0);
-        lv_obj_set_style_arc_width(gauge, 16, LV_PART_MAIN);
-        lv_obj_set_style_arc_color(gauge, ui::color(ui::tokens::surface_high), LV_PART_MAIN);
-        lv_obj_set_style_arc_width(gauge, 16, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_color(gauge, ui::color(accent), LV_PART_INDICATOR);
-        lv_obj_set_style_arc_rounded(gauge, true, LV_PART_INDICATOR);
-        lv_obj_set_style_opa(gauge, LV_OPA_TRANSP, LV_PART_KNOB);
-        lv_obj_set_clickable(gauge, false);
-        if (status.power_known && status.charging) {
-            auto* bolt = icon_view(content, ui::IconRole::Charging, 30, ui::tokens::mint);
-            lv_obj_set_pos(bolt, kGutter + 85, 140);
-        }
+        auto* list = make_list();
+        int y = 8;
+        auto* power = lv_obj_create(list);
+        ui::reset(power);
+        ui::style_platter(power, accent, ui::tokens::radius_large, false);
+        lv_obj_set_size(power, kWidth, 124);
+        lv_obj_set_pos(power, kGutter, y);
+        auto* battery_body = lv_obj_create(power);
+        ui::reset(battery_body);
+        lv_obj_set_size(battery_body, 92, 54);
+        lv_obj_set_pos(battery_body, 20, 24);
+        lv_obj_set_style_radius(battery_body, 14, 0);
+        lv_obj_set_style_bg_color(battery_body, ui::color(ui::tokens::surface_glass), 0);
+        lv_obj_set_style_bg_opa(battery_body, LV_OPA_60, 0);
+        lv_obj_set_style_border_width(battery_body, 2, 0);
+        lv_obj_set_style_border_color(battery_body, ui::color(accent), 0);
+        auto* battery_fill = lv_obj_create(battery_body);
+        ui::reset(battery_fill);
+        const int fill_width = status.power_known ? std::max(5, status.battery_percent * 76 / 100) : 5;
+        lv_obj_set_size(battery_fill, fill_width, 38);
+        lv_obj_set_pos(battery_fill, 6, 6);
+        lv_obj_set_style_radius(battery_fill, 9, 0);
+        lv_obj_set_style_bg_color(battery_fill, ui::color(accent), 0);
+        lv_obj_set_style_bg_opa(battery_fill, status.power_known ? LV_OPA_COVER : LV_OPA_20, 0);
+        auto* battery_cap = lv_obj_create(power);
+        ui::reset(battery_cap);
+        lv_obj_set_size(battery_cap, 7, 24);
+        lv_obj_set_pos(battery_cap, 114, 39);
+        lv_obj_set_style_radius(battery_cap, 4, 0);
+        lv_obj_set_style_bg_color(battery_cap, ui::color(accent), 0);
+        lv_obj_set_style_bg_opa(battery_cap, LV_OPA_COVER, 0);
         char value[16];
         if (status.power_known) std::snprintf(value, sizeof(value), "%d%%", status.battery_percent);
         else std::snprintf(value, sizeof(value), "%s", v().status_unknown);
-        line(content, value, kGutter, 180, 200, ui::font_display(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);
+        line(power, value, 144, 20, 240, ui::font_display(), ui::tokens::text);
         const char* power_origin = status.power_origin == StatusOrigin::Simulated ? v().status_sim :
                                    status.power_origin == StatusOrigin::Live ? v().status_live : v().status_unknown;
-        line(content, status.power_known && status.charging ? v().charging : power_origin, kGutter, 252, 200,
-             ui::font_caption(), status.power_known && status.charging ? ui::tokens::mint : ui::tokens::text_tertiary,
-             LV_TEXT_ALIGN_CENTER);
+        line(power, status.power_known && status.charging ? v().charging : power_origin, 148, 80, 220,
+             ui::font_caption(), status.power_known && status.charging ? ui::tokens::mint : ui::tokens::text_tertiary);
+        if (status.power_known && status.charging) {
+            auto* bolt = icon_view(power, ui::IconRole::Charging, 28, ui::tokens::mint);
+            lv_obj_set_pos(bolt, 52, 37);
+        }
+        y += 136;
 
         const char* connection = !status.connection_known ? v().status_unknown :
                                  status.online ? t().connected : t().disconnected;
         const char* connection_origin = status.connection_origin == StatusOrigin::Simulated ? v().status_sim :
                                         status.connection_origin == StatusOrigin::Live ? v().status_live : v().status_unknown;
-        line(content, t().connectivity, 248, 124, 208, ui::font_caption(), ui::tokens::text_secondary);
-        line(content, connection, 248, 154, 208, ui::font_headline(),
-             status.online ? ui::tokens::text : ui::tokens::coral);
-        auto* origin = ui::make_tag(content, connection_origin,
-                                    status.connection_origin == StatusOrigin::Simulated ? ui::tokens::amber : ui::tokens::mint);
-        lv_obj_set_pos(origin, 248, 198);
-        if (status.power_origin == StatusOrigin::Simulated || status.connection_origin == StatusOrigin::Simulated) {
-            label(content, v().simulator_value, 248, 244, 208, ui::font_caption(), ui::tokens::text_tertiary);
-        }
-        pill(content, audio.muted ? t().unmute : t().mute, ui::ButtonTone::Secondary, kGutter, kActionY, kWidth,
+        std::string connection_detail = connection;
+        connection_detail += " · ";
+        connection_detail += connection_origin;
+        list_row(list, y, t().connectivity, connection_detail.c_str(),
+                 status.online ? ui::IconRole::Wifi : ui::IconRole::WifiOff,
+                 status.online ? ui::tokens::mint : ui::tokens::coral, 80);
+        y += 92;
+
+        line(list, c().device_ai_services, kGutter + 4, y, kWidth - 8, ui::font_caption(),
+             ui::tokens::text_secondary);
+        y += 36;
+        const auto service_row = [&](const char* title, const std::string& provider, ui::IconRole role,
+                                     std::uint32_t color) {
+            const bool ready = !provider.empty();
+            list_row(list, y, title, ready ? provider.c_str() : c().service_unavailable, role,
+                     ready ? color : ui::tokens::text_tertiary, 72);
+            y += 82;
+        };
+        service_row(c().assistant_service, extras.assistant_provider, ui::IconRole::Sparkles, ui::tokens::lilac);
+        service_row(c().recognition_service, extras.speech_recognition_provider, ui::IconRole::Microphone,
+                    ui::tokens::ice);
+        service_row(c().voice_service, extras.speech_output_provider, ui::IconRole::Voice, ui::tokens::magenta);
+        pill(list, audio.muted ? t().unmute : t().mute, ui::ButtonTone::Secondary, kGutter, y, kWidth,
              audio_mute_event);
+        list_end(list, y + kButtonHeight, 20);
     }
 
     void update_host_metrics_label() {
@@ -3039,7 +3229,10 @@ struct AuraUi::Impl {
         if (weather_icon) {
             const bool drifting = weather.data.condition == WeatherCondition::PartlyCloudy ||
                 weather.data.condition == WeatherCondition::Cloudy || weather.data.condition == WeatherCondition::Fog;
-            const int base_x = !weather.data.is_day && weather.data.condition == WeatherCondition::Clear ? 62 :
+            const bool night_moon = !weather.data.is_day &&
+                (weather.data.condition == WeatherCondition::Clear ||
+                 weather.data.condition == WeatherCondition::PartlyCloudy);
+            const int base_x = night_moon ? 62 :
                 kWeatherHaloCenterX - static_cast<int>(lv_obj_get_width(weather_icon)) / 2;
             lv_obj_set_x(weather_icon, base_x + (drifting ? static_cast<int>(std::sin(seconds * 0.9F) * 5.0F) : 0));
             lv_obj_set_style_transform_rotation(weather_icon,
@@ -3102,6 +3295,11 @@ struct AuraUi::Impl {
         audio_state_label = nullptr;
         sound_volume_label = nullptr;
         boot_spinner = nullptr;
+        system_core = nullptr;
+        system_ring_outer = nullptr;
+        system_ring_inner = nullptr;
+        system_orbit_dot = nullptr;
+        system_progress = nullptr;
         audio_hint_label = nullptr;
         audio_progress_bar = nullptr;
         audio_meter.fill(nullptr);
@@ -3166,6 +3364,7 @@ struct AuraUi::Impl {
         fade = fade || !refresh;
         // Leaving the city picker always reopens it on its presets.
         if (!refresh && view != UiView::WeatherLocation) weather_typing = false;
+        if (!refresh) leave_edit_modes(view);
         current_view = view;
         motion.leave();
         reset_view_pointers();
@@ -3174,9 +3373,11 @@ struct AuraUi::Impl {
             case UiView::Home: render_home(); break;
             case UiView::Launcher: render_launcher(); break;
             case UiView::Assistant: render_assistant(); break;
+            case UiView::ConversationHistory: render_companion(view); break;
             case UiView::Cards: render_unavailable(v().search); break;
             case UiView::Notifications: render_notifications(); break;
             case UiView::Settings: render_settings(); break;
+            case UiView::LanguageSettings: render_language_settings(); break;
             case UiView::Diagnostics: render_diagnostics(); break;
             case UiView::Audio: render_audio(); break;
             case UiView::AoratonRooms: render_aoraton_rooms(); break;
@@ -3187,12 +3388,13 @@ struct AuraUi::Impl {
             case UiView::AoratonConfirm: render_aoraton_confirm(); break;
             case UiView::Navigation: render_unavailable(v().navigation); break;
             case UiView::Weather: render_weather(); break;
+            case UiView::WeatherSettings: render_weather_settings(); break;
             case UiView::WeatherLocation: render_weather_location(); break;
-            case UiView::Tools: render_unavailable(v().applications); break;
-            case UiView::Calendar: render_unavailable(v().calendar); break;
+            case UiView::Calendar:
+            case UiView::OrganizerNew: render_companion(view); break;
             case UiView::Camera: render_unavailable(v().camera); break;
             case UiView::Battery: render_battery(); break;
-            case UiView::VoiceSettings: render_unavailable(v().voice_title); break;
+            case UiView::VoiceSettings: render_voice_settings(); break;
             case UiView::TypographyProof: render_typography_proof(); break;
             case UiView::Wifi: render_wifi(); break;
             case UiView::WifiPassword: render_wifi_password(); break;
@@ -3215,7 +3417,9 @@ struct AuraUi::Impl {
             case UiView::PhoneNotification:
             case UiView::PhoneLink:
             case UiView::DisplaySettings:
-            case UiView::Update: render_companion(view); break;
+            case UiView::Update:
+            case UiView::Radio:
+            case UiView::RadioSearch: render_companion(view); break;
             case UiView::System: render_system(); break;
             case UiView::SystemConfirm: render_system_confirm(); break;
             case UiView::PowerOff: render_power_off(); break;
@@ -3269,7 +3473,7 @@ struct AuraUi::Impl {
         lv_obj_set_hidden(status_battery, !show_battery);
         lv_obj_set_hidden(status_battery_glyph, !show_battery || !status.power_known);
         if (status.power_known) {
-            lv_obj_set_width(status_battery_fill, std::max(3, status.battery_percent * 26 / 100));
+            lv_obj_set_width(status_battery_fill, std::max(4, status.battery_percent * 32 / 100));
             lv_obj_set_style_bg_color(status_battery_fill,
                 ui::color(low ? ui::tokens::coral : ui::tokens::mint), 0);
         }
@@ -3331,8 +3535,13 @@ void AuraUi::apply(const AssistantSnapshot& snapshot) {
     const bool transition = snapshot.state != old_state || snapshot.turn_generation != old_generation;
     if (snapshot.state == AssistantState::Idle && old_state != AssistantState::Idle &&
         impl_->current_view == UiView::Assistant) {
-        impl_->navigation.reset();
-        impl_->render(UiView::Home);
+        if (impl_->assistant_cancel_to_launcher) {
+            impl_->assistant_cancel_to_launcher = false;
+            impl_->return_to(UiView::Launcher);
+        } else {
+            impl_->navigation.reset();
+            impl_->render(UiView::Home);
+        }
     } else if (transition &&
                (snapshot.state == AssistantState::Offline || snapshot.state == AssistantState::Error ||
                 (is_turn_active(snapshot.state) && snapshot.state != AssistantState::ActionConfirmation))) {
@@ -3348,9 +3557,14 @@ void AuraUi::apply(const AssistantSnapshot& snapshot) {
 
 void AuraUi::apply_sound(const SoundSettings& settings) {
     const bool changed = settings.message_chime != impl_->sound.message_chime ||
-                         settings.spoken_replies != impl_->sound.spoken_replies;
+                         settings.spoken_replies != impl_->sound.spoken_replies ||
+                         settings.continuous_conversation != impl_->sound.continuous_conversation ||
+                         settings.barge_in != impl_->sound.barge_in ||
+                         settings.assistant_voice != impl_->sound.assistant_voice;
     impl_->sound = settings;
-    if (changed && impl_->current_view == UiView::Audio) impl_->render(UiView::Audio);
+    if (changed && (impl_->current_view == UiView::Audio || impl_->current_view == UiView::VoiceSettings)) {
+        impl_->render(impl_->current_view);
+    }
 }
 
 void AuraUi::power_off() {
@@ -3372,8 +3586,20 @@ void AuraUi::boot() {
 void AuraUi::reset_preferences() {
     impl_->reduced_motion = false;
     impl_->motion.set_reduced(false);
+    impl_->interface_language = InterfaceLanguage::Greek;
+    impl_->launcher_reordering = false;
+    impl_->launcher_selected_app.reset();
     impl_->scroll_memory.clear();
 }
+
+void AuraUi::set_language(InterfaceLanguage language) {
+    if (impl_->interface_language == language) return;
+    impl_->interface_language = language;
+    impl_->scroll_memory.clear();
+    if (impl_->content) impl_->render(impl_->current_view);
+}
+
+InterfaceLanguage AuraUi::language() const noexcept { return impl_->interface_language; }
 
 void AuraUi::apply_audio(const AudioDiagnostics& diagnostics) {
     const bool structural_change = diagnostics.state != impl_->audio.state ||
@@ -3469,7 +3695,8 @@ void AuraUi::apply_weather(const WeatherSnapshot& snapshot) {
                               (snapshot.error_code == "CITY_NOT_FOUND" ? v.weather_not_found : v.weather_error_title),
                           snapshot.state == WeatherState::Offline ? ui::tokens::magenta : ui::tokens::coral);
     }
-    if (impl_->current_view == UiView::Weather || impl_->current_view == UiView::WeatherLocation ||
+    if (impl_->current_view == UiView::Weather || impl_->current_view == UiView::WeatherSettings ||
+        impl_->current_view == UiView::WeatherLocation ||
         impl_->current_view == UiView::Settings || impl_->current_view == UiView::Home ||
         impl_->current_view == UiView::AlwaysOn) {
         impl_->render(impl_->current_view);
@@ -3551,6 +3778,21 @@ void AuraUi::show(UiView view) {
     impl_->weather_typing = false;
     impl_->navigation.replace(view);
     impl_->render(view);
+}
+
+void AuraUi::show_from_home(UiView view) {
+    impl_->weather_typing = false;
+    impl_->navigation.reset();
+    if (view != UiView::Home) impl_->navigation.navigate(view);
+    impl_->render(view);
+}
+
+void AuraUi::show_system_confirmation(SystemAction action) {
+    if (action == SystemAction::PowerOn) action = SystemAction::Restart;
+    impl_->pending_system = action;
+    impl_->navigation.replace(UiView::System);
+    impl_->navigation.navigate(UiView::SystemConfirm);
+    impl_->render(UiView::SystemConfirm);
 }
 
 void AuraUi::open_wifi_network(const std::string& ssid, WifiSecurity security) {

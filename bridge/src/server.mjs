@@ -1,8 +1,10 @@
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { createCodexRunner } from './codex-runner.mjs';
+import { createGroqRunner } from './groq-runner.mjs';
 import { createSpeechEngines, SPEECH_LANGUAGES, speechLimits } from './speech.mjs';
 import { buildInstructions, validateTurn } from './turn-prompt.mjs';
+import { readFuelSnapshot } from './fuel.mjs';
 
 const host = '127.0.0.1';
 const port = Number.parseInt(process.env.AURA_BRIDGE_PORT ?? '4778', 10);
@@ -51,12 +53,15 @@ async function readJson(request, maxBytes = 16384) {
 
 const failureStatus = (code) => (code === 'CANCELLED' ? 499 : 503);
 const clientAudioErrors = new Set(['INVALID_AUDIO', 'UNSUPPORTED_AUDIO', 'AUDIO_TOO_SHORT', 'INVALID_LANGUAGE']);
-const clientTextErrors = new Set(['INVALID_LANGUAGE', 'INVALID_REQUEST', 'TEXT_TOO_LARGE']);
+const clientTextErrors = new Set(['INVALID_LANGUAGE', 'INVALID_REQUEST', 'TEXT_TOO_LARGE', 'INVALID_VOICE']);
 
 export function createBridgeServer(options = {}) {
-  const serviceRunner = options.runner ?? createCodexRunner();
+  const selectedProvider = options.provider ?? process.env.AURA_BRIDGE_AI_PROVIDER ?? 'codex';
+  const serviceRunner = options.runner ?? (selectedProvider === 'groq' ? createGroqRunner() : createCodexRunner());
   const speech = options.speech ?? createSpeechEngines();
   const serviceToken = options.token ?? token;
+  const fuelFile = options.fuelFile ?? fileURLToPath(new URL('../runtime/fuel-prices.json', import.meta.url));
+  const fuelReader = options.fuelReader ?? (() => readFuelSnapshot(fuelFile));
   const active = new Map();
   let speechJob = null;
   let healthCache = { value: null, at: 0 };
@@ -87,7 +92,8 @@ export function createBridgeServer(options = {}) {
     if (request.method === 'GET' && url.pathname === '/health') {
       if (!healthCache.value || Date.now() - healthCache.at > 10000) {
         const [cli, speechHealth] = await Promise.all([serviceRunner.health(), speech.health()]);
-        healthCache = { value: { cli, speech: speechHealth }, at: Date.now() };
+        healthCache = { value: { ai_provider: selectedProvider,
+          web_search: serviceRunner.supportsWebSearch === true, cli, speech: speechHealth }, at: Date.now() };
       }
       send(response, 200, { ok: true, service: 'aura-codex-bridge', ...healthCache.value });
       return;
@@ -98,7 +104,18 @@ export function createBridgeServer(options = {}) {
     }
 
     try {
-      if (request.method === 'POST' && url.pathname === '/v1/assistant/turn') {
+      if (request.method === 'GET' && url.pathname === '/v1/fuel/prices') {
+        const snapshot = await fuelReader();
+        if (!snapshot) {
+          send(response, 503, { ok: false, code: 'FUEL_DATA_UNAVAILABLE' });
+          return;
+        }
+        send(response, 200, { ok: true, ...snapshot });
+        return;
+      }
+      if (request.method === 'POST' &&
+          (url.pathname === '/v1/assistant/turn' || url.pathname === '/v1/assistant/stream')) {
+        const streaming = url.pathname.endsWith('/stream');
         const body = await readJson(request, 24576);
         if (!body || typeof body.id !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(body.id)) {
           send(response, 400, { ok: false, code: 'INVALID_REQUEST' });
@@ -120,12 +137,52 @@ export function createBridgeServer(options = {}) {
         console.log(JSON.stringify({ event: 'turn_started', id: body.id, mode: turn.value.mode,
           promptBytes: Buffer.byteLength(turn.value.prompt), historyTurns: turn.value.history?.length ?? 0,
           contextBytes: Buffer.byteLength(turn.value.context ?? '') }));
-        const result = await serviceRunner.runTurn({ instructions: buildInstructions(turn.value),
-          signal: controller.signal });
-        active.delete(body.id);
+        // A provider without a search tool still answers: the model is told it
+        // cannot search right now and must not claim live results.
+        const searchUnavailable = turn.value.webSearch && serviceRunner.supportsWebSearch !== true;
+        const value = searchUnavailable ? { ...turn.value, webSearch: false, searchUnavailable: true } : turn.value;
+        const instructions = buildInstructions(value);
+        let result;
+        try {
+          if (streaming) {
+            response.writeHead(200, {
+              'Content-Type': 'application/x-ndjson; charset=utf-8',
+              'Cache-Control': 'no-store',
+              'X-Content-Type-Options': 'nosniff',
+            });
+            const onDelta = (text) => {
+              if (!controller.signal.aborted && !response.destroyed && typeof text === 'string' && text) {
+                response.write(`${JSON.stringify({ type: 'delta', text })}\n`);
+              }
+            };
+            result = serviceRunner.runTurnStream ?
+              await serviceRunner.runTurnStream({ instructions, signal: controller.signal, onDelta,
+                webSearch: value.webSearch }) :
+              await serviceRunner.runTurn({ instructions, signal: controller.signal, webSearch: value.webSearch });
+            if (result.ok && !serviceRunner.runTurnStream) onDelta(result.text);
+          } else {
+            result = await serviceRunner.runTurn({ instructions, signal: controller.signal,
+              webSearch: value.webSearch });
+          }
+        } catch (error) {
+          // A runner that throws ends the turn like any provider failure (the
+          // stream may already be open, so the reply below is the error line).
+          console.log(JSON.stringify({ event: 'turn_error', id: body.id, error: error?.name ?? 'Error' }));
+          result = { ok: false, code: 'PROVIDER_ERROR' };
+        } finally {
+          // Always free the slot, or every later question would be BUSY.
+          active.delete(body.id);
+        }
         console.log(JSON.stringify({ event: 'turn_finished', id: body.id, ok: result.ok, code: result.code ?? null,
           durationMs: Date.now() - started }));
-        send(response, result.ok ? 200 : failureStatus(result.code), result);
+        if (streaming) {
+          if (!response.destroyed) {
+            response.end(`${JSON.stringify(result.ok ? { type: 'done', text: result.text } :
+              { type: 'error', code: result.code ?? 'PROVIDER_ERROR' })}\n`);
+          }
+        } else {
+          send(response, result.ok ? 200 : failureStatus(result.code), result);
+        }
         return;
       }
       if (request.method === 'POST' && url.pathname === '/v1/assistant/cancel') {
@@ -168,20 +225,21 @@ export function createBridgeServer(options = {}) {
           return;
         }
         await withSpeechJob(response, async (signal) => {
-          const result = await speech.synthesize({ text: body.text, lang: body.lang, signal });
+          const result = await speech.synthesize({ text: body.text, lang: body.lang, voice: body.voice, signal });
           console.log(JSON.stringify({ event: 'synthesize_finished', ok: result.ok, code: result.code ?? null,
             textBytes: Buffer.byteLength(body.text) }));
           if (!result.ok) {
             send(response, clientTextErrors.has(result.code) ? 400 : failureStatus(result.code), result);
             return;
           }
+          const audio = result.audio ?? result.wav;
           response.writeHead(200, {
-            'Content-Type': 'audio/wav',
-            'Content-Length': result.wav.length,
+            'Content-Type': result.contentType ?? 'audio/wav',
+            'Content-Length': audio.length,
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
           });
-          response.end(result.wav);
+          response.end(audio);
         });
         return;
       }

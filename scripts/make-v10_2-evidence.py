@@ -20,6 +20,8 @@ SCREENS = (
     ("18", "diagnostics"), ("19", "wifi"), ("20", "wifi-password"),
     ("21", "wifi-connecting"), ("22", "wifi-failed"), ("23", "wifi-details"),
     ("24", "wifi-unavailable"),
+    ("25", "system"), ("26", "system-restart"), ("27", "system-power-off"),
+    ("28", "system-factory-reset"), ("29", "boot"), ("30", "power-off"),
 )
 MOTION_STATES = ("home", "listening", "thinking", "speaking")
 MERCURY_BOX = (145, 165, 335, 355)

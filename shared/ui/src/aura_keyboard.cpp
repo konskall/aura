@@ -254,13 +254,13 @@ const lv_font_t* key_font() {
 
 }  // namespace
 
-lv_obj_t* create_keyboard(lv_obj_t* parent, lv_obj_t* textarea, KeyboardProfile profile) {
+lv_obj_t* create_keyboard(lv_obj_t* parent, lv_obj_t* textarea, KeyboardProfile profile, bool greek_first) {
     auto* keyboard = lv_keyboard_create(parent);
     // lv_keyboard_create aligns to BOTTOM_MID; callers position it absolutely.
     lv_obj_set_align(keyboard, LV_ALIGN_TOP_LEFT);
     auto* state = new KeyboardState{};
     state->profile = profile;
-    state->greek = profile == KeyboardProfile::Text;
+    state->greek = profile == KeyboardProfile::Text && greek_first;
     // A new sentence or name starts with a capital.
     const char* existing = textarea ? lv_textarea_get_text(textarea) : nullptr;
     state->shift = profile == KeyboardProfile::Text && (!existing || existing[0] == '\0');

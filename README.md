@@ -1,54 +1,264 @@
 # AURA
 
-AURA is a Greek-first AI companion for the Waveshare ESP32-S3-Touch-AMOLED-2.16. It uses one shared C++17 application core and LVGL UI across a native Windows simulator and ESP-IDF firmware.
+**A Greek-first AI companion for a 480 × 480 AMOLED ESP32-S3 device.** One shared C++17 core and LVGL interface run in two places: a native Windows simulator you can use today, and ESP-IDF firmware for the Waveshare ESP32-S3-Touch-AMOLED-2.16 board.
 
-## Current milestone
+> **Status (October 2026).** The simulator is feature-complete for the v13 "Companion" release and passes the full automated suite. The firmware compiles cleanly with ESP-IDF 5.5.5 but **has not been flashed**: nothing that depends on the physical board is claimed to work yet. See [docs/VERIFICATION.md](docs/VERIFICATION.md) for every result.
 
-The Phase 1 vertical slice now includes:
+![AURA production screens: home, listening, thinking, speaking, answers, apps, settings, sound, messages, Wi-Fi and system](docs/images/aura-production-screens.png)
 
-- Production v8 LVGL redesign with a living procedural AURA presence, distinct animated AI states, content-first answers and a compact Tools launcher instead of the legacy footer.
-- Native 480 × 480 LVGL/SDL2 simulator with mouse and keyboard input.
-- Home, assistant, demo cards, notifications, settings, diagnostics, audio and Aoraton messaging screens.
-- Real Windows SDL2 PCM/WAV playback with pause, stop, volume, mute, progress and reactive envelope.
-- Fictional local Aoraton `DEMO` rooms, messages, unread state, reconnect/error scenarios and explicit send confirmation.
-- Greek on-screen Aoraton keyboard, 18-view native 480 × 480 production gallery and measured rapid-navigation stress check.
-- Live Open-Meteo weather with manual city search/default persistence, cached offline recovery, Greek on-screen input and animated condition states; no GPS capability is implied.
-- Deterministic mock assistant plus a loopback-only bridge to the authenticated Codex CLI.
-- ESP32 ES8311 audio implementation through the official Waveshare BSP; compile and physical playback remain unverified until ESP-IDF and hardware are available.
+![AURA companion screens: apps, timers, clock, notes, voice notes, Today, translation, always-on clock, phone calls and notifications](docs/images/aura-companion-screens.png)
 
-## Windows quick start
+All names, rooms, messages and data in the screenshots are fictional `DEMO` content.
 
-First-time setup and normal demo mode:
+## Σύντομα στα ελληνικά
+
+Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, μετάφραση πρόσωπο με πρόσωπο, μηνύματα Aoraton με κρυπτογράφηση και ειδοποιήσεις από το iPhone. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Ο προσομοιωτής δουλεύει σήμερα· το firmware χτίζεται, αλλά δεν έχει δοκιμαστεί ακόμα σε πραγματική πλακέτα.
+
+## Contents
+
+- [What AURA does](#what-aura-does)
+- [How it is built](#how-it-is-built)
+- [Getting started on Windows](#getting-started-on-windows)
+- [Testing](#testing)
+- [Firmware](#firmware)
+- [Security and privacy](#security-and-privacy)
+- [Known limitations](#known-limitations)
+- [Documentation](#documentation)
+- [Working on the code](#working-on-the-code)
+- [License](#license)
+
+## What AURA does
+
+### Assistant
+
+- **Voice and text.** Tap the orb or type. Answers stream in as they are written, and on a voice turn the first sentence is spoken while the rest is still arriving.
+- **Natural conversation.**
+  - A follow-up question ("and tomorrow?") keeps the context of the last few turns for five minutes; the history is never written to disk.
+  - Continuous conversation listens again after an answer.
+  - Speaking over an answer interrupts it (barge-in).
+- **Greek and English.** The interface, speech recognition and voices follow the chosen language.
+- **Actions with confirmation.** The assistant can propose a timer, alarm, reminder, note, task, shopping item, calendar event or message. Nothing happens until you confirm it on the screen.
+- **Works offline for everyday commands.** Timers, alarms, notes, tasks, shopping, volume, mute, brightness, the time, the battery and opening apps are understood on the device itself, in Greek and English. A sentence that merely mentions these words is left to the assistant.
+- **Local answers.** "Who celebrates today?", "When does Γιώργος celebrate?" and "When is the next public holiday?" are answered from an offline Greek Orthodox calendar.
+- **Explicit web search.** "Ψάξε…" / "search for…" uses live search only when the provider has a real search tool (the Codex CLI); otherwise the assistant says it cannot search right now.
+
+### Apps
+
+The apps grid can be rearranged: tap the pencil, then an app, then its new place.
+
+| App | What it offers |
+|---|---|
+| Conversation | The assistant, with recent history, follow-up and new-topic actions |
+| Weather | Open-Meteo forecast for any city, hourly and daily views, animated conditions, offline cache |
+| Messages | Aoraton end-to-end-encrypted rooms: sign-in through the PC browser, read and send with confirmation, optional `@inco` AI answers |
+| Clock | Timers, alarms (once or daily) and reminders, with a full-screen alert |
+| Notes | Typed and voice notes; voice notes are transcribed |
+| Translate | Face-to-face translation with one card turned towards the other person |
+| Today | Greeting, namedays, next public holiday, weather, average Greek fuel prices, alarms, reminders, timers and unread messages |
+| Radio | Greek stations, a station directory search, favourites with your own order, now-playing titles, automatic reconnection |
+| Notifications | AURA and phone notifications in one place |
+| Organizer | Agenda, tasks and shopping list |
+| Settings | Wi-Fi, language, AI provider, reduced motion, sound, display, voice, weather and system |
+
+### Device
+
+- **Always-on clock and power saving.** The screen dims, then shows an always-on clock. Dimming is always relative to your chosen brightness.
+- **Gestures.** Raise to wake, and flip face down to mute.
+- **Sound settings.** Volume, mute, message chime, spoken answers and continuous conversation.
+- **System.** Updates (OTA with rollback), diagnostics, restart, power off, and a factory reset that erases everything.
+- **Phone link.** Notifications and calls from a paired iPhone over Bluetooth LE (ANCS). In the simulator this uses the PC's Bluetooth adapter and is experimental.
+
+## How it is built
+
+```text
+                ┌──────────────────────────────────────────────┐
+                │ shared/core  models, rules, parsers (no UI)  │
+                │ shared/ui    LVGL 9.6 interface              │
+                │ shared/localization  Greek / English strings │
+                └──────────────────┬───────────────────────────┘
+                 same code         │          same code
+        ┌──────────────────────────┴───────┐   ┌───────────────────────────────┐
+        │ simulator/  Windows, SDL2 2.32   │   │ firmware/  ESP-IDF 5.5.5       │
+        │ WinHTTP, audio, radio, Wi-Fi,    │   │ Waveshare BSP, ES8311 audio,   │
+        │ iPhone ANCS, local stores        │   │ NimBLE ANCS, OTA, microSD      │
+        └──────────────┬───────────────────┘   └───────────────────────────────┘
+                       │ loopback only (127.0.0.1, bearer token)
+        ┌──────────────┴───────────────────┐
+        │ bridge/  Node.js ≥ 20            │──► Codex CLI · Groq · Azure Speech
+        │ assistant turns, speech, fuel    │
+        └──────────────────────────────────┘
+```
+
+The device itself never holds an AI provider key. Production AI will go through an authenticated gateway ([ADR 0003](docs/ADR/0003-streaming-ai-gateway-and-device-secrets.md)); the bridge is desktop development tooling.
+
+| Path | Contents |
+|---|---|
+| `shared/core` | Assistant state machine, streaming, offline commands, organizer, clock, notes, radio, weather, Greek calendar, fuel, Aoraton, voice front end and echo cancellation, display power |
+| `shared/ui` | Every screen, the keyboard, motion and the design tokens |
+| `shared/localization` | All Greek and English text |
+| `shared/assets` | Fonts (IBM Plex, Space Grotesk), icons and images, with their licenses |
+| `simulator/app` | The Windows simulator and its platform services |
+| `simulator/controls` | A loopback control page for simulated events |
+| `bridge` | The loopback bridge: Codex CLI and Groq runners, speech (Groq Whisper, Azure, Windows voices), fuel prices |
+| `firmware` | The ESP-IDF project and its components |
+| `tests` | Unit, integration, interoperability and smoke tests |
+| `scripts` | Setup, build, test and evidence scripts |
+| `docs` | Architecture, decisions (ADRs), design, security and the verification ledger |
+
+## Getting started on Windows
+
+### Requirements
+
+- Windows 10 or 11 with PowerShell 5.1.
+- Git and Node.js 20 or newer.
+- Python 3 with Pillow (`python -m pip install --user pillow==12.2.0`), for the evidence checks in the test suite.
+- Several gigabytes of free space. The portable toolchain and optional speech models take about 4 GB on the development PC.
+
+The setup installs pinned portable tools under the ignored `.tools` folder: CMake, Ninja and the w64devkit compiler. It does not change the system `PATH`.
+
+### First run
 
 ```powershell
+git clone https://github.com/konskall/aura.git
+cd aura
 .\scripts\setup-windows.ps1
-.\scripts\dev-simulator.ps1
+.\run.bat mock        # DEMO answers, no account needed
 ```
 
-For testing, double-click `run.bat` (or run it from a terminal): it builds what changed and opens the simulator with Codex answers. `run.bat mock` uses the DEMO answers instead. To use your own aoraton.com account, run `.\scripts\setup-aoraton.ps1` once (see `docs/SIMULATOR.md`).
+`run.bat` builds whatever changed and opens the 480 × 480 simulator together with its control page. Without an argument it uses the locally signed-in Codex CLI.
 
-To connect the Assistant screen to the locally authenticated Codex CLI by hand:
+### Choosing the assistant and voices
 
 ```powershell
-codex login status
-.\scripts\dev-simulator.ps1 -Provider codex
-.\scripts\setup-voice.ps1   # optional: local Greek speech recognition (about 200 MB)
+.\scripts\dev-simulator.ps1 -Provider mock|codex|groq `
+                            -SpeechProvider local|groq `
+                            -TtsProvider auto|windows|azure|neural
 ```
 
-The setup is project-local. It installs pinned portable build tools under the ignored `.tools` directory and does not change the machine-wide `PATH`. The development command opens the simulator and its loopback control panel; closing the simulator tears down the helper processes it started.
+- **`-Provider`**
+  - `mock`: labelled DEMO answers.
+  - `codex`: the Codex CLI you are signed in to (`codex login status`).
+  - `groq`: streamed Groq chat.
+- **`-SpeechProvider`**
+  - `local`: whisper.cpp on this PC; install it with `.\scripts\setup-voice.ps1`.
+  - `groq`: Groq Whisper (`whisper-large-v3-turbo`).
+- **`-TtsProvider`**
+  - `auto`: official Azure Speech when configured, otherwise the installed Windows voices.
+  - `neural`: an unofficial Edge read-aloud service. It is never chosen automatically and the launcher warns when you select it.
+- **`-EnableIphoneAncs`**: shows the notifications of a paired iPhone ([docs/phone/IPHONE_WINDOWS_ANCS.md](docs/phone/IPHONE_WINDOWS_ANCS.md)).
 
-Run all checks available on this computer:
+Keys for Groq and Azure go in a local `.env` file next to `.env.example`. The file is ignored by git and is never copied into firmware.
+
+```text
+GROQ_API_KEY=<your Groq key>
+AZURE_SPEECH_KEY=<your Azure Speech key>
+AZURE_SPEECH_REGION=<your Azure region, for example swedencentral>
+```
+
+### Optional extras
+
+- **Aoraton account.** Run `.\scripts\setup-aoraton.ps1` once; sign-in happens in the PC browser ([docs/SIMULATOR.md](docs/SIMULATOR.md)).
+- **Fuel prices.** These come from the European Commission Weekly Oil Bulletin. The launcher renews the local cache in the background when it is more than a week old; to refresh it by hand, run `.\scripts\update-eu-fuel-prices.ps1`.
+- **Azure voices.** `.\scripts\start-azure-speech-simulator.ps1` starts the simulator with the Azure Athina and Nestoras voices. It uses Codex answers and local speech recognition unless you choose otherwise with `-Provider` and `-SpeechProvider`.
+
+## Testing
 
 ```powershell
 .\scripts\test.ps1
 ```
 
-See [docs/SIMULATOR.md](docs/SIMULATOR.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/WEATHER_ARCHITECTURE.md](docs/WEATHER_ARCHITECTURE.md), [docs/audio/AUDIO_ARCHITECTURE.md](docs/audio/AUDIO_ARCHITECTURE.md), [docs/aoraton/INTEGRATION_AUDIT.md](docs/aoraton/INTEGRATION_AUDIT.md), and [docs/VERIFICATION.md](docs/VERIFICATION.md).
+The authoritative suite runs everything that can be checked on a PC. It contacts no production service.
 
-## Important boundaries
+- **Setup and build.**
+  - Local environment checks.
+  - A native Release build.
+  - An ESP-IDF-compatible compile of every shared source (`-Wall -Wextra -Werror`, no exceptions or RTTI).
+- **Tests.**
+  - 29 CTest suites, including loopback tests for streaming and for Shoutcast radio.
+  - Bridge and control-page tests (`node --test`).
+  - A smoke run and a 380-transition UI stress run.
+- **Evidence.**
+  - Real SDL/LVGL pointer checks of every route at 1× and 2× scale (200 checks each).
+  - Screenshot and motion evidence of every screen, written to the ignored `artifacts/` folder.
 
-- The Codex CLI bridge is desktop development tooling only. It does not run on the ESP32 and does not grant production API rights.
-- Aoraton is a local mock in AURA. There is no production Supabase connection, real room pairing or E2EE implementation yet.
-- Every fictional room/message and simulated delivery is marked `DEMO`.
-- Greek TTS is not enabled yet. The audio engine currently proves actual tone and PCM/WAV output.
-- Speaker presence, GPIO46 behavior, touch accuracy, microphones, battery life, device FPS and firmware audio are not claimed before physical-board validation.
+Single test programs can be built and run from `build/native`, for example `ninja -C build/native aura_radio_tests`. Bridge tests run with `node --test` inside `bridge/`.
+
+## Firmware
+
+**Target board.** Waveshare ESP32-S3-Touch-AMOLED-2.16:
+
+- ESP32-S3R8 with 8 MiB PSRAM and 16 MiB flash;
+- 480 × 480 AMOLED (CO5300);
+- CST9220 touch;
+- AXP2101 power management;
+- QMI8658 IMU and PCF85063 RTC;
+- ES7210 microphones and ES8311 codec;
+- microSD.
+
+See [docs/HARDWARE.md](docs/HARDWARE.md).
+
+```powershell
+. C:\path\to\esp-idf-v5.5.5\export.ps1     # activate ESP-IDF 5.5.5
+.\scripts\build-firmware.ps1                 # development image
+.\scripts\build-firmware-production.ps1      # Secure Boot V2 + flash encryption profile
+```
+
+**What the firmware has today.** The shared UI and models, weather, sound, display power, the organizer, clock and notes, OTA with rollback, and iPhone ANCS through NimBLE.
+
+**What is not available on the device yet.**
+
+- **Needs an external service.** The assistant, speech, radio playback and real Aoraton messaging need the production gateway or other backends; until then they stay disabled or clearly labelled.
+- **Needs the board.** Everything physical still has to be validated: display, touch, audio, battery and Wi-Fi/TLS behaviour.
+
+The production signing keys are never stored in the repository.
+
+## Security and privacy
+
+- **Secrets stay on the PC.** Provider keys exist only in the PC's process environment or the ignored `.env`. They are never logged or committed, and never put in firmware.
+- **The bridge is local.** It listens only on `127.0.0.1` and requires a fresh bearer token for each run.
+- **Untrusted text is data.** Device facts, conversation history and web pages go to the model as data, never as instructions. Model output cannot act without typed validation and your confirmation.
+- **Messages and audio stay private.** Message text, transcripts and audio are not written to logs. Aoraton messages are end-to-end encrypted.
+- **Demo data is labelled.** Fictional or simulated data is always marked `DEMO`.
+
+Details: [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md) and the [Aoraton security boundaries](docs/aoraton/SECURITY_BOUNDARIES.md).
+
+## Known limitations
+
+- **The firmware has not run on hardware.** Heap and stack peaks, frame rate, power use and touch accuracy are unmeasured.
+- **There is no wake word.** No trained and measured Greek "Αύρα" model exists yet, so listening starts with a tap.
+- **Echo cancellation is untuned.** It works in tests, but still needs tuning in a real room and on the device's microphones.
+- **iPhone disconnect handling is untested live.** Detecting that the phone has gone, and reconnecting, needs a session with a paired iPhone.
+- **Radio has two limits.** Only MP3 stations are supported, and radio on the device waits for a playback backend.
+
+## Documentation
+
+| Topic | Where |
+|---|---|
+| Architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/architecture/SYSTEM_OVERVIEW.md](docs/architecture/SYSTEM_OVERVIEW.md) |
+| Simulator guide | [docs/SIMULATOR.md](docs/SIMULATOR.md), [docs/simulator/WINDOWS_SETUP.md](docs/simulator/WINDOWS_SETUP.md) |
+| Decisions | [docs/ADR](docs/ADR) |
+| Verification ledger | [docs/VERIFICATION.md](docs/VERIFICATION.md) |
+| Weather | [docs/WEATHER_ARCHITECTURE.md](docs/WEATHER_ARCHITECTURE.md) |
+| Audio | [docs/audio/AUDIO_ARCHITECTURE.md](docs/audio/AUDIO_ARCHITECTURE.md) |
+| Aoraton messaging | [docs/aoraton/LIVE_ARCHITECTURE.md](docs/aoraton/LIVE_ARCHITECTURE.md) |
+| v13 Companion design | [docs/design/AURA_V13_COMPANION_DESIGN.md](docs/design/AURA_V13_COMPANION_DESIGN.md) |
+| Screens and routes | [docs/ui/FEATURE_AND_ROUTE_PARITY.md](docs/ui/FEATURE_AND_ROUTE_PARITY.md) |
+| Roadmap | [docs/ROADMAP.md](docs/ROADMAP.md) |
+
+## Working on the code
+
+[AGENTS.md](AGENTS.md) holds the repository rules that people and coding agents both follow. Two of them shape every change:
+
+- Every meaningful build or test result is recorded in [docs/VERIFICATION.md](docs/VERIFICATION.md) as `PASSED`, `FAILED`, `NOT RUN` or `NEEDS HARDWARE`. A check that did not run is never claimed.
+- Shared code must also compile for the ESP32. That means C++17 with `gnu++2b` compatibility, no exceptions or RTTI, and no warnings.
+
+Text files use LF line endings; PowerShell and batch scripts use CRLF ([.gitattributes](.gitattributes)).
+
+## License
+
+No license file has been added yet. Until one is, the AURA source code is not licensed for reuse.
+
+Third-party components keep their own licenses:
+
+- fonts, icons and images: [shared/assets/THIRD_PARTY.md](shared/assets/THIRD_PARTY.md);
+- the minimp3 decoder: [shared/third_party/minimp3/LICENSE](shared/third_party/minimp3/LICENSE).

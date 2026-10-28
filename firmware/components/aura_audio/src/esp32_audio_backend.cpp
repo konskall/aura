@@ -100,6 +100,7 @@ bool Esp32AudioBackend::play_pcm(const PcmClip& clip) {
     stop();
     xSemaphoreTake(mutex_, portMAX_DELAY);
     clip_ = clip;
+    pending_wav_path_.clear();
     cursor_ = 0;
     ++generation_;
     machine_.dispatch(AudioCommand::BeginBuffering);
@@ -153,14 +154,23 @@ bool Esp32AudioBackend::load_pcm_wav(const std::string& path, PcmClip& clip) {
 }
 
 bool Esp32AudioBackend::play_wav(const std::string& path) {
-    PcmClip clip;
-    if (!load_pcm_wav(path, clip)) {
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        set_error_locked("INVALID_OR_OVERSIZED_WAV");
-        xSemaphoreGive(mutex_);
-        return false;
-    }
-    return play_pcm(clip);
+    if (!mutex_ || !codec_ || path.empty() || path.size() > 255 || path.find("..") != std::string::npos ||
+        path.rfind("/sdcard/aura/", 0) != 0) return false;
+    stop();
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    pending_wav_path_ = path;
+    clip_.samples.clear();
+    cursor_ = 0;
+    ++generation_;
+    machine_.dispatch(AudioCommand::BeginBuffering);
+    diagnostics_.state = machine_.state();
+    diagnostics_.buffered_frames = 0;
+    diagnostics_.progress = 0.0F;
+    diagnostics_.error_code.clear();
+    const TaskHandle_t task = task_;
+    xSemaphoreGive(mutex_);
+    if (task) xTaskNotifyGive(task);
+    return task != nullptr;
 }
 
 bool Esp32AudioBackend::play_test_tone(std::uint32_t duration_ms) {
@@ -181,6 +191,7 @@ bool Esp32AudioBackend::pause() {
     diagnostics_.state = machine_.state();
     diagnostics_.envelope = 0.0F;
     xSemaphoreGive(mutex_);
+    if (accepted) amplifier_.disable();
     return accepted;
 }
 
@@ -188,7 +199,9 @@ bool Esp32AudioBackend::resume() {
     xSemaphoreTake(mutex_, portMAX_DELAY);
     const bool accepted = machine_.dispatch(AudioCommand::Resume);
     diagnostics_.state = machine_.state();
+    const bool muted = diagnostics_.muted;
     xSemaphoreGive(mutex_);
+    if (accepted && !muted) amplifier_.enable();
     return accepted;
 }
 
@@ -204,6 +217,7 @@ void Esp32AudioBackend::stop() {
     diagnostics_.progress = 0.0F;
     diagnostics_.buffered_frames = 0;
     clip_.samples.clear();
+    pending_wav_path_.clear();
     xSemaphoreGive(mutex_);
     amplifier_.disable();
 }
@@ -252,6 +266,36 @@ void Esp32AudioBackend::playback_task() {
             return;
         }
         const std::uint32_t generation = generation_;
+        const std::string wav_path = pending_wav_path_;
+        xSemaphoreGive(mutex_);
+
+        if (!wav_path.empty()) {
+            PcmClip loaded;
+            const bool ok = load_pcm_wav(wav_path, loaded);
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            if (shutting_down_ || generation != generation_) {
+                xSemaphoreGive(mutex_);
+                continue;
+            }
+            pending_wav_path_.clear();
+            if (!ok) {
+                set_error_locked("INVALID_OR_OVERSIZED_WAV");
+                xSemaphoreGive(mutex_);
+                continue;
+            }
+            clip_ = std::move(loaded);
+            cursor_ = 0;
+            diagnostics_.format = clip_.format;
+            diagnostics_.buffered_frames = clip_.samples.size() /
+                std::max<std::uint8_t>(1, clip_.format.channels);
+            xSemaphoreGive(mutex_);
+        }
+
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (shutting_down_ || generation != generation_ || clip_.samples.empty()) {
+            xSemaphoreGive(mutex_);
+            continue;
+        }
         const AudioFormat format = clip_.format;
         xSemaphoreGive(mutex_);
 

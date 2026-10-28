@@ -47,6 +47,20 @@ enum class WeatherProvider {
     TlesDetector,
 };
 
+// A deliberately small, validated set of polling choices. Keeping this in the
+// shared model makes the simulator and the device use exactly the same policy.
+enum class WeatherRefreshInterval : std::uint16_t {
+    Minutes15 = 15,
+    Minutes30 = 30,
+    Hour1 = 60,
+    Hours3 = 180,
+};
+
+constexpr WeatherRefreshInterval kDefaultWeatherRefreshInterval = WeatherRefreshInterval::Minutes30;
+
+bool weather_refresh_interval_valid(WeatherRefreshInterval interval) noexcept;
+std::uint32_t weather_refresh_interval_minutes(WeatherRefreshInterval interval) noexcept;
+
 enum class WeatherMetric : std::uint16_t {
     Pressure = 1U << 0U,
     WindGust = 1U << 1U,
@@ -120,6 +134,7 @@ struct HourlyWeather {
     WeatherCondition condition{WeatherCondition::Unknown};
     int weather_code{-1};
     int rain_probability_percent{0};
+    bool is_day{true};
 };
 
 struct DailyWeather {
@@ -168,6 +183,7 @@ struct WeatherSnapshot {
     std::string search_query;
     std::string error_code;
     std::string notice_code;
+    WeatherRefreshInterval refresh_interval{kDefaultWeatherRefreshInterval};
     std::uint64_t sequence{0};
 };
 
@@ -177,6 +193,7 @@ public:
 
     bool restore_location(const WeatherLocation& location);
     bool restore_cache(const WeatherData& data);
+    bool set_refresh_interval(WeatherRefreshInterval interval);
     void clear_location();
     bool begin_fetch(const WeatherLocation& location, bool save_as_default);
     bool fetch_succeeded(const WeatherData& data);
