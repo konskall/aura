@@ -37,3 +37,16 @@ Do not embed Lordicon's web component or Lottie player into firmware and do not 
 `tools/icons/build-icons.ps1` invokes `tools/icons/generate-icons.mjs` to reproduce the A8 assets and manifest. Children are non-clickable; the surrounding button, circular well, card or row owns the callback. This makes the icon center, label, border and empty tile interior produce the same action once.
 
 Offline uses `WifiOff` in a violet glass well. Error uses `Warning` in a coral glass well. Both are semantic assets rather than slashed text glyphs and both retain working Retry/Home routes.
+
+## Appearance icon families (2026-10-29)
+
+Settings > Εμφάνιση switches the whole icon family with the look. `icon_asset(role)` resolves through the active appearance and `icon_asset(role, appearance)` draws any family (the Appearance cards use it):
+
+| Appearance | Family | Package | Licence |
+|---|---|---|---|
+| Άλως | Lucide (this registry) | `lucide-static` 1.59.0 | ISC |
+| Μάρμαρο | Phosphor Light | `@iconify-json/ph` 1.2.2 | MIT |
+| Σέλας | Solar Bold Duotone (Linear for chevrons, close, check, plus, more and menu) | `@iconify-json/solar` 1.2.13 | CC BY 4.0 (attribution in `shared/assets/THIRD_PARTY.md`) |
+| Γραφίτης | Material Symbols Rounded, filled | `@iconify-json/material-symbols` 1.2.97 | Apache 2.0 |
+
+`tools/icons/generate-appearance-icons.mjs` maps every `IconRole` (106 with the new `Palette`) to a glyph per family. All three families currently cover every role, so no Lucide stand-in is used; a future stand-in is listed in `shared/assets/icons/manifest-<family>.json` and the asset test allows at most eight per family. Solar's "translation" glyph is a broadcast symbol, so Languages uses `dialog-2`. Duotone glyphs stay one tint at two opacities in A8. The families add three generated objects of about the Lucide object's size each; the measured flash cost is in `docs/VERIFICATION.md`.

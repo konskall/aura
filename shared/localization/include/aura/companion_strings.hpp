@@ -252,6 +252,17 @@ struct CompanionStrings {
 
     // Display and voice settings
     const char* display_title;
+    // Settings > Appearance: the screen title and the four looks
+    const char* appearance_title;
+    const char* appearance_halo;
+    const char* appearance_marble;
+    const char* appearance_aurora;
+    const char* appearance_graphite;
+    // Signature layouts: the quoted question, a timer's end time (hour, minute)
+    // and the day's range (minimum, maximum).
+    const char* answer_quote_format;
+    const char* timer_ends_format;
+    const char* weather_range_format;
     const char* always_on;
     const char* always_on_detail;
     const char* aod_new_one;

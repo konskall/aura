@@ -44,6 +44,7 @@ target_link_libraries(lvgl PRIVATE SDL2::SDL2-static)
 
 add_library(aura_core STATIC
     shared/core/src/app_layout.cpp
+    shared/core/src/appearance.cpp
     shared/core/src/aoraton.cpp
     shared/core/src/assistant_companion.cpp
     shared/core/src/briefing.cpp
@@ -87,17 +88,47 @@ target_include_directories(aura_core PUBLIC
 
 add_library(aura_ui STATIC
     shared/ui/src/aura_ui.cpp
+    shared/ui/src/aura_appearance.cpp
     shared/ui/src/aura_theme.cpp
     shared/ui/src/aura_icons.cpp
     shared/ui/src/aura_keyboard.cpp
     shared/ui/src/aura_mercury_view.cpp
+    shared/ui/src/aura_pearl_view.cpp
+    shared/ui/src/aura_presence.cpp
     shared/assets/icons/aura_icon_assets.cpp
+    shared/assets/icons/aura_icon_assets_material.cpp
+    shared/assets/icons/aura_icon_assets_phosphor.cpp
+    shared/assets/icons/aura_icon_assets_solar.cpp
     shared/assets/fonts/aura_font_plex_regular_22.c
     shared/assets/fonts/aura_font_plex_regular_26.c
     shared/assets/fonts/aura_font_plex_medium_28.c
     shared/assets/fonts/aura_font_plex_semibold_32.c
     shared/assets/fonts/aura_font_plex_light_72.c
     shared/assets/fonts/aura_font_plex_light_96.c
+    shared/assets/fonts/aura_font_commissioner_regular_22.c
+    shared/assets/fonts/aura_font_commissioner_regular_26.c
+    shared/assets/fonts/aura_font_commissioner_medium_28.c
+    shared/assets/fonts/aura_font_notoserif_regular_32.c
+    shared/assets/fonts/aura_font_notoserif_light_84.c
+    shared/assets/fonts/aura_font_notoserif_extralight_128.c
+    shared/assets/fonts/aura_font_manrope_medium_22.c
+    shared/assets/fonts/aura_font_manrope_medium_26.c
+    shared/assets/fonts/aura_font_manrope_semibold_28.c
+    shared/assets/fonts/aura_font_manrope_bold_32.c
+    shared/assets/fonts/aura_font_manrope_light_80.c
+    shared/assets/fonts/aura_font_manrope_extralight_116.c
+    shared/assets/fonts/aura_font_robotoflex_medium_22.c
+    shared/assets/fonts/aura_font_robotoflex_regular_26.c
+    shared/assets/fonts/aura_font_robotoflex_semibold_cond_28.c
+    shared/assets/fonts/aura_font_robotoflex_semibold_32.c
+    shared/assets/fonts/aura_font_robotoflex_light_cond_64.c
+    shared/assets/fonts/aura_font_robotoflex_light_cond_116.c
+    shared/assets/fonts/aura_font_robotoflex_light_cond_204.c
+    shared/assets/fonts/aura_font_notoserif_light_72.c
+    shared/assets/fonts/aura_font_notoserif_extralight_96.c
+    shared/assets/fonts/aura_font_manrope_light_72.c
+    shared/assets/fonts/aura_font_manrope_extralight_96.c
+    shared/assets/fonts/aura_font_robotoflex_light_cond_96.c
     shared/assets/fonts/aura_font_space_medium_26.c
 )
 target_include_directories(aura_ui PUBLIC
@@ -240,6 +271,9 @@ if(BUILD_TESTING)
         target_link_libraries(aura_bridge_stream_tests PRIVATE aura_core winhttp ws2_32)
         add_test(NAME aura_bridge_stream_tests COMMAND aura_bridge_stream_tests)
     endif()
+    add_executable(aura_appearance_tests tests/unit/appearance_test.cpp)
+    target_link_libraries(aura_appearance_tests PRIVATE aura_core)
+    add_test(NAME aura_appearance_tests COMMAND aura_appearance_tests)
     add_executable(aura_companion_models_tests tests/unit/companion_models_test.cpp)
     target_link_libraries(aura_companion_models_tests PRIVATE aura_core)
     add_test(NAME aura_companion_models_tests COMMAND aura_companion_models_tests)

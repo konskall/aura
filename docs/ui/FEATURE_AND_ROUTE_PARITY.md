@@ -28,7 +28,7 @@ The supplied seed and v8 directives were reviewed as history. No v9 or v9.1 dire
 | Launcher / Quick actions (07) | Assistant; Aoraton; Audio; Notifications; Settings | Typed `UiView` navigation or `on_ask` | Mixed, truthfully labelled | Whole tile remains one hit target |
 | Launcher edit mode | Pencil → pick an app → pick its new place; ✓/Back/swipe ends | `on_launcher_app_move(from, to)`; shared `LauncherLayoutModel` | Persisted on simulator and device | Edit mode never survives leaving the grid |
 | Notifications (08) | Open message; clear | AoratonRooms; `on_notifications_clear` | DEMO | Preserve dismiss and destination |
-| Settings (09) | Provider toggle; reduced motion; Audio; Device status; Diagnostics | Typed callbacks/routes | LIVE setting state | Preserve leave/reopen state |
+| Settings (09) | Appearance (four looks, 2026-10-29); provider toggle; reduced motion; Audio; Device status; Diagnostics | Typed callbacks/routes | LIVE setting state | Preserve leave/reopen state |
 | Audio (10) | Tone; DEMO WAV; pause/resume; stop; mute; volume | Audio service callbacks | LIVE Windows backend | Preserve actual PCM/WAV control |
 | Aoraton rooms (11) | Room rows; compose | `on_aoraton_room`; AoratonCompose | MOCK/DEMO | Preserve unread and offline/error cases |
 | Aoraton chat (12) | Scroll thread; compose | LVGL scroll; AoratonCompose | MOCK/DEMO | Never forward message text to AI |

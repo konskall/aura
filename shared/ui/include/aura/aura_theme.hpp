@@ -17,25 +17,30 @@ struct Rect {
     int height;
 };
 
-// True black: AMOLED pixels are off, and content floats on graphite platters.
-constexpr std::uint32_t canvas = 0x000000;
-constexpr std::uint32_t surface = 0x121822;
-constexpr std::uint32_t surface_high = 0x1B2330;
-constexpr std::uint32_t surface_glass = 0x222C3B;
-constexpr std::uint32_t separator = 0x2B3546;
-constexpr std::uint32_t danger_surface = 0x3A141B;
-constexpr std::uint32_t text = 0xF5F8FC;
-constexpr std::uint32_t text_secondary = 0xA9B5C7;
-constexpr std::uint32_t text_tertiary = 0x748197;
-constexpr std::uint32_t ice = 0x25D6FF;
-constexpr std::uint32_t blue = 0x178BFF;
-constexpr std::uint32_t indigo = 0x4C52FF;
-constexpr std::uint32_t lilac = 0x8A45FF;
-constexpr std::uint32_t magenta = 0xDE58FB;
-constexpr std::uint32_t mint = 0x35ECC3;
-constexpr std::uint32_t amber = 0xFFCB3F;
-constexpr std::uint32_t pink = 0xFF579E;
-constexpr std::uint32_t coral = 0xFF6B78;
+// Colours of the active appearance (aura_appearance.hpp). They start as Halo,
+// the v12 palette, and change only through set_active_appearance() on the UI
+// thread. True black: AMOLED pixels are off, and content floats on platters.
+inline std::uint32_t canvas = 0x000000;
+inline std::uint32_t surface = 0x121822;
+inline std::uint32_t surface_high = 0x1B2330;
+inline std::uint32_t surface_glass = 0x222C3B;
+inline std::uint32_t separator = 0x2B3546;
+inline std::uint32_t danger_surface = 0x3A141B;
+inline std::uint32_t text = 0xF5F8FC;
+inline std::uint32_t text_secondary = 0xA9B5C7;
+inline std::uint32_t text_tertiary = 0x748197;
+inline std::uint32_t ice = 0x25D6FF;
+inline std::uint32_t blue = 0x178BFF;
+inline std::uint32_t primary_end = 0x178BFF;  // second stop of a gradient primary
+inline std::uint32_t on_primary = 0xF5F8FC;   // label colour on a primary button
+inline std::uint32_t indigo = 0x4C52FF;
+inline std::uint32_t lilac = 0x8A45FF;
+inline std::uint32_t magenta = 0xDE58FB;
+inline std::uint32_t mint = 0x35ECC3;
+inline std::uint32_t amber = 0xFFCB3F;
+inline std::uint32_t pink = 0xFF579E;
+inline std::uint32_t coral = 0xFF6B78;
+inline std::uint32_t toggle_on = 0x178BFF;  // a switch's track when on
 
 constexpr int display_width = 480;
 constexpr int display_height = 480;
@@ -77,12 +82,20 @@ const lv_font_t* font_headline();  // Medium 28: row titles, buttons, keys
 const lv_font_t* font_title();     // SemiBold 32: screen and state titles
 const lv_font_t* font_display();   // Light 72: numbers only (falls back to title)
 const lv_font_t* font_clock();     // Light 96: digits and ':' only
+// Signature screens only (aura_ui_<look>.inl): their larger numerals.
+const lv_font_t* font_numerals_small();
+const lv_font_t* font_numerals_large();
+const lv_font_t* font_hero();      // the largest numerals (Home clock); the large numerals unless set
 const lv_font_t* font_brand();     // Space Grotesk 26: "AURA" only
+// The text roles above come from the active appearance's font set.
 
 void reset(lv_obj_t* object);
 // A borderless graphite platter; `selected` adds an accent hairline.
 void style_platter(lv_obj_t* object, std::uint32_t accent = tokens::blue,
                    int radius = tokens::radius_large, bool selected = false);
+// A list row: a platter in Halo and Graphite, glass in Aurora, an open line
+// with one hairline underneath in Marble.
+void style_row(lv_obj_t* object, std::uint32_t accent = tokens::blue, bool selected = false);
 void style_scrollbar(lv_obj_t* object);
 lv_obj_t* make_label(lv_obj_t* parent, const char* text,
                      std::uint32_t text_color = tokens::text,

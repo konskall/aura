@@ -6,7 +6,9 @@
 #include "aura/text_util.hpp"
 #include "aura/aura_icons.hpp"
 #include "aura/aura_keyboard.hpp"
+#include "aura/aura_appearance.hpp"
 #include "aura/aura_mercury_view.hpp"
+#include "aura/aura_presence.hpp"
 #include "aura/motion_model.hpp"
 #include "aura/navigation_stack.hpp"
 #include "aura/strings.hpp"
@@ -78,10 +80,14 @@ void set_target(lv_obj_t* object, UiView view) {
     lv_obj_set_user_data(object, reinterpret_cast<void*>(static_cast<std::intptr_t>(view)));
 }
 
-constexpr std::array<std::uint32_t, 6> kIconAccents{
-    ui::tokens::blue, ui::tokens::indigo, ui::tokens::magenta,
-    ui::tokens::mint, ui::tokens::amber, ui::tokens::pink
-};
+// Accents that cycle through list icons, read from the active appearance.
+std::uint32_t icon_accent(std::size_t index) {
+    const std::array<std::uint32_t, 6> accents{
+        ui::tokens::blue, ui::tokens::indigo, ui::tokens::magenta,
+        ui::tokens::mint, ui::tokens::amber, ui::tokens::pink
+    };
+    return accents[index % accents.size()];
+}
 
 // C++20 (ESP-IDF builds with gnu++2b) deprecates mixing the LVGL part/state enums.
 constexpr lv_style_selector_t kIndicatorChecked =
@@ -174,7 +180,8 @@ struct AuraUi::Impl {
     bool weather_typing{false};
     NavigationStack<UiView> navigation{UiView::Home};
     MotionModel motion{};
-    ui::AuraMercuryView mercury{};
+    Appearance appearance{Appearance::Halo};
+    std::unique_ptr<ui::PresenceView> presence{ui::make_presence(Appearance::Halo)};
     UiView current_view{UiView::Home};
     bool live_provider{false};
     bool developer_mode{false};
@@ -876,6 +883,7 @@ struct AuraUi::Impl {
             case UiView::PhoneNotification:
             case UiView::PhoneLink:
             case UiView::DisplaySettings:
+            case UiView::AppearanceSettings:
             case UiView::Update:
             case UiView::System:
             case UiView::SystemConfirm:
@@ -1016,7 +1024,29 @@ struct AuraUi::Impl {
     // Icons are 64 px A8 sources drawn at `size`, centred in a size x size box.
     lv_obj_t* icon_view(lv_obj_t* parent, ui::IconRole role, int size = 28,
                         std::uint32_t color = ui::tokens::text) {
-        const auto* source = ui::icon_asset(role);
+        return icon_image(parent, ui::icon_asset(role), size, color);
+    }
+
+    // An icon in the look's well: a tinted circle (Halo), a hairline ring with a
+    // quiet icon (Marble), or a tinted rounded square (Aurora, Graphite).
+    lv_obj_t* icon_well(lv_obj_t* parent, int size, ui::IconRole role, std::uint32_t accent, int icon_size) {
+        const auto style = ui::active_metrics().wells;
+        auto* well = make_dot(parent, size, accent, kTint);
+        if (style == ui::WellStyle::HairlineCircle) {
+            lv_obj_set_style_bg_opa(well, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(well, 2, 0);
+            lv_obj_set_style_border_color(well, ui::color(ui::tokens::separator), 0);
+            accent = ui::tokens::text_secondary;
+        } else if (style == ui::WellStyle::Chip || style == ui::WellStyle::Squircle) {
+            lv_obj_set_style_radius(well, size * 3 / 10, 0);
+            lv_obj_set_style_bg_opa(well, style == ui::WellStyle::Chip ? 36 : 38, 0);
+        }
+        auto* icon = icon_view(well, role, icon_size, accent);
+        lv_obj_center(icon);
+        return well;
+    }
+
+    lv_obj_t* icon_image(lv_obj_t* parent, const lv_image_dsc_t* source, int size, std::uint32_t color) {
         if (!source) return nullptr;
         auto* value = lv_image_create(parent);
         lv_image_set_src(value, source);
@@ -1077,6 +1107,25 @@ struct AuraUi::Impl {
         lv_obj_set_style_bg_opa(button, neutral ? LV_OPA_COVER : LV_OPA_40, LV_STATE_PRESSED);
         lv_obj_set_style_transform_width(button, -3, LV_STATE_PRESSED);
         lv_obj_set_style_transform_height(button, -3, LV_STATE_PRESSED);
+        const auto& kit = ui::active_metrics();
+        if (kit.wells == ui::WellStyle::Squircle) lv_obj_set_style_radius(button, 20, 0);
+        if (kit.wells == ui::WellStyle::HairlineCircle) {
+            // Marble: a hairline ring, filled only while pressed.
+            lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(button, 2, 0);
+            lv_obj_set_style_border_color(button, ui::color(neutral ? ui::tokens::separator : accent), 0);
+            lv_obj_set_style_border_opa(button, neutral ? LV_OPA_COVER : LV_OPA_60, 0);
+            lv_obj_set_style_bg_color(button, ui::color(ui::tokens::surface_high), LV_STATE_PRESSED);
+            lv_obj_set_style_bg_opa(button, LV_OPA_COVER, LV_STATE_PRESSED);
+        } else if (kit.rows == ui::RowStyle::Glass && neutral) {
+            // Aurora: neutral buttons are glass like its rows.
+            lv_obj_set_style_bg_color(button, ui::color(ui::tokens::surface_high), 0);
+            lv_obj_set_style_bg_grad_color(button, ui::color(ui::tokens::surface), 0);
+            lv_obj_set_style_bg_grad_dir(button, LV_GRAD_DIR_VER, 0);
+            lv_obj_set_style_border_width(button, 1, 0);
+            lv_obj_set_style_border_color(button, ui::color(0xAAB4FF), 0);
+            lv_obj_set_style_border_opa(button, 28, 0);
+        }
         if (role != ui::IconRole::Count) {
             auto* icon = icon_view(button, role, size >= 88 ? 40 : 30, neutral ? ui::tokens::text : accent);
             lv_obj_center(icon);
@@ -1108,7 +1157,7 @@ struct AuraUi::Impl {
                        ui::IconRole role, std::uint32_t accent, int height = kRowHeight, int text_width = 0) {
         auto* row = lv_obj_create(parent);
         ui::reset(row);
-        ui::style_platter(row, accent, ui::tokens::radius_large, false);
+        ui::style_row(row, accent, false);
         lv_obj_set_size(row, kWidth, height);
         lv_obj_set_pos(row, kGutter, y);
         lv_obj_set_style_pad_left(row, 16, 0);
@@ -1119,10 +1168,8 @@ struct AuraUi::Impl {
         const int detail_height = subtitle ? lv_font_get_line_height(ui::font_caption()) : 0;
         const int text_x = has_icon ? 68 : 4;
         if (has_icon) {
-            auto* well = make_dot(row, 52, accent, kTint);
+            auto* well = icon_well(row, 52, role, accent, 30);
             lv_obj_align(well, LV_ALIGN_LEFT_MID, 0, 0);
-            auto* icon = icon_view(well, role, 30, accent);
-            lv_obj_center(icon);
         }
         const int width = text_width > 0 ? text_width : kWidth - 36 - text_x - 36;
         auto* heading = ui::make_label(row, title, ui::tokens::text, ui::font_headline());
@@ -1383,12 +1430,27 @@ struct AuraUi::Impl {
 
     // The ring stays below luminance 145 inside the orb's image bounds (the
     // Mercury evidence rule) and is updated with Mercury frames (15 FPS).
+    // The presence's centre: the same on Home and in every assistant state, so
+    // starting to talk never moves it (each look sets its own).
+    int hero_y() const { return ui::active_metrics().hero_center_y; }
+
     void create_presence(ui::MercuryState state, std::uint32_t accent) {
         halo_state = state;
+        if (appearance == Appearance::Halo) create_halo_ring(state, accent);
+        presence->set_state(state);
+        presence->set_level(state == ui::MercuryState::Listening ? input_amplitude : audio.envelope);
+        // A capture is a still picture: the presence shows its state, not a blend.
+        presence->set_reduced_motion(reduced_motion || capture_mode);
+        hero_image = presence->attach(content, ui::tokens::MERCURY_RECT.x + ui::tokens::MERCURY_RECT.width / 2,
+                                     hero_y());
+    }
+
+    // Άλως's ring around Mercury; the other looks' presences draw their own.
+    void create_halo_ring(ui::MercuryState state, std::uint32_t accent) {
         const int size = ui::tokens::HALO_RADIUS * 2 + 8;
         halo = lv_arc_create(content);
         lv_obj_set_size(halo, size, size);
-        lv_obj_set_pos(halo, kHaloCenterX - size / 2, kHaloCenterY - size / 2);
+        lv_obj_set_pos(halo, kHaloCenterX - size / 2, hero_y() - size / 2);
         lv_obj_set_style_pad_all(halo, 0, 0);
         lv_obj_set_style_bg_opa(halo, LV_OPA_TRANSP, 0);
         lv_arc_set_bg_angles(halo, 0, 360);
@@ -1403,10 +1465,6 @@ struct AuraUi::Impl {
         lv_obj_set_style_arc_rounded(halo, true, LV_PART_INDICATOR);
         lv_obj_set_style_opa(halo, LV_OPA_TRANSP, LV_PART_KNOB);
         lv_obj_set_clickable(halo, false);
-        mercury.set_state(state);
-        mercury.set_level(state == ui::MercuryState::Listening ? input_amplitude : audio.envelope);
-        mercury.set_reduced_motion(reduced_motion);
-        hero_image = mercury.attach(content, ui::tokens::MERCURY_RECT.x, ui::tokens::MERCURY_RECT.y);
     }
 
     void update_halo(const MotionFrame& frame) {
@@ -1463,20 +1521,36 @@ struct AuraUi::Impl {
         }
     }
 
-    void render_weather_chip() {
-        const char* title = v().weather;
-        std::string detail = weather.has_saved_location ? weather.saved_location.name : v().weather_choose_city;
-        ui::IconRole role = ui::IconRole::Weather;
-        std::uint32_t accent = ui::tokens::amber;
-        char temperature[16];
+    struct WeatherGlance {
+        std::string title;
+        std::string detail;
+        ui::IconRole role;
+        std::uint32_t accent;
+    };
+
+    // Home's weather at a glance: the temperature and city, or an invitation.
+    WeatherGlance weather_glance() const {
+        WeatherGlance glance{v().weather,
+                             weather.has_saved_location ? weather.saved_location.name : v().weather_choose_city,
+                             ui::IconRole::Weather, ui::tokens::amber};
         if (weather.has_data) {
+            char temperature[16];
             std::snprintf(temperature, sizeof(temperature), "%d°", whole_degrees(weather.data.temperature_c));
-            title = temperature;
-            detail = weather.data.location.name;
-            if (weather.data.origin == WeatherDataOrigin::Demo) detail += std::string(" · ") + v().demo_badge;
-            role = weather_condition_icon(weather.data.condition, weather.data.is_day);
-            accent = weather_condition_accent(weather.data.condition, weather.data.is_day);
+            glance.title = temperature;
+            glance.detail = weather.data.location.name;
+            if (weather.data.origin == WeatherDataOrigin::Demo) glance.detail += std::string(" · ") + v().demo_badge;
+            glance.role = weather_condition_icon(weather.data.condition, weather.data.is_day);
+            glance.accent = weather_condition_accent(weather.data.condition, weather.data.is_day);
         }
+        return glance;
+    }
+
+    void render_weather_chip() {
+        const auto glance = weather_glance();
+        const char* title = glance.title.c_str();
+        const std::string& detail = glance.detail;
+        const ui::IconRole role = glance.role;
+        const std::uint32_t accent = glance.accent;
         const auto glyph_count = [](std::string_view text) {
             std::size_t count = 0;
             for (const unsigned char value : text) if ((value & 0xC0U) != 0x80U) ++count;
@@ -1492,6 +1566,10 @@ struct AuraUi::Impl {
     }
 
     void render_home() {
+        if (appearance == Appearance::Marble) {
+            render_home_marble();
+            return;
+        }
         // The clock, or the wordmark until the clock is known.
         if (status.clock_valid) {
             home_clock = label(content, "", 0, 42, ui::tokens::display_width, ui::font_clock(), ui::tokens::text,
@@ -1511,7 +1589,7 @@ struct AuraUi::Impl {
         auto* talk = lv_button_create(content);
         ui::reset(talk);
         lv_obj_set_size(talk, ui::tokens::HERO_RECT.width, ui::tokens::HERO_RECT.height);
-        lv_obj_set_pos(talk, ui::tokens::HERO_RECT.x, ui::tokens::HERO_RECT.y);
+        lv_obj_set_pos(talk, ui::tokens::HERO_RECT.x, hero_y() - ui::tokens::HERO_RECT.height / 2);
         lv_obj_set_style_radius(talk, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(talk, ui::color(ui::tokens::text), LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(talk, LV_OPA_10, LV_STATE_PRESSED);
@@ -1585,7 +1663,8 @@ struct AuraUi::Impl {
     }
 
     void render_answer_reader() {
-        render_answer_companion();
+        if (appearance == Appearance::Marble) render_answer_marble();
+        else render_answer_companion();
     }
 
     struct FailureCopy {
@@ -1741,7 +1820,7 @@ struct AuraUi::Impl {
                                   (room.preview.empty() ? t().no_messages : room.preview.c_str());
             auto* row = list_row(list, y, room.display_name.c_str(), preview,
                                  index % 3 == 2 ? ui::IconRole::Room : ui::IconRole::Message,
-                                 kIconAccents[index % kIconAccents.size()], kRowHeight,
+                                 icon_accent(index), kRowHeight,
                                  room.unread > 0 ? 248 : 0);
             lv_obj_set_user_data(row, reinterpret_cast<void*>(static_cast<std::intptr_t>(index)));
             lv_obj_set_clickable(row, true);
@@ -2202,12 +2281,8 @@ struct AuraUi::Impl {
         return card;
     }
 
-    void render_weather_ready(bool refreshing) {
-        make_header(v().weather, ui::IconRole::Refresh, weather_refresh_event, ui::tokens::ice,
-                    static_cast<bool>(callbacks.on_weather_refresh));
-        const auto& data = weather.data;
-        const auto accent = weather_condition_accent(data.condition, data.is_day);
-
+    // The weather's vertical scroller below the header.
+    void make_weather_scroll() {
         weather_scroll = lv_obj_create(content);
         ui::reset(weather_scroll);
         lv_obj_set_size(weather_scroll, ui::tokens::display_width, ui::tokens::display_height - kHeader);
@@ -2221,6 +2296,127 @@ struct AuraUi::Impl {
         lv_obj_set_style_clip_corner(weather_scroll, true, 0);
         ui::style_scrollbar(weather_scroll);
         primary_scroller = weather_scroll;
+    }
+
+    // "<source> · Ενημέρωση 18:24"; DEMO data names no source.
+    std::string weather_updated_text() const {
+        const auto& data = weather.data;
+        const char* provider_name = data.provider == WeatherProvider::TlesDetector ?
+            v().weather_tlesdetector_source : v().weather_source;
+        return (data.origin == WeatherDataOrigin::Demo ? std::string{} : std::string(provider_name) + " · ") +
+            v().weather_updated + " " + weather_time_label(data.observed_at);
+    }
+
+    struct WeatherMetricCard {
+        ui::IconRole icon{ui::IconRole::Information};
+        const char* title{};
+        std::uint32_t accent{};
+        std::array<char, 28> value{};
+    };
+
+    // Every measurement the data holds, in display order; returns the count.
+    std::size_t weather_metric_cards(std::array<WeatherMetricCard, 9>& cards) const {
+        const auto& data = weather.data;
+        std::size_t count = 0;
+        const auto add_metric = [&](ui::IconRole icon, const char* title, std::uint32_t color,
+                                    const char* format, auto value) {
+            if (count >= cards.size()) return;
+            auto& card = cards[count++];
+            card.icon = icon;
+            card.title = title;
+            card.accent = color;
+            std::snprintf(card.value.data(), card.value.size(), format, value);
+        };
+        add_metric(ui::IconRole::Droplet, v().humidity, ui::tokens::ice, "%d%%", data.humidity_percent);
+        add_metric(ui::IconRole::Wind, v().wind, ui::tokens::mint, "%.0f km/h", data.wind_kmh);
+        add_metric(ui::IconRole::Thermometer, v().feels_like, ui::tokens::amber,
+                   "%d°C", whole_degrees(data.apparent_temperature_c));
+        add_metric(ui::IconRole::CloudRain, v().weather_rain, ui::tokens::blue,
+                   "%d%%", data.rain_probability_percent);
+        if (data.metrics.has(WeatherMetric::Pressure)) {
+            add_metric(ui::IconRole::Information, v().weather_pressure, ui::tokens::lilac,
+                       "%.0f hPa", data.metrics.pressure_hpa);
+        }
+        if (data.metrics.has(WeatherMetric::WindGust)) {
+            add_metric(ui::IconRole::Wind, v().weather_gusts, ui::tokens::mint,
+                       "%.0f km/h", data.metrics.wind_gust_kmh);
+        }
+        if (data.metrics.has(WeatherMetric::Visibility)) {
+            add_metric(ui::IconRole::Visibility, v().weather_visibility, ui::tokens::ice,
+                       "%.1f km", data.metrics.visibility_km);
+        }
+        if (data.metrics.has(WeatherMetric::UvIndex)) {
+            add_metric(ui::IconRole::Sun, v().weather_uv, ui::tokens::amber,
+                       "%.1f", data.metrics.uv_index);
+        }
+        if (data.metrics.has(WeatherMetric::AirQuality)) {
+            add_metric(ui::IconRole::Cloud, v().weather_air_quality, ui::tokens::blue,
+                       "%d AQI", data.metrics.european_aqi);
+        }
+        return count;
+    }
+
+    // TlesDetector's alerts and lightning: a title at `y`, the card below it.
+    void weather_hazard_block(int y) {
+        const auto& data = weather.data;
+        line(weather_scroll, v().weather_hazards, kGutter, y, kWidth, ui::font_headline(), ui::tokens::text);
+        const bool urgent = data.hazards.nearby_alert_count > 0 || data.hazards.lightning_observed;
+        const auto hazard_accent = urgent ? ui::tokens::amber : ui::tokens::ice;
+        auto* hazard_card = lv_obj_create(weather_scroll);
+        ui::reset(hazard_card);
+        ui::style_platter(hazard_card, hazard_accent, ui::tokens::radius_medium, urgent);
+        lv_obj_set_size(hazard_card, kWidth, 132);
+        lv_obj_set_pos(hazard_card, kGutter, y + 40);
+        auto* warning_icon = icon_view(hazard_card, ui::IconRole::Warning, 28, hazard_accent);
+        lv_obj_set_pos(warning_icon, 0, 6);
+        char alert_line[96];
+        if (!data.hazards.alerts_available) {
+            std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_alerts_unavailable);
+        } else if (data.hazards.nearby_alert_count == 1) {
+            std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_nearby_alert_one);
+        } else if (data.hazards.nearby_alert_count > 0) {
+            std::snprintf(alert_line, sizeof(alert_line), v().weather_nearby_alerts_format,
+                          data.hazards.nearby_alert_count);
+        } else if (data.hazards.active_alert_count == 1) {
+            std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_active_alert_one);
+        } else if (data.hazards.active_alert_count > 0) {
+            std::snprintf(alert_line, sizeof(alert_line), v().weather_active_alerts_format,
+                          data.hazards.active_alert_count);
+        } else {
+            std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_no_active_alerts);
+        }
+        line(hazard_card, alert_line, 40, 4, kWidth - 72, ui::font_body(), ui::tokens::text);
+        auto* lightning_icon = icon_view(hazard_card, ui::IconRole::CloudLightning, 28,
+                                         data.hazards.lightning_observed ? ui::tokens::magenta : ui::tokens::blue);
+        lv_obj_set_pos(lightning_icon, 0, 56);
+        char lightning_line[112];
+        if (!data.hazards.lightning_available) {
+            std::snprintf(lightning_line, sizeof(lightning_line), "%s", v().weather_lightning_unavailable);
+        } else if (!data.hazards.lightning_observed) {
+            std::snprintf(lightning_line, sizeof(lightning_line), "%s", v().weather_no_nearby_lightning);
+        } else if (data.hazards.xweather_available && data.hazards.max_positive_ka > 0) {
+            std::snprintf(lightning_line, sizeof(lightning_line), v().weather_nearby_lightning_cg_format,
+                          data.hazards.nearest_lightning_km, data.hazards.max_positive_ka);
+        } else if (data.hazards.lightning_age_minutes == 1) {
+            std::snprintf(lightning_line, sizeof(lightning_line), v().weather_nearby_lightning_one_minute_format,
+                          data.hazards.nearest_lightning_km);
+        } else {
+            std::snprintf(lightning_line, sizeof(lightning_line), v().weather_nearby_lightning_format,
+                          data.hazards.nearest_lightning_km, data.hazards.lightning_age_minutes);
+        }
+        label(hazard_card, lightning_line, 40, 54, kWidth - 72, ui::font_caption(), ui::tokens::text);
+    }
+
+    void render_weather_ready(bool refreshing) {
+        if (appearance == Appearance::Marble) {
+            render_weather_ready_marble(refreshing);
+            return;
+        }
+        make_header(v().weather, ui::IconRole::Refresh, weather_refresh_event, ui::tokens::ice,
+                    static_cast<bool>(callbacks.on_weather_refresh));
+        const auto& data = weather.data;
+        const auto accent = weather_condition_accent(data.condition, data.is_day);
+        make_weather_scroll();
 
         // The city line opens the city picker.
         auto* city = lv_button_create(weather_scroll);
@@ -2261,11 +2457,7 @@ struct AuraUi::Impl {
         std::snprintf(range, sizeof(range), "↓ %d°   ↑ %d°", whole_degrees(data.daily_minimum_c),
                       whole_degrees(data.daily_maximum_c));
         line(weather_scroll, range, kGutter + 4, 172, 236, ui::font_body(), ui::tokens::text_secondary);
-        const auto observed_time = weather_time_label(data.observed_at);
-        const char* provider_name = data.provider == WeatherProvider::TlesDetector ?
-            v().weather_tlesdetector_source : v().weather_source;
-        const std::string updated = (demo ? std::string{} : std::string(provider_name) + " · ") +
-            v().weather_updated + " " + observed_time;
+        const std::string updated = weather_updated_text();
         label(weather_scroll, updated.c_str(), kGutter + 4, 208, 236, ui::font_caption(), ui::tokens::text_tertiary);
 
         weather_scene = lv_obj_create(weather_scroll);
@@ -2346,49 +2538,8 @@ struct AuraUi::Impl {
 
         // Metrics: icon, label and value per card.
         auto* metrics = weather_strip(268, 128);
-        struct MetricCard {
-            ui::IconRole icon{ui::IconRole::Information};
-            const char* title{};
-            std::uint32_t accent{ui::tokens::ice};
-            std::array<char, 28> value{};
-        };
-        std::array<MetricCard, 9> metric_cards{};
-        std::size_t metric_count = 0;
-        const auto add_metric = [&](ui::IconRole icon, const char* title, std::uint32_t color,
-                                    const char* format, auto value) {
-            if (metric_count >= metric_cards.size()) return;
-            auto& card = metric_cards[metric_count++];
-            card.icon = icon;
-            card.title = title;
-            card.accent = color;
-            std::snprintf(card.value.data(), card.value.size(), format, value);
-        };
-        add_metric(ui::IconRole::Droplet, v().humidity, ui::tokens::ice, "%d%%", data.humidity_percent);
-        add_metric(ui::IconRole::Wind, v().wind, ui::tokens::mint, "%.0f km/h", data.wind_kmh);
-        add_metric(ui::IconRole::Thermometer, v().feels_like, ui::tokens::amber,
-                   "%d°C", whole_degrees(data.apparent_temperature_c));
-        add_metric(ui::IconRole::CloudRain, v().weather_rain, ui::tokens::blue,
-                   "%d%%", data.rain_probability_percent);
-        if (data.metrics.has(WeatherMetric::Pressure)) {
-            add_metric(ui::IconRole::Information, v().weather_pressure, ui::tokens::lilac,
-                       "%.0f hPa", data.metrics.pressure_hpa);
-        }
-        if (data.metrics.has(WeatherMetric::WindGust)) {
-            add_metric(ui::IconRole::Wind, v().weather_gusts, ui::tokens::mint,
-                       "%.0f km/h", data.metrics.wind_gust_kmh);
-        }
-        if (data.metrics.has(WeatherMetric::Visibility)) {
-            add_metric(ui::IconRole::Visibility, v().weather_visibility, ui::tokens::ice,
-                       "%.1f km", data.metrics.visibility_km);
-        }
-        if (data.metrics.has(WeatherMetric::UvIndex)) {
-            add_metric(ui::IconRole::Sun, v().weather_uv, ui::tokens::amber,
-                       "%.1f", data.metrics.uv_index);
-        }
-        if (data.metrics.has(WeatherMetric::AirQuality)) {
-            add_metric(ui::IconRole::Cloud, v().weather_air_quality, ui::tokens::blue,
-                       "%d AQI", data.metrics.european_aqi);
-        }
+        std::array<WeatherMetricCard, 9> metric_cards{};
+        const std::size_t metric_count = weather_metric_cards(metric_cards);
         // The title has the card's whole width ("Ποιότητα αέρα" is the longest,
         // 149 px); the icon leads the value below it. A third card still peeks
         // in from the edge, so the strip reads as scrollable.
@@ -2408,54 +2559,7 @@ struct AuraUi::Impl {
 
         const bool show_hazards = data.provider == WeatherProvider::TlesDetector;
         const int offset = show_hazards ? 188 : 0;
-        if (show_hazards) {
-            line(weather_scroll, v().weather_hazards, kGutter, 408, kWidth, ui::font_headline(), ui::tokens::text);
-            const bool urgent = data.hazards.nearby_alert_count > 0 || data.hazards.lightning_observed;
-            const auto hazard_accent = urgent ? ui::tokens::amber : ui::tokens::ice;
-            auto* hazard_card = lv_obj_create(weather_scroll);
-            ui::reset(hazard_card);
-            ui::style_platter(hazard_card, hazard_accent, ui::tokens::radius_medium, urgent);
-            lv_obj_set_size(hazard_card, kWidth, 132);
-            lv_obj_set_pos(hazard_card, kGutter, 448);
-            auto* warning_icon = icon_view(hazard_card, ui::IconRole::Warning, 28, hazard_accent);
-            lv_obj_set_pos(warning_icon, 0, 6);
-            char alert_line[96];
-            if (!data.hazards.alerts_available) {
-                std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_alerts_unavailable);
-            } else if (data.hazards.nearby_alert_count == 1) {
-                std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_nearby_alert_one);
-            } else if (data.hazards.nearby_alert_count > 0) {
-                std::snprintf(alert_line, sizeof(alert_line), v().weather_nearby_alerts_format,
-                              data.hazards.nearby_alert_count);
-            } else if (data.hazards.active_alert_count == 1) {
-                std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_active_alert_one);
-            } else if (data.hazards.active_alert_count > 0) {
-                std::snprintf(alert_line, sizeof(alert_line), v().weather_active_alerts_format,
-                              data.hazards.active_alert_count);
-            } else {
-                std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_no_active_alerts);
-            }
-            line(hazard_card, alert_line, 40, 4, kWidth - 72, ui::font_body(), ui::tokens::text);
-            auto* lightning_icon = icon_view(hazard_card, ui::IconRole::CloudLightning, 28,
-                                             data.hazards.lightning_observed ? ui::tokens::magenta : ui::tokens::blue);
-            lv_obj_set_pos(lightning_icon, 0, 56);
-            char lightning_line[112];
-            if (!data.hazards.lightning_available) {
-                std::snprintf(lightning_line, sizeof(lightning_line), "%s", v().weather_lightning_unavailable);
-            } else if (!data.hazards.lightning_observed) {
-                std::snprintf(lightning_line, sizeof(lightning_line), "%s", v().weather_no_nearby_lightning);
-            } else if (data.hazards.xweather_available && data.hazards.max_positive_ka > 0) {
-                std::snprintf(lightning_line, sizeof(lightning_line), v().weather_nearby_lightning_cg_format,
-                              data.hazards.nearest_lightning_km, data.hazards.max_positive_ka);
-            } else if (data.hazards.lightning_age_minutes == 1) {
-                std::snprintf(lightning_line, sizeof(lightning_line), v().weather_nearby_lightning_one_minute_format,
-                              data.hazards.nearest_lightning_km);
-            } else {
-                std::snprintf(lightning_line, sizeof(lightning_line), v().weather_nearby_lightning_format,
-                              data.hazards.nearest_lightning_km, data.hazards.lightning_age_minutes);
-            }
-            label(hazard_card, lightning_line, 40, 54, kWidth - 72, ui::font_caption(), ui::tokens::text);
-        }
+        if (show_hazards) weather_hazard_block(408);
 
         line(weather_scroll, v().weather_hourly, kGutter, 408 + offset, kWidth, ui::font_headline(), ui::tokens::text);
         auto* hourly_strip = weather_strip(448 + offset, 172);
@@ -2554,7 +2658,7 @@ struct AuraUi::Impl {
                 detail += location.country;
                 auto* row = list_row(list, y, location.name.c_str(), detail.empty() ? nullptr : detail.c_str(),
                                      ui::IconRole::Location,
-                                     index == 0 ? ui::tokens::ice : kIconAccents[index % kIconAccents.size()]);
+                                     index == 0 ? ui::tokens::ice : icon_accent(index));
                 add_chevron(row);
                 lv_obj_set_user_data(row, reinterpret_cast<void*>(static_cast<std::uintptr_t>(index)));
                 lv_obj_set_clickable(row, true);
@@ -2663,6 +2767,10 @@ struct AuraUi::Impl {
             ui::IconRole::Languages, ui::tokens::ice, UiView::LanguageSettings);
         y += kRowPitch;
 
+        settings_row(list, y, c().appearance_title, appearance_name(appearance), ui::IconRole::Palette,
+                     ui::tokens::magenta, UiView::AppearanceSettings);
+        y += kRowPitch;
+
         const bool provider_available = static_cast<bool>(callbacks.on_provider_changed);
         auto* provider_row = list_row(list, y, t().provider,
             !provider_available ? t().provider_unavailable : (live_provider ? t().live_codex : t().demo_provider),
@@ -2684,7 +2792,7 @@ struct AuraUi::Impl {
         lv_obj_set_size(motion_switch, 64, 36);
         lv_obj_align(motion_switch, LV_ALIGN_RIGHT_MID, 0, 0);
         lv_obj_set_style_bg_color(motion_switch, ui::color(ui::tokens::surface_glass), LV_PART_MAIN);
-        lv_obj_set_style_bg_color(motion_switch, ui::color(ui::tokens::blue), kIndicatorChecked);
+        lv_obj_set_style_bg_color(motion_switch, ui::color(ui::tokens::toggle_on), kIndicatorChecked);
         lv_obj_set_style_bg_color(motion_switch, ui::color(ui::tokens::text), LV_PART_KNOB);
         lv_obj_set_clickable(motion_switch, false);
         if (reduced_motion) lv_obj_add_state(motion_switch, LV_STATE_CHECKED);
@@ -3214,11 +3322,11 @@ struct AuraUi::Impl {
         if (motion.mode() == MotionMode::Listening) motion.set_amplitude(input_amplitude);
         else if (motion.mode() == MotionMode::Speaking) motion.set_amplitude(audio.envelope);
         const auto frame = motion.tick(elapsed_ms);
-        if (mercury.object()) {
-            mercury.set_level(motion.mode() == MotionMode::Listening ? input_amplitude : audio.envelope);
-            mercury.set_reduced_motion(reduced_motion);
+        if (presence->object()) {
+            presence->set_level(motion.mode() == MotionMode::Listening ? input_amplitude : audio.envelope);
+            presence->set_reduced_motion(reduced_motion);
             // The halo follows the Mercury frame rate, so both share one redraw.
-            if (mercury.tick(elapsed_ms)) update_halo(frame);
+            if (presence->tick(elapsed_ms)) update_halo(frame);
         }
         update_audio_widgets();
     }
@@ -3299,7 +3407,7 @@ struct AuraUi::Impl {
     }
 
     void reset_view_pointers() {
-        mercury.detach();
+        presence->detach();
         header_back = nullptr;
         header_title = nullptr;
         header_action = false;
@@ -3431,6 +3539,7 @@ struct AuraUi::Impl {
             case UiView::PhoneNotification:
             case UiView::PhoneLink:
             case UiView::DisplaySettings:
+            case UiView::AppearanceSettings:
             case UiView::Update:
             case UiView::Radio:
             case UiView::RadioSearch: render_companion(view); break;
@@ -3503,6 +3612,8 @@ struct AuraUi::Impl {
 
 #include "aura_ui_companion.inl"
 #include "aura_ui_system.inl"
+#include "aura_ui_appearance.inl"
+#include "aura_ui_marble.inl"
 };
 
 AuraUi::AuraUi() : impl_(std::make_unique<Impl>()) {}
@@ -3620,6 +3731,10 @@ void AuraUi::set_language(InterfaceLanguage language) {
 }
 
 InterfaceLanguage AuraUi::language() const noexcept { return impl_->interface_language; }
+
+void AuraUi::set_appearance(Appearance appearance) { impl_->apply_appearance(appearance); }
+
+Appearance AuraUi::appearance() const noexcept { return impl_->appearance; }
 
 void AuraUi::apply_audio(const AudioDiagnostics& diagnostics) {
     const bool structural_change = diagnostics.state != impl_->audio.state ||
@@ -3858,8 +3973,8 @@ std::uint64_t AuraUi::weather_motion_update_count() const noexcept { return impl
 std::uint64_t AuraUi::weather_forecast_interaction_count() const noexcept {
     return impl_->weather_forecast_interactions;
 }
-std::uint64_t AuraUi::mercury_frame_count() const noexcept { return impl_->mercury.frame_count(); }
-std::size_t AuraUi::mercury_buffer_bytes() const noexcept { return impl_->mercury.buffer_bytes(); }
+std::uint64_t AuraUi::mercury_frame_count() const noexcept { return impl_->presence->frame_count(); }
+std::size_t AuraUi::mercury_buffer_bytes() const noexcept { return impl_->presence->buffer_bytes(); }
 bool AuraUi::reduced_motion() const noexcept { return impl_->reduced_motion; }
 
 UiView AuraUi::view() const noexcept { return impl_->current_view; }

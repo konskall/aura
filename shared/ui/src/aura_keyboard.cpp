@@ -289,7 +289,7 @@ lv_obj_t* create_keyboard(lv_obj_t* parent, lv_obj_t* textarea, KeyboardProfile 
     lv_obj_set_style_bg_color(keyboard, color(tokens::surface), kItemsChecked);
     lv_obj_set_style_text_color(keyboard, color(tokens::text_secondary), kItemsChecked);
     lv_obj_set_style_bg_color(keyboard, color(tokens::blue), kItemsPressed);
-    lv_obj_set_style_text_color(keyboard, color(tokens::text), kItemsPressed);
+    lv_obj_set_style_text_color(keyboard, color(tokens::on_primary), kItemsPressed);
     return keyboard;
 }
 

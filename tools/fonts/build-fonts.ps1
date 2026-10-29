@@ -42,16 +42,72 @@ $jobs = @(
     @{ Font='SpaceGrotesk-Medium.ttf';  Size=26; Name='aura_font_space_medium_26'; Range='0x20,0x41,0x52,0x55' }
 )
 
+# Appearances (docs/superpowers/specs/2026-10-29-aura-appearances-design.md):
+# variable sources from a pinned google/fonts commit, made static by
+# instance-fonts.py, then converted like the Plex fonts.
+$googleFontsCommit = 'b68b528a75da7d9b73f3928899c07a23083a6633'
+$googleFonts = "https://raw.githubusercontent.com/google/fonts/$googleFontsCommit/ofl"
+$variableSources = @(
+    @{ Dir='commissioner'; File='Commissioner[FLAR,VOLM,slnt,wght].ttf'; Local='Commissioner-VF.ttf'; License='COMMISSIONER_OFL.txt' },
+    @{ Dir='notoserifdisplay'; File='NotoSerifDisplay[wdth,wght].ttf'; Local='NotoSerifDisplay-VF.ttf'; License='NOTO_SERIF_DISPLAY_OFL.txt' },
+    @{ Dir='manrope'; File='Manrope[wght].ttf'; Local='Manrope-VF.ttf'; License='MANROPE_OFL.txt' },
+    @{ Dir='robotoflex'; File='RobotoFlex[GRAD,XOPQ,XTRA,YOPQ,YTAS,YTDE,YTFI,YTLC,YTUC,opsz,slnt,wdth,wght].ttf'; Local='RobotoFlex-VF.ttf'; License='ROBOTO_FLEX_OFL.txt' }
+)
+foreach ($source in $variableSources) {
+    $escaped = [Uri]::EscapeDataString($source.File)
+    # Brackets in the upstream name would be read as a wildcard by -OutFile.
+    Get-PinnedFile "$googleFonts/$($source.Dir)/$escaped" (Join-Path $sourceDir $source.Local)
+    Get-PinnedFile "$googleFonts/$($source.Dir)/OFL.txt" (Join-Path $licenseDir $source.License)
+}
+python (Join-Path $PSScriptRoot 'instance-fonts.py') $sourceDir
+if ($LASTEXITCODE -ne 0) { throw "Font instancing failed: $LASTEXITCODE" }
+$numerals = '0x20,0x25,0x2B,0x2D-0x3A,0x43,0xB0,0x2212'
+# The shared clock role carries only what Halo's 96 px clock does, so its line
+# height (lv_font_conv measures the included glyphs) matches Halo's.
+$clockDigits = '0x20,0x2D,0x30-0x3A'
+$jobs += @(
+    @{ Font='Commissioner-Regular.ttf'; Size=22; Name='aura_font_commissioner_regular_22'; Range=$uiRange; Filter=$true; Fallback='aura_font_plex_regular_22' },
+    @{ Font='Commissioner-Regular.ttf'; Size=26; Name='aura_font_commissioner_regular_26'; Range=$uiRange; Filter=$true; Fallback='aura_font_plex_regular_26' },
+    @{ Font='Commissioner-Medium.ttf'; Size=28; Name='aura_font_commissioner_medium_28'; Range=$uiRange; Filter=$true; Fallback='aura_font_plex_medium_28' },
+    @{ Font='NotoSerifDisplay-Regular.ttf'; Size=32; Name='aura_font_notoserif_regular_32'; Range=$uiRange; Filter=$true; Fallback='aura_font_plex_semibold_32' },
+    @{ Font='NotoSerifDisplay-Light.ttf'; Size=72; Name='aura_font_notoserif_light_72'; Range=$numerals; Filter=$true; Fallback='aura_font_notoserif_regular_32' },
+    @{ Font='NotoSerifDisplay-ExtraLight.ttf'; Size=96; Name='aura_font_notoserif_extralight_96'; Range=$clockDigits; Filter=$true; Fallback='aura_font_notoserif_regular_32' },
+    @{ Font='NotoSerifDisplay-Light.ttf'; Size=84; Name='aura_font_notoserif_light_84'; Range=$numerals; Filter=$true; Fallback='aura_font_notoserif_regular_32' },
+    @{ Font='NotoSerifDisplay-ExtraLight.ttf'; Size=128; Name='aura_font_notoserif_extralight_128'; Range=$numerals; Filter=$true; Fallback='aura_font_notoserif_regular_32' },
+    @{ Font='Manrope-Medium.ttf'; Size=22; Name='aura_font_manrope_medium_22'; Range=$uiRange; Filter=$true; Fallback='aura_font_plex_regular_22' },
+    @{ Font='Manrope-Medium.ttf'; Size=26; Name='aura_font_manrope_medium_26'; Range=$uiRange; Filter=$true; Fallback='aura_font_plex_regular_26' },
+    @{ Font='Manrope-SemiBold.ttf'; Size=28; Name='aura_font_manrope_semibold_28'; Range=$uiRange; Filter=$true; Fallback='aura_font_plex_medium_28' },
+    @{ Font='Manrope-Bold.ttf'; Size=32; Name='aura_font_manrope_bold_32'; Range=$uiRange; Filter=$true; Fallback='aura_font_plex_semibold_32' },
+    @{ Font='Manrope-Light.ttf'; Size=72; Name='aura_font_manrope_light_72'; Range=$numerals; Filter=$true; Fallback='aura_font_manrope_bold_32' },
+    @{ Font='Manrope-ExtraLight.ttf'; Size=96; Name='aura_font_manrope_extralight_96'; Range=$clockDigits; Filter=$true; Fallback='aura_font_manrope_bold_32' },
+    @{ Font='Manrope-Light.ttf'; Size=80; Name='aura_font_manrope_light_80'; Range=$numerals; Filter=$true; Fallback='aura_font_manrope_bold_32' },
+    @{ Font='Manrope-ExtraLight.ttf'; Size=116; Name='aura_font_manrope_extralight_116'; Range=$numerals; Filter=$true; Fallback='aura_font_manrope_bold_32' },
+    @{ Font='RobotoFlex-Medium-22.ttf'; Size=22; Name='aura_font_robotoflex_medium_22'; Range=$uiRange; Filter=$true; Fallback='aura_font_plex_regular_22' },
+    @{ Font='RobotoFlex-Regular-26.ttf'; Size=26; Name='aura_font_robotoflex_regular_26'; Range=$uiRange; Filter=$true; Fallback='aura_font_plex_regular_26' },
+    @{ Font='RobotoFlex-SemiBoldCondensed-28.ttf'; Size=28; Name='aura_font_robotoflex_semibold_cond_28'; Range=$uiRange; Filter=$true; Fallback='aura_font_plex_medium_28' },
+    @{ Font='RobotoFlex-SemiBold-32.ttf'; Size=32; Name='aura_font_robotoflex_semibold_32'; Range=$uiRange; Filter=$true; Fallback='aura_font_plex_semibold_32' },
+    @{ Font='RobotoFlex-LightCondensed-64.ttf'; Size=64; Name='aura_font_robotoflex_light_cond_64'; Range=$numerals; Filter=$true; Fallback='aura_font_robotoflex_semibold_32' },
+    @{ Font='RobotoFlex-LightCondensed-96.ttf'; Size=96; Name='aura_font_robotoflex_light_cond_96'; Range=$clockDigits; Filter=$true; Fallback='aura_font_robotoflex_semibold_32' },
+    @{ Font='RobotoFlex-LightCondensed-116.ttf'; Size=116; Name='aura_font_robotoflex_light_cond_116'; Range=$numerals; Filter=$true; Fallback='aura_font_robotoflex_semibold_32' },
+    @{ Font='RobotoFlex-LightCondensed-204.ttf'; Size=204; Name='aura_font_robotoflex_light_cond_204'; Range=$numerals; Filter=$true; Fallback='aura_font_robotoflex_semibold_32' }
+)
+
 Push-Location $sourceDir
 try {
     foreach ($job in $jobs) {
         $output = Join-Path $outputDir ($job.Name + '.c')
+        $range = $job.Range
+        if ($job.ContainsKey('Filter')) {
+            # Only what the font draws; its Plex fallback draws the rest.
+            $range = (python (Join-Path $PSScriptRoot 'font-range.py') $job.Font $job.Range).Trim()
+            if ($LASTEXITCODE -ne 0 -or -not $range) { throw "Range filtering failed for $($job.Name)" }
+        }
         npx --yes lv_font_conv@1.5.3 `
             --font $job.Font `
             --size $job.Size `
             --bpp 4 `
             --format lvgl `
-            --range $job.Range `
+            --range $range `
             --no-compress `
             --force-fast-kern-format `
             -o $output

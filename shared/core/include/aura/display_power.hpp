@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <string>
 
+#include "aura/appearance.hpp"
+
 namespace aura {
 
 // One accelerometer reading in g, in the display frame: +z points out of the
@@ -52,6 +54,7 @@ struct DisplaySettings {
     int active_brightness_percent{100};
     std::uint32_t timeout_ms{30000};
     std::uint32_t dim_ms{5000};
+    Appearance appearance{Appearance::Halo};
 };
 
 std::string serialize_display_settings(const DisplaySettings& settings);

@@ -190,6 +190,7 @@ extern "C" void app_main(void) {
         };
         companion.install(callbacks);
         ui.set_language(companion.language());
+        ui.set_appearance(companion.appearance());
         ui.create(display, std::move(callbacks));
         companion.apply(ui);
         ui.apply(controller.snapshot());

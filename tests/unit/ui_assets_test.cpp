@@ -1,5 +1,8 @@
+#include "aura/aura_appearance.hpp"
 #include "aura/aura_icons.hpp"
 #include "aura/aura_mercury_view.hpp"
+#include "aura/aura_pearl_view.hpp"
+#include "aura/aura_presence.hpp"
 #include "aura/aura_theme.hpp"
 #include "aura/strings.hpp"
 #include "aura/visual_strings.hpp"
@@ -23,8 +26,9 @@ void expect(bool value, const char* message) {
 // field must be initialized in both languages and every character must exist
 // in the UI fonts, or the device would show an empty box.
 template <typename Table>
-void expect_complete_table(const Table& table, const char* name) {
+void expect_complete_table(const Table& table, const char* name, const lv_font_t* font = nullptr) {
     static_assert(sizeof(Table) % sizeof(const char*) == 0, "string table holds only pointers");
+    const lv_font_t* drawn = font ? font : aura::ui::font_caption();
     const auto* fields = reinterpret_cast<const char* const*>(&table);
     for (std::size_t index = 0; index < sizeof(Table) / sizeof(const char*); ++index) {
         if (fields[index] == nullptr) {
@@ -45,8 +49,9 @@ void expect_complete_table(const Table& table, const char* name) {
             offset += length;
             if (codepoint < 0x20) continue;
             lv_font_glyph_dsc_t glyph{};
-            if (!lv_font_get_glyph_dsc(aura::ui::font_caption(), &glyph, codepoint, 0) ||
-                glyph.resolved_font != aura::ui::font_caption()) {
+            // The Plex set must draw everything itself; an appearance font may
+            // leave a rare glyph (arrows, some dashes) to its Plex fallback.
+            if (!lv_font_get_glyph_dsc(drawn, &glyph, codepoint, 0) || (!font && glyph.resolved_font != drawn)) {
                 std::cerr << "FAILED: " << name << " field " << index << " uses U+" << std::hex << codepoint
                           << std::dec << " which the UI fonts cannot draw: " << text << '\n';
                 std::exit(1);
@@ -93,6 +98,330 @@ void expect_glyphs(const lv_font_t* font, const std::array<std::uint32_t, 33>& c
         }
     }
 }
+}
+
+// Every appearance draws all copy in its own text fonts, and its numeral fonts
+// carry the digits and symbols themselves (not through their fallback).
+void check_appearance_fonts() {
+    using aura::Appearance;
+    namespace ui = aura::ui;
+    const auto& plex = ui::fonts_for(Appearance::Halo);
+    for (const auto appearance : {Appearance::Marble, Appearance::Aurora, Appearance::Graphite}) {
+        const auto& fonts = ui::fonts_for(appearance);
+        expect(fonts.caption != plex.caption && fonts.body != plex.body && fonts.headline != plex.headline &&
+                   fonts.title != plex.title && fonts.display != plex.display && fonts.clock != plex.clock,
+               "Marble, Aurora and Graphite have their own fonts");
+    }
+    expect(ui::fonts_for(Appearance::Graphite).hero != nullptr &&
+               ui::fonts_for(Appearance::Graphite).hero != ui::fonts_for(Appearance::Graphite).numerals_large,
+           "Graphite has its own Home clock numerals");
+    for (const auto appearance : aura::kAppearances) {
+        const auto& fonts = ui::fonts_for(appearance);
+        // The 48 shared screens were laid out for Halo's 72 and 96 px numerals:
+        // every look keeps those two roles at Halo's height; the larger sizes of
+        // the signature screens are numerals_small and numerals_large.
+        expect(lv_font_get_line_height(fonts.display) <= lv_font_get_line_height(plex.display) * 11 / 10 &&
+                   lv_font_get_line_height(fonts.clock) <= lv_font_get_line_height(plex.clock) * 11 / 10,
+               "the shared numeral roles stay within Halo's line height");
+        expect(fonts.numerals_small != nullptr && fonts.numerals_large != nullptr,
+               "every look has its signature numerals");
+        for (const auto* font : {fonts.caption, fonts.body, fonts.headline, fonts.title}) {
+            expect_complete_table(aura::l10n::el_gr(), "Strings el_gr", font);
+            expect_complete_table(aura::l10n::en_us(), "Strings en_us", font);
+            expect_complete_table(aura::l10n::visual_el_gr(), "VisualStrings el_gr", font);
+            expect_complete_table(aura::l10n::visual_en_us(), "VisualStrings en_us", font);
+            expect_complete_table(aura::l10n::companion_el_gr(), "CompanionStrings el_gr", font);
+            expect_complete_table(aura::l10n::companion_en_us(), "CompanionStrings en_us", font);
+        }
+        auto carries = [](const lv_font_t* font, std::initializer_list<std::uint32_t> codepoints) {
+            for (const auto codepoint : codepoints) {
+                lv_font_glyph_dsc_t glyph{};
+                if (!lv_font_get_glyph_dsc(font, &glyph, codepoint, 0) || glyph.resolved_font != font) return false;
+            }
+            return true;
+        };
+        // Every numeral the UI prints (no copy uses U+2212, which some faces lack).
+        for (const auto* font : {fonts.display, fonts.numerals_small}) {
+            expect(carries(font, {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', 0xB0, '%', '+', '-', '.',
+                                  '/', 'C', ' '}),
+                   "the display numerals carry every digit and symbol themselves");
+        }
+        for (const auto* font : {fonts.clock, fonts.numerals_large, fonts.hero ? fonts.hero : fonts.numerals_large}) {
+            expect(carries(font, {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', '-', ' '}),
+                   "the clock numerals carry the digits themselves");
+            // The new looks also print the weather temperature with them.
+            expect(appearance == Appearance::Halo || font == fonts.clock || carries(font, {0xB0}),
+                   "the signature numerals carry the degree sign");
+        }
+    }
+}
+
+// Every icon role draws in every appearance: Halo keeps Lucide, the others use
+// their own family with at most eight Lucide stand-ins.
+void check_appearance_icons() {
+    using aura::Appearance;
+    namespace ui = aura::ui;
+    for (const auto appearance : aura::kAppearances) {
+        std::size_t stand_ins = 0;
+        for (std::size_t index = 0; index < ui::icon_role_count(); ++index) {
+            const auto role = static_cast<ui::IconRole>(index);
+            const auto* icon = ui::icon_asset(role, appearance);
+            expect(icon != nullptr && icon->header.cf == LV_COLOR_FORMAT_A8 && icon->header.w == 64 &&
+                       icon->header.h == 64 && icon->data != nullptr,
+                   "every icon role draws as a 64 px A8 image in every appearance");
+            const bool stand_in = ui::icon_is_fallback(role, appearance);
+            const bool lucide = icon == ui::icon_asset(role, Appearance::Halo);
+            if (appearance == Appearance::Halo) {
+                expect(!stand_in, "Halo draws Lucide as its own family");
+            } else {
+                expect(stand_in == lucide, "a stand-in is exactly the Lucide asset, and only a stand-in");
+                stand_ins += stand_in ? 1U : 0U;
+            }
+        }
+        expect(stand_ins <= 8U, "each family draws all but at most eight roles itself");
+    }
+    ui::set_active_appearance(Appearance::Graphite);
+    expect(ui::icon_asset(ui::IconRole::Home) == ui::icon_asset(ui::IconRole::Home, Appearance::Graphite),
+           "icons follow the active appearance");
+    ui::set_active_appearance(Appearance::Halo);
+    expect(ui::icon_asset(ui::IconRole::Palette) != nullptr, "Settings > Appearance has its palette icon");
+}
+
+// Palettes, fonts and metrics of the four appearances (Settings > Appearance).
+void check_appearance_registry() {
+    using aura::Appearance;
+    namespace ui = aura::ui;
+
+    const auto& halo = ui::palette_for(Appearance::Halo);
+    expect(halo.canvas == 0x000000 && halo.surface == 0x121822 && halo.surface_high == 0x1B2330 &&
+               halo.surface_glass == 0x222C3B && halo.separator == 0x2B3546 && halo.danger_surface == 0x3A141B &&
+               halo.text == 0xF5F8FC && halo.text_secondary == 0xA9B5C7 && halo.text_tertiary == 0x748197 &&
+               halo.blue == 0x178BFF && halo.indigo == 0x4C52FF && halo.ice == 0x25D6FF && halo.lilac == 0x8A45FF &&
+               halo.magenta == 0xDE58FB && halo.mint == 0x35ECC3 && halo.amber == 0xFFCB3F &&
+               halo.pink == 0xFF579E && halo.coral == 0xFF6B78,
+           "Halo keeps the v12 palette");
+    expect(halo.primary_end == halo.blue && halo.on_primary == halo.text,
+           "Halo's primary stays flat blue with today's label colour");
+
+    const auto& marble = ui::palette_for(Appearance::Marble);
+    expect(marble.text == 0xF2EDE4 && marble.blue == 0xF2EDE4 && marble.on_primary == 0x0B0A09 &&
+               marble.indigo == 0xDFC08C && marble.separator == 0x2B2723 && marble.text_tertiary == 0x877D71,
+           "Marble palette follows the spec");
+    const auto& aurora = ui::palette_for(Appearance::Aurora);
+    expect(aurora.blue == 0x3A7BFF && aurora.primary_end == 0xC35CF0 && aurora.text == 0xF3F5FF &&
+               aurora.ice == 0x38E1C9 && aurora.on_primary == 0xFFFFFF,
+           "Aurora palette follows the spec");
+    const auto& graphite = ui::palette_for(Appearance::Graphite);
+    expect(graphite.text == 0xFFFFFF && graphite.text_tertiary == 0x737985 && graphite.blue == 0xFFFFFF &&
+               graphite.on_primary == 0x000000 && graphite.amber == 0xFFB547,
+           "Graphite palette follows the spec");
+
+    expect(ui::contrast_ratio(0xFFFFFF, 0x000000) > 20.9 && ui::contrast_ratio(0x777777, 0x777777) == 1.0,
+           "contrast follows WCAG 2.x");
+    for (const auto appearance : aura::kAppearances) {
+        const auto& palette = ui::palette_for(appearance);
+        expect(ui::contrast_ratio(palette.text, palette.canvas) >= 7.0 &&
+                   ui::contrast_ratio(palette.text, palette.surface) >= 7.0,
+               "primary text reads at 7:1 on canvas and surface");
+        expect(ui::contrast_ratio(palette.text_secondary, palette.canvas) >= 4.5 &&
+                   ui::contrast_ratio(palette.text_tertiary, palette.canvas) >= 4.5,
+               "secondary and tertiary text read at 4.5:1");
+        expect(ui::contrast_ratio(palette.on_primary, palette.blue) >= 3.0 &&
+                   ui::contrast_ratio(palette.on_primary, palette.primary_end) >= 3.0,
+               "button labels read at 3:1 on both primary stops");
+    }
+
+    ui::set_active_appearance(Appearance::Marble);
+    expect(ui::active_appearance() == Appearance::Marble && ui::tokens::text == 0xF2EDE4 &&
+               ui::tokens::on_primary == 0x0B0A09,
+           "activating Marble swaps the colour tokens");
+    ui::set_active_appearance(Appearance::Halo);
+    expect(ui::tokens::text == 0xF5F8FC && ui::tokens::blue == 0x178BFF, "Halo restores its tokens");
+
+    for (const auto appearance : aura::kAppearances) {
+        ui::set_active_appearance(appearance);
+        const auto& fonts = ui::fonts_for(appearance);
+        expect(ui::font_caption() == fonts.caption && ui::font_body() == fonts.body &&
+                   ui::font_headline() == fonts.headline && ui::font_title() == fonts.title &&
+                   ui::font_display() == fonts.display && ui::font_clock() == fonts.clock,
+               "font accessors follow the active appearance");
+        expect(ui::font_numerals_small() == fonts.numerals_small && ui::font_numerals_large() == fonts.numerals_large,
+               "signature numerals follow the active appearance");
+        expect(ui::font_hero() == (fonts.hero ? fonts.hero : fonts.numerals_large),
+               "the hero numerals fall back to the large signature numerals");
+        expect(&ui::active_metrics() == &ui::metrics_for(appearance), "component metrics follow the active appearance");
+    }
+    ui::set_active_appearance(Appearance::Halo);
+    expect(ui::metrics_for(Appearance::Halo).rows == ui::RowStyle::Platter &&
+               ui::metrics_for(Appearance::Halo).platter_radius == 28 &&
+               ui::metrics_for(Appearance::Halo).hero_center_y == 260,
+           "Halo metrics describe today's components");
+}
+
+// A headless 480 x 480 LVGL display for the checks that create objects.
+void ensure_lvgl() {
+    static bool ready = false;
+    if (ready) return;
+    ready = true;
+    lv_init();
+    static std::uint8_t draw_buffer[480 * 48 * 2];
+    auto* display = lv_display_create(480, 480);
+    lv_display_set_buffers(display, draw_buffer, nullptr, sizeof(draw_buffer), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, [](lv_display_t* target, const lv_area_t*, std::uint8_t*) {
+        lv_display_flush_ready(target);
+    });
+}
+
+bool same_color(lv_color_t value, std::uint32_t hex) { return (lv_color_to_u32(value) & 0xFFFFFFU) == hex; }
+
+// The shared components draw each appearance's kit: rows, platters and buttons.
+void check_component_kit() {
+    using aura::Appearance;
+    namespace ui = aura::ui;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+    expect(ui::palette_for(Appearance::Halo).toggle_on == 0x178BFF &&
+               ui::palette_for(Appearance::Marble).toggle_on == 0xDFC08C &&
+               ui::palette_for(Appearance::Aurora).toggle_on == 0x3A7BFF &&
+               ui::palette_for(Appearance::Graphite).toggle_on == 0x3DDC97,
+           "a switch that is on shows a colour its knob stands out from");
+    for (const auto appearance : aura::kAppearances) {
+        ui::set_active_appearance(appearance);
+        const auto& palette = ui::palette_for(appearance);
+        const auto& metrics = ui::metrics_for(appearance);
+        expect(ui::tokens::toggle_on == palette.toggle_on, "the toggle colour follows the appearance");
+
+        auto* primary = ui::make_button(screen, "Α", ui::ButtonTone::Primary);
+        expect(same_color(lv_obj_get_style_bg_color(primary, LV_PART_MAIN), palette.blue) &&
+                   same_color(lv_obj_get_style_text_color(lv_obj_get_child(primary, 0), LV_PART_MAIN), palette.on_primary) &&
+                   lv_obj_get_style_radius(primary, LV_PART_MAIN) == metrics.button_radius,
+               "a primary button uses the look's primary, label colour and radius");
+        expect((lv_obj_get_style_bg_grad_dir(primary, LV_PART_MAIN) == LV_GRAD_DIR_HOR) == metrics.gradient_primary &&
+                   (!metrics.gradient_primary ||
+                    same_color(lv_obj_get_style_bg_grad_color(primary, LV_PART_MAIN), palette.primary_end)),
+               "Aurora's primary runs a horizontal gradient to its second stop");
+        auto* secondary = ui::make_button(screen, "Β", ui::ButtonTone::Secondary);
+        expect(metrics.outline_secondary ? lv_obj_get_style_bg_opa(secondary, LV_PART_MAIN) == LV_OPA_TRANSP &&
+                                               lv_obj_get_style_border_width(secondary, LV_PART_MAIN) >= 1
+                                         : lv_obj_get_style_bg_opa(secondary, LV_PART_MAIN) == LV_OPA_COVER,
+               "Marble's secondary button is an outline, the others are filled");
+
+        auto* row = lv_obj_create(screen);
+        ui::reset(row);
+        ui::style_row(row, palette.ice, false);
+        auto* platter = lv_obj_create(screen);
+        ui::reset(platter);
+        ui::style_platter(platter, palette.ice);
+        if (metrics.rows == ui::RowStyle::Hairline) {
+            expect(lv_obj_get_style_bg_opa(row, LV_PART_MAIN) == LV_OPA_TRANSP &&
+                       lv_obj_get_style_border_side(row, LV_PART_MAIN) == LV_BORDER_SIDE_BOTTOM &&
+                       lv_obj_get_style_border_width(row, LV_PART_MAIN) == 1 &&
+                       same_color(lv_obj_get_style_border_color(row, LV_PART_MAIN), palette.separator),
+                   "Marble rows are open, with one hairline underneath");
+            expect(lv_obj_get_style_bg_opa(platter, LV_PART_MAIN) == LV_OPA_TRANSP &&
+                       lv_obj_get_style_border_side(platter, LV_PART_MAIN) == LV_BORDER_SIDE_FULL &&
+                       lv_obj_get_style_border_width(platter, LV_PART_MAIN) >= 1,
+                   "Marble platters are hairline outlines");
+        } else if (metrics.rows == ui::RowStyle::Glass) {
+            expect(lv_obj_get_style_bg_grad_dir(row, LV_PART_MAIN) == LV_GRAD_DIR_VER &&
+                       lv_obj_get_style_bg_grad_dir(platter, LV_PART_MAIN) == LV_GRAD_DIR_VER &&
+                       lv_obj_get_style_border_width(platter, LV_PART_MAIN) == 1,
+                   "Aurora rows and platters are glass: a vertical gradient with a light edge");
+        } else {
+            expect(lv_obj_get_style_bg_opa(row, LV_PART_MAIN) == LV_OPA_COVER &&
+                       same_color(lv_obj_get_style_bg_color(row, LV_PART_MAIN), palette.surface) &&
+                       lv_obj_get_style_bg_grad_dir(row, LV_PART_MAIN) == LV_GRAD_DIR_NONE,
+                   "Halo and Graphite rows are solid platters");
+        }
+        lv_obj_clean(screen);
+    }
+    ui::set_active_appearance(Appearance::Halo);
+}
+
+// Every appearance has an assistant presence that animates in all four states,
+// freezes for Reduced Motion and detaches safely.
+void check_presences() {
+    using aura::ui::PresenceState;
+    ensure_lvgl();
+    for (const auto appearance : aura::kAppearances) {
+        auto presence = aura::ui::make_presence(appearance);
+        expect(presence != nullptr, "every appearance has a presence");
+        auto* object = presence->attach(lv_screen_active(), 240, 260);
+        expect(object != nullptr && presence->object() == object, "a presence attaches one object");
+        for (const auto state : {PresenceState::Idle, PresenceState::Listening, PresenceState::Thinking,
+                                 PresenceState::Speaking}) {
+            presence->set_state(state);
+            presence->set_level(0.8F);
+            const auto before = presence->frame_count();
+            for (int step = 0; step < 4; ++step) presence->tick(66);
+            expect(presence->frame_count() > before, "the presence animates in every state");
+        }
+        presence->set_reduced_motion(true);
+        const auto frozen = presence->frame_count();
+        for (int step = 0; step < 4; ++step) presence->tick(66);
+        expect(presence->frame_count() == frozen, "Reduced Motion freezes the presence");
+        presence->detach();
+        presence->detach();
+        expect(presence->object() == nullptr, "a detached presence holds no object");
+        lv_obj_clean(lv_screen_active());
+    }
+    expect(aura::ui::make_presence(aura::Appearance::Halo)->buffer_bytes() == 92928U,
+           "Halo keeps Mercury's 92,928-byte buffer");
+}
+
+// Μάρμαρο's pearl: a sphere in Mercury's buffer size plus rings drawn by LVGL.
+void check_pearl_presence() {
+    using aura::ui::PresenceState;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+    {
+        auto presence = aura::ui::make_presence(aura::Appearance::Marble);
+        presence->attach(screen, 240, 272);
+        expect(lv_obj_get_child_count(screen) > 1, "Marble's presence is the pearl with its rings, not Mercury");
+        presence->detach();
+        lv_obj_clean(screen);
+    }
+
+    aura::ui::AuraPearlView pearl;
+    expect(pearl.buffer_bytes() == 92928U, "the pearl's sphere uses a 176 x 176 RGB565 + A8 buffer");
+    expect(aura::ui::AuraPearlView::frame_interval_ms == 66, "the pearl animates at about 15 FPS");
+    expect(pearl.attach(screen, 240, 272) == pearl.object() && pearl.object() != nullptr,
+           "the pearl attaches its sphere image");
+    for (const auto state : {PresenceState::Idle, PresenceState::Listening, PresenceState::Thinking,
+                             PresenceState::Speaking}) {
+        pearl.set_state(state);
+        const auto before = pearl.frame_count();
+        for (int step = 0; step < 3; ++step) pearl.tick(66);
+        expect(pearl.frame_count() > before, "the pearl animates in every state");
+    }
+
+    // Listening: the ring around the pearl follows the voice.
+    pearl.set_state(PresenceState::Listening);
+    pearl.set_level(0.0F);
+    for (int step = 0; step < 10; ++step) pearl.tick(66);
+    const int quiet = pearl.ring_radius();
+    pearl.set_level(1.0F);
+    for (int step = 0; step < 10; ++step) pearl.tick(66);
+    const int loud = pearl.ring_radius();
+    expect(quiet > 80 && loud > quiet, "a louder voice widens the listening ring");
+    expect(loud <= 205, "the rings stay within 205 px of the centre");
+
+    pearl.set_reduced_motion(true);
+    const auto frozen = pearl.frame_count();
+    for (int step = 0; step < 4; ++step) pearl.tick(66);
+    expect(pearl.frame_count() == frozen, "Reduced Motion freezes the pearl");
+    pearl.set_reduced_motion(false);
+
+    // Detached, it holds nothing of the cleaned screen; attached again, it moves.
+    pearl.detach();
+    lv_obj_clean(screen);
+    expect(pearl.object() == nullptr && !pearl.tick(66), "a detached pearl forgets its objects");
+    pearl.attach(screen, 240, 272);
+    const auto again = pearl.frame_count();
+    for (int step = 0; step < 3; ++step) pearl.tick(66);
+    expect(pearl.object() != nullptr && pearl.frame_count() > again, "the pearl attaches a second time");
+    pearl.detach();
+    lv_obj_clean(screen);
 }
 
 int main() {
@@ -189,6 +518,13 @@ int main() {
            std::string_view(aura::l10n::companion_en_us().language_change_note) ==
                "The change applies immediately across AURA.",
            "English companion and language settings copy is populated");
+
+    check_appearance_registry();
+    check_appearance_fonts();
+    check_appearance_icons();
+    check_component_kit();
+    check_presences();
+    check_pearl_presence();
 
     aura::ui::AuraMercuryView mercury;
     expect(mercury.buffer_bytes() == static_cast<std::size_t>(176 * 176 * 3),

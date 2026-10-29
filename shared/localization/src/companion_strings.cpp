@@ -256,6 +256,14 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.phone_notifications = "Ειδοποιήσεις κινητού";
 
         s.display_title = "Οθόνη";
+        s.appearance_title = "Εμφάνιση";
+        s.appearance_halo = "Άλως";
+        s.appearance_marble = "Μάρμαρο";
+        s.appearance_aurora = "Σέλας";
+        s.appearance_graphite = "Γραφίτης";
+        s.answer_quote_format = "«%s»";
+        s.timer_ends_format = "Λήγει %02d:%02d";
+        s.weather_range_format = "Από %d° έως %d°";
         s.always_on = "Πάντα αναμμένη";
         s.always_on_detail = "Αχνό ρολόι όταν δεν τη χρησιμοποιείς";
         s.aod_new_one = "1 νέο";
@@ -629,6 +637,14 @@ const CompanionStrings& companion_en_us() noexcept {
         s.phone_notifications = "Phone notifications";
 
         s.display_title = "Display";
+        s.appearance_title = "Appearance";
+        s.appearance_halo = "Halo";
+        s.appearance_marble = "Marble";
+        s.appearance_aurora = "Aurora";
+        s.appearance_graphite = "Graphite";
+        s.answer_quote_format = "“%s”";
+        s.timer_ends_format = "Ends %02d:%02d";
+        s.weather_range_format = "From %d° to %d°";
         s.always_on = "Always on";
         s.always_on_detail = "A dim clock when idle";
         s.aod_new_one = "1 new";

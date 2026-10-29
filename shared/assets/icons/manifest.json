@@ -529,6 +529,11 @@
       "role": "Swap",
       "source": "arrow-left-right.svg",
       "lordiconCandidate": null
+    },
+    {
+      "role": "Palette",
+      "source": "palette.svg",
+      "lordiconCandidate": null
     }
   ]
 }

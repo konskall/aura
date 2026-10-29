@@ -1,22 +1,35 @@
 #include "aura/aura_theme.hpp"
 
-LV_FONT_DECLARE(aura_font_plex_regular_22);
-LV_FONT_DECLARE(aura_font_plex_regular_26);
-LV_FONT_DECLARE(aura_font_plex_medium_28);
-LV_FONT_DECLARE(aura_font_plex_semibold_32);
-LV_FONT_DECLARE(aura_font_plex_light_72);
-LV_FONT_DECLARE(aura_font_plex_light_96);
+#include <cstdint>
+
+#include "aura/aura_appearance.hpp"
+
 LV_FONT_DECLARE(aura_font_space_medium_26);
 
 namespace aura::ui {
 
+namespace {
+const FontSet& fonts() { return fonts_for(active_appearance()); }
+
+// `rgb` at `percent` brightness (for pressed states).
+std::uint32_t shade(std::uint32_t rgb, int percent) {
+    const auto channel = [&](int shift) {
+        return ((static_cast<int>((rgb >> shift) & 0xFFU) * percent / 100) & 0xFF) << shift;
+    };
+    return static_cast<std::uint32_t>(channel(16) | channel(8) | channel(0));
+}
+}  // namespace
+
 lv_color_t color(std::uint32_t value) { return lv_color_hex(value); }
-const lv_font_t* font_caption() { return &aura_font_plex_regular_22; }
-const lv_font_t* font_body() { return &aura_font_plex_regular_26; }
-const lv_font_t* font_headline() { return &aura_font_plex_medium_28; }
-const lv_font_t* font_title() { return &aura_font_plex_semibold_32; }
-const lv_font_t* font_display() { return &aura_font_plex_light_72; }
-const lv_font_t* font_clock() { return &aura_font_plex_light_96; }
+const lv_font_t* font_caption() { return fonts().caption; }
+const lv_font_t* font_body() { return fonts().body; }
+const lv_font_t* font_headline() { return fonts().headline; }
+const lv_font_t* font_title() { return fonts().title; }
+const lv_font_t* font_display() { return fonts().display; }
+const lv_font_t* font_clock() { return fonts().clock; }
+const lv_font_t* font_numerals_small() { return fonts().numerals_small; }
+const lv_font_t* font_numerals_large() { return fonts().numerals_large; }
+const lv_font_t* font_hero() { return fonts().hero ? fonts().hero : fonts().numerals_large; }
 const lv_font_t* font_brand() { return &aura_font_space_medium_26; }
 
 void reset(lv_obj_t* object) {
@@ -31,16 +44,45 @@ void reset(lv_obj_t* object) {
 // No shadows anywhere: they are the most expensive LVGL primitive on the
 // ESP32-S3 and read as dated on true black.
 void style_platter(lv_obj_t* object, std::uint32_t accent, int radius, bool selected) {
+    const auto rows = active_metrics().rows;
     lv_obj_set_style_bg_color(object, color(selected ? tokens::surface_glass : tokens::surface), 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(object, selected ? 2 : 0, 0);
     lv_obj_set_style_border_color(object, color(accent), 0);
     lv_obj_set_style_border_opa(object, LV_OPA_70, 0);
+    if (rows == RowStyle::Hairline) {
+        // Marble: hairline outlines instead of filled boxes.
+        lv_obj_set_style_bg_opa(object, selected ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(object, selected ? 2 : 1, 0);
+        lv_obj_set_style_border_color(object, color(selected ? accent : tokens::separator), 0);
+        lv_obj_set_style_border_opa(object, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(object, LV_OPA_COVER, LV_STATE_PRESSED);
+    } else if (rows == RowStyle::Glass) {
+        // Aurora: dark glass, lighter at the top, with a faint light edge.
+        lv_obj_set_style_bg_color(object, color(selected ? tokens::surface_glass : tokens::surface_high), 0);
+        lv_obj_set_style_bg_grad_color(object, color(tokens::surface), 0);
+        lv_obj_set_style_bg_grad_dir(object, LV_GRAD_DIR_VER, 0);
+        lv_obj_set_style_border_width(object, selected ? 2 : 1, 0);
+        lv_obj_set_style_border_color(object, color(selected ? accent : 0xAAB4FF), 0);
+        lv_obj_set_style_border_opa(object, selected ? LV_OPA_70 : 28, 0);
+    }
     lv_obj_set_style_radius(object, radius, 0);
     lv_obj_set_style_pad_all(object, 16, 0);
     lv_obj_set_style_bg_color(object, color(tokens::surface_high), LV_STATE_PRESSED);
     lv_obj_set_style_transform_width(object, -3, LV_STATE_PRESSED);
     lv_obj_set_style_transform_height(object, -3, LV_STATE_PRESSED);
+}
+
+void style_row(lv_obj_t* object, std::uint32_t accent, bool selected) {
+    style_platter(object, accent, active_metrics().platter_radius, selected);
+    if (active_metrics().rows != RowStyle::Hairline) return;
+    // Marble rows are open lines: one hairline underneath, no box.
+    lv_obj_set_style_radius(object, 0, 0);
+    lv_obj_set_style_bg_color(object, color(tokens::surface_glass), 0);
+    lv_obj_set_style_bg_opa(object, selected ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_side(object, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(object, 1, 0);
+    lv_obj_set_style_border_color(object, color(tokens::separator), 0);
 }
 
 void style_scrollbar(lv_obj_t* object) {
@@ -68,9 +110,12 @@ lv_obj_t* make_button(lv_obj_t* parent, const char* text, ButtonTone tone, const
     std::uint32_t background = tokens::surface_high;
     std::uint32_t foreground = tokens::text;
     std::uint32_t pressed = tokens::surface_glass;
+    const auto& metrics = active_metrics();
     if (tone == ButtonTone::Primary) {
         background = tokens::blue;
-        pressed = 0x0F6AD0;
+        foreground = tokens::on_primary;
+        // Halo keeps its exact pressed blue; the other looks darken their primary.
+        pressed = active_appearance() == Appearance::Halo ? 0x0F6AD0 : shade(tokens::blue, 82);
     } else if (tone == ButtonTone::Danger) {
         background = tokens::danger_surface;
         foreground = tokens::coral;
@@ -84,8 +129,20 @@ lv_obj_t* make_button(lv_obj_t* parent, const char* text, ButtonTone tone, const
     lv_obj_set_style_bg_color(value, color(pressed), LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(value, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(value, 0, 0);
-    lv_obj_set_style_radius(value, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_radius(value, metrics.button_radius, 0);
     lv_obj_set_style_shadow_width(value, 0, 0);
+    if (tone == ButtonTone::Primary && metrics.gradient_primary) {
+        lv_obj_set_style_bg_grad_color(value, color(tokens::primary_end), 0);
+        lv_obj_set_style_bg_grad_dir(value, LV_GRAD_DIR_HOR, 0);
+    }
+    if (tone == ButtonTone::Secondary && metrics.outline_secondary) {
+        // Marble: the secondary action is a hairline outline.
+        lv_obj_set_style_bg_opa(value, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_opa(value, LV_OPA_COVER, LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(value, 2, 0);
+        lv_obj_set_style_border_color(value, color(tokens::text_tertiary), 0);
+        lv_obj_set_style_border_opa(value, LV_OPA_60, 0);
+    }
     lv_obj_set_style_pad_hor(value, 16, 0);
     lv_obj_set_style_transform_width(value, -3, LV_STATE_PRESSED);
     lv_obj_set_style_transform_height(value, -3, LV_STATE_PRESSED);

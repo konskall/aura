@@ -40,6 +40,17 @@ def main() -> int:
         coverage(source / "IBMPlexSans-SemiBold.ttf", SAMPLE),
         coverage(source / "SpaceGrotesk-Medium.ttf", "AURA"),
     ]
+    # Appearances: every text instance covers the Greek sample; numeral instances the digits.
+    for name in ("Commissioner-Regular.ttf", "Commissioner-Medium.ttf", "NotoSerifDisplay-Regular.ttf",
+                 "Manrope-Medium.ttf", "Manrope-SemiBold.ttf", "Manrope-Bold.ttf",
+                 "RobotoFlex-Medium-22.ttf", "RobotoFlex-Regular-26.ttf",
+                 "RobotoFlex-SemiBoldCondensed-28.ttf", "RobotoFlex-SemiBold-32.ttf"):
+        reports.append(coverage(source / name, SAMPLE))
+    for name in ("NotoSerifDisplay-Light.ttf", "NotoSerifDisplay-ExtraLight.ttf", "Manrope-Light.ttf",
+                 "Manrope-ExtraLight.ttf", "RobotoFlex-LightCondensed-64.ttf", "RobotoFlex-LightCondensed-96.ttf",
+                 "RobotoFlex-LightCondensed-116.ttf", "RobotoFlex-LightCondensed-204.ttf"):
+        # No copy prints U+2212 (Noto Serif Display lacks it); its fallback would draw it.
+        reports.append(coverage(source / name, "0123456789:%+-./°C"))
     print(json.dumps(reports, ensure_ascii=False, indent=2))
     return 1 if any(report["missing"] for report in reports) else 0
 

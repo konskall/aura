@@ -45,6 +45,8 @@ public:
     void poll(std::uint32_t elapsed_ms);
     void apply(AuraUi& ui);
     InterfaceLanguage language() const noexcept { return language_; }
+    // The stored look (display.txt), restored by start() before the UI exists.
+    Appearance appearance() const noexcept { return display_.snapshot().settings.appearance; }
     void set_clock(const std::tm& local);
     // Seconds of healthy running confirm a freshly installed image.
     void confirm_image_after(std::uint32_t uptime_ms);

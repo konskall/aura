@@ -3,29 +3,31 @@
 #include <array>
 #include <cstdint>
 
+#include "aura/aura_presence.hpp"
 #include "lvgl.h"
 
 namespace aura::ui {
 
-enum class MercuryState { Idle, Listening, Thinking, Speaking };
+using MercuryState = PresenceState;
 
-class AuraMercuryView {
+// Halo's presence: the pearlescent liquid-metal orb.
+class AuraMercuryView final : public PresenceView {
 public:
     static constexpr int size = 176;
     static constexpr std::uint32_t frame_interval_ms = 66;
 
     AuraMercuryView();
 
-    lv_obj_t* attach(lv_obj_t* parent, int x, int y);
-    void detach() noexcept;
-    void set_state(MercuryState state) noexcept;
-    void set_level(float level) noexcept;
-    void set_reduced_motion(bool reduced) noexcept;
-    bool tick(std::uint32_t elapsed_ms);
+    lv_obj_t* attach(lv_obj_t* parent, int center_x, int center_y) override;
+    void detach() noexcept override;
+    void set_state(MercuryState state) noexcept override;
+    void set_level(float level) noexcept override;
+    void set_reduced_motion(bool reduced) noexcept override;
+    bool tick(std::uint32_t elapsed_ms) override;
 
-    std::uint64_t frame_count() const noexcept { return frame_count_; }
-    std::size_t buffer_bytes() const noexcept { return buffer_.size(); }
-    lv_obj_t* object() const noexcept { return image_; }
+    std::uint64_t frame_count() const noexcept override { return frame_count_; }
+    std::size_t buffer_bytes() const noexcept override { return buffer_.size(); }
+    lv_obj_t* object() const noexcept override { return image_; }
 
 private:
     void render();

@@ -1,12 +1,18 @@
 #include "aura/aura_icons.hpp"
 
+#include "aura/aura_appearance.hpp"
 #include "aura_icon_assets.hpp"
+#include "aura_icon_assets_material.hpp"
+#include "aura_icon_assets_phosphor.hpp"
+#include "aura_icon_assets_solar.hpp"
 
 namespace aura::ui {
 
 #define AURA_ICON_CASE(role, asset) case IconRole::role: return &aura_icon_##asset
 
-const lv_image_dsc_t* icon_asset(IconRole role) noexcept {
+namespace {
+
+const lv_image_dsc_t* lucide_asset(IconRole role) noexcept {
     switch (role) {
         AURA_ICON_CASE(Home, home); AURA_ICON_CASE(Back, arrow_left); AURA_ICON_CASE(Forward, arrow_right);
         AURA_ICON_CASE(Menu, menu); AURA_ICON_CASE(Close, x); AURA_ICON_CASE(Apps, layout_grid);
@@ -53,12 +59,37 @@ const lv_image_dsc_t* icon_asset(IconRole role) noexcept {
         AURA_ICON_CASE(Flip, flip_vertical);
         AURA_ICON_CASE(Ear, ear);
         AURA_ICON_CASE(Swap, arrow_left_right);
+        AURA_ICON_CASE(Palette, palette);
         case IconRole::Count: break;
     }
     return nullptr;
 }
 
 #undef AURA_ICON_CASE
+
+// Marble: Phosphor Light; Aurora: Solar Bold Duotone; Graphite: Material Symbols Rounded.
+const lv_image_dsc_t* family_asset(IconRole role, Appearance appearance) noexcept {
+    switch (appearance) {
+        case Appearance::Marble: return aura_icon_phosphor(role);
+        case Appearance::Aurora: return aura_icon_solar(role);
+        case Appearance::Graphite: return aura_icon_material(role);
+        case Appearance::Halo: break;
+    }
+    return nullptr;
+}
+
+}  // namespace
+
+const lv_image_dsc_t* icon_asset(IconRole role, Appearance appearance) noexcept {
+    if (const auto* own = family_asset(role, appearance)) return own;
+    return lucide_asset(role);
+}
+
+const lv_image_dsc_t* icon_asset(IconRole role) noexcept { return icon_asset(role, active_appearance()); }
+
+bool icon_is_fallback(IconRole role, Appearance appearance) noexcept {
+    return appearance != Appearance::Halo && family_asset(role, appearance) == nullptr;
+}
 
 const char* icon_role_name(IconRole role) noexcept {
     static constexpr const char* names[] = {
@@ -72,7 +103,8 @@ const char* icon_role_name(IconRole role) noexcept {
         "help", "information", "offline", "audio", "delete", "visibility", "power", "list", "file", "edit", "calculator", "image",
         "navigation", "globe", "wifi-low", "wifi-medium", "visibility-off", "sparkles",
         "chevron-left", "check", "plus",
-        "languages", "notebook", "sunrise", "smartphone", "phone", "phone-off", "download", "bell-ring", "moon", "hand", "flip", "ear", "swap"
+        "languages", "notebook", "sunrise", "smartphone", "phone", "phone-off", "download", "bell-ring", "moon", "hand", "flip", "ear", "swap",
+        "palette"
     };
     const auto index = static_cast<std::size_t>(role);
     return index < icon_role_count() ? names[index] : "invalid";

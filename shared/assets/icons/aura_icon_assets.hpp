@@ -67,6 +67,7 @@ LV_IMAGE_DECLARE(aura_icon_moon);
 LV_IMAGE_DECLARE(aura_icon_music);
 LV_IMAGE_DECLARE(aura_icon_navigation);
 LV_IMAGE_DECLARE(aura_icon_notebook_pen);
+LV_IMAGE_DECLARE(aura_icon_palette);
 LV_IMAGE_DECLARE(aura_icon_pause);
 LV_IMAGE_DECLARE(aura_icon_pen_line);
 LV_IMAGE_DECLARE(aura_icon_phone);

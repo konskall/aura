@@ -2,6 +2,7 @@
 #include "aura/assistant_stream.hpp"
 #include "aura/aoraton.hpp"
 #include "aura/aoraton_real.hpp"
+#include "aura/aura_appearance.hpp"
 #include "aura/aura_theme.hpp"
 #include "aura/aura_ui.hpp"
 #include "aura/bridge_speech_service.hpp"
@@ -335,6 +336,7 @@ int main(int argc, char** argv) {
     std::string motion_directory;
     std::string weather_live_city;
     std::optional<aura::InterfaceLanguage> language_override;
+    std::optional<aura::Appearance> appearance_override;
     bool capture_weather_forecast = false;
     int capture_weather_scroll_y = 340;
     float window_scale = 1.0F;
@@ -357,6 +359,15 @@ int main(int argc, char** argv) {
                 return 2;
             }
             language_override = aura::parse_interface_language(value);
+        }
+        if (argument == "--appearance" && index + 1 < arguments.size()) {
+            const auto value = arguments[++index];
+            const auto look = aura::appearance_from_id(value);
+            if (value != aura::appearance_id(look)) {
+                std::cerr << "AURA: --appearance expects halo, marble, aurora or graphite\n";
+                return 2;
+            }
+            appearance_override = look;
         }
         if (argument == "--scale" && index + 1 < arguments.size()) {
             try { window_scale = std::clamp(std::stof(arguments[++index]), 1.0F, 3.0F); }
@@ -1103,6 +1114,7 @@ int main(int argc, char** argv) {
     aura::simulator::CompanionRuntime companion(std::move(companion_context));
     if (language_override) companion.set_language(*language_override);
     ui.set_language(companion.language());
+    ui.set_appearance(appearance_override ? *appearance_override : companion.appearance());
     if (ancs_enabled) ancs_service.start();
     auto poll_ancs = [&] {
         if (!ancs_enabled) return;
@@ -1535,6 +1547,15 @@ int main(int argc, char** argv) {
             ui.show(aura::UiView::Home);
         }
         else if (capture_scenario == "launcher" || capture_scenario == "quick-actions") ui.show(aura::UiView::Launcher);
+        else if (capture_scenario == "timer") {
+            // The end time follows the captured status clock (18:24), not this desktop's.
+            companion.set_clock({2026, 10, 22, 18, 24, 0, 4});
+            companion.apply();
+            std::uint32_t timer_id = 0;
+            companion.clock().start_timer(600, "DEMO", &timer_id);
+            companion.clock().tick(138000);
+            ui.open_clock_item(aura::ClockAlertKind::Timer, timer_id);
+        }
         else if (capture_scenario == "launcher-reorder") ui.edit_launcher_layout();
         else if (capture_scenario == "wake") {
             controller.dispatch({aura::EventType::WakeDetected});
@@ -1563,6 +1584,7 @@ int main(int argc, char** argv) {
             ui.apply_audio(audio.diagnostics());
         } else if (capture_scenario == "settings") ui.show(aura::UiView::Settings);
         else if (capture_scenario == "language") ui.show(aura::UiView::LanguageSettings);
+        else if (capture_scenario == "appearance") ui.show(aura::UiView::AppearanceSettings);
         else if (capture_scenario == "diagnostics") ui.show(aura::UiView::Diagnostics);
         else if (capture_scenario == "system") ui.show(aura::UiView::System);
         else if (capture_scenario == "system-restart") ui.show_system_confirmation(aura::SystemAction::Restart);
@@ -1919,8 +1941,8 @@ int main(int argc, char** argv) {
             aura::UiView::WifiDetails, aura::UiView::Clock, aura::UiView::ClockNew, aura::UiView::TimerNew,
             aura::UiView::AlarmNew, aura::UiView::ReminderNew, aura::UiView::Notes, aura::UiView::NoteNew,
             aura::UiView::Briefing, aura::UiView::Translate, aura::UiView::PhoneLink,
-            aura::UiView::DisplaySettings, aura::UiView::Update, aura::UiView::Radio,
-            aura::UiView::RadioSearch, aura::UiView::Home,
+            aura::UiView::DisplaySettings, aura::UiView::AppearanceSettings, aura::UiView::Update,
+            aura::UiView::Radio, aura::UiView::RadioSearch, aura::UiView::Home,
         };
         for (int pass = 0; pass < 10; ++pass) {
             for (const auto view : views) ui.show(view);
@@ -2111,15 +2133,18 @@ int main(int argc, char** argv) {
             push_button(SDL_MOUSEBUTTONUP, x2, y2);
             pump(3);
         };
-        // A finger swipe: movement on every input read, as LVGL's gesture
-        // detector requires (a pause between reads restarts its distance).
+        // A finger swipe. LVGL's gesture detector restarts its distance on any
+        // input read that sees no movement, and a read can land before SDL has
+        // delivered the step; so each step moves past the 50 px gesture limit
+        // and any read that sees one step is enough.
         auto swipe = [&](int x1, int y1, int x2, int y2) {
             push_motion(x1, y1);
             pump(2);
             push_button(SDL_MOUSEBUTTONDOWN, x1, y1);
             pump(2);
-            for (int step = 1; step <= 10; ++step) {
-                push_motion(x1 + (x2 - x1) * step / 10, y1 + (y2 - y1) * step / 10, SDL_BUTTON_LMASK);
+            const int steps = std::max(2, std::max(std::abs(x2 - x1), std::abs(y2 - y1)) / 64);
+            for (int step = 1; step <= steps; ++step) {
+                push_motion(x1 + (x2 - x1) * step / steps, y1 + (y2 - y1) * step / steps, SDL_BUTTON_LMASK);
                 pump(1);
             }
             push_button(SDL_MOUSEBUTTONUP, x2, y2);
@@ -2254,7 +2279,7 @@ int main(int argc, char** argv) {
         };
         reset_to(aura::UiView::Settings);
         const int rapid_provider_before = interaction_counts.provider;
-        rapid_double_tap(220, settings_row_y(2, 0));
+        rapid_double_tap(220, settings_row_y(3, 0));
         record("settings.provider", "rapid-double-tap",
                interaction_counts.provider == rapid_provider_before + 1,
                std::to_string(interaction_counts.provider - rapid_provider_before));
@@ -2334,7 +2359,7 @@ int main(int argc, char** argv) {
         record("nav.home", "back-long-press", ui.view() == aura::UiView::Home,
                std::to_string(static_cast<int>(ui.view())));
 
-        for (const auto& point : row_points(settings_row_y(2, 0))) {
+        for (const auto& point : row_points(settings_row_y(3, 0))) {
             reset_to(aura::UiView::Settings);
             const int provider_before = interaction_counts.provider;
             const bool live_before = live_provider;
@@ -2343,8 +2368,9 @@ int main(int argc, char** argv) {
                    interaction_counts.provider == provider_before + 1 && live_provider != live_before,
                    live_provider ? "codex" : "mock");
         }
-        for (const auto& point : row_points(settings_row_y(3, 0))) {
+        for (const auto& point : row_points(settings_row_y(4, 96))) {
             reset_to(aura::UiView::Settings);
+            scroll_view_to(96);
             const bool reduced_before = ui.reduced_motion();
             tap(point.x, point.y);
             record("settings.motion", point.name, ui.reduced_motion() != reduced_before,
@@ -2363,10 +2389,10 @@ int main(int argc, char** argv) {
         }
         // Lower rows are reached by scrolling the list while preserving 80 px targets.
         const struct { const char* action; int index; int scroll; aura::UiView expected; } setting_routes[] = {
-            {"settings.weather", 4, 200, aura::UiView::WeatherSettings},
-            {"settings.audio", 5, 296, aura::UiView::Audio},
-            {"settings.status", 6, 296, aura::UiView::Battery},
-            {"settings.system", 7, 392, aura::UiView::System},
+            {"settings.weather", 5, 296, aura::UiView::WeatherSettings},
+            {"settings.audio", 6, 392, aura::UiView::Audio},
+            {"settings.status", 7, 392, aura::UiView::Battery},
+            {"settings.system", 8, 488, aura::UiView::System},
         };
         for (const auto& route : setting_routes) {
             for (const auto& point : row_points(settings_row_y(route.index, route.scroll))) {
@@ -2460,7 +2486,8 @@ int main(int argc, char** argv) {
 
         reset_to(aura::UiView::Settings);
         const bool persisted_motion_before = ui.reduced_motion();
-        tap(184, settings_row_y(3, 0));
+        scroll_view_to(96);
+        tap(184, settings_row_y(4, 96));
         ui.show(aura::UiView::Home);
         ui.show(aura::UiView::Settings);
         pump(3);
@@ -2575,8 +2602,8 @@ int main(int argc, char** argv) {
                std::to_string(static_cast<int>(ui.view())));
 
         reset_to(aura::UiView::Settings);
-        scroll_view_to(200);
-        tap(184, settings_row_y(4, 200));
+        scroll_view_to(296);
+        tap(184, settings_row_y(5, 296));
         tap(48, 48);
         record("weather_settings.back", "header-button",
                ui.view() == aura::UiView::Settings,
@@ -2766,7 +2793,8 @@ int main(int argc, char** argv) {
         // The orbit check below needs full motion; earlier checks may leave reduced motion on.
         if (ui.reduced_motion()) {
             reset_to(aura::UiView::Settings);
-            tap(240, settings_row_y(3, 0));
+            scroll_view_to(96);
+            tap(240, settings_row_y(4, 96));
         }
         reset_to(aura::UiView::System);
         scroll_view_to(120);
@@ -2817,15 +2845,15 @@ int main(int argc, char** argv) {
 
         // Back returns to a list where it was left.
         reset_to(aura::UiView::Settings);
-        scroll_view_to(392);
-        tap(220, settings_row_y(7, 392));
+        scroll_view_to(488);
+        tap(220, settings_row_y(8, 488));
         const bool opened_system = ui.view() == aura::UiView::System;
         tap(56, 56);
         lv_obj_update_layout(ui.root());
         auto* settings_list = find_scrollable(ui.root());
         const int kept = settings_list ? static_cast<int>(lv_obj_get_scroll_y(settings_list)) : -1;
         record("nav.back_keeps_scroll", "header-back",
-               opened_system && ui.view() == aura::UiView::Settings && kept == 392, std::to_string(kept));
+               opened_system && ui.view() == aura::UiView::Settings && kept == 488, std::to_string(kept));
 
         controller.dispatch({aura::EventType::Reset});
         controller.dispatch({aura::EventType::TurnStarted, text().capture_speaking_prompt});
@@ -3722,17 +3750,523 @@ int main(int argc, char** argv) {
                checking && asked && companion.ota().snapshot().state == aura::UpdateState::Downloading, view_text());
 
         reset_to(aura::UiView::Settings);
-        scroll_view_to(680);
-        tap(220, settings_row_y(8, 680));
+        scroll_view_to(776);
+        tap(220, settings_row_y(9, 776));
         record("settings.display", "row", ui.view() == aura::UiView::DisplaySettings, view_text());
         reset_to(aura::UiView::Settings);
-        scroll_view_to(680);
-        tap(220, settings_row_y(9, 680));
+        scroll_view_to(776);
+        tap(220, settings_row_y(10, 776));
         record("settings.phone", "row", ui.view() == aura::UiView::PhoneLink, view_text());
         reset_to(aura::UiView::Settings);
-        scroll_view_to(680);
-        tap(220, settings_row_y(10, 680));
+        scroll_view_to(776);
+        tap(220, settings_row_y(11, 776));
         record("settings.wake_word", "info-row", ui.view() == aura::UiView::Settings, view_text());
+
+        {
+            // Settings > Appearance: four looks, chosen on the device
+            // (docs/superpowers/specs/2026-10-29-aura-appearances-design.md).
+            const auto& el = aura::l10n::companion_el_gr();
+            const auto& en = aura::l10n::companion_en_us();
+            auto names_whole = [&](const aura::l10n::CompanionStrings& strings) {
+                return find_text(ui.root(), strings.appearance_halo) != nullptr &&
+                       find_text(ui.root(), strings.appearance_marble) != nullptr &&
+                       find_text(ui.root(), strings.appearance_aurora) != nullptr &&
+                       find_text(ui.root(), strings.appearance_graphite) != nullptr;
+            };
+            reset_to(aura::UiView::Settings);
+            const bool row_named = find_text(ui.root(), el.appearance_title) != nullptr &&
+                                   find_text(ui.root(), el.appearance_halo) != nullptr;
+            tap(220, settings_row_y(2, 0));
+            record("appearance.settings_row", "row",
+                   row_named && ui.view() == aura::UiView::AppearanceSettings, view_text());
+
+            const bool greek_cards = names_whole(el);
+            ui.set_language(aura::InterfaceLanguage::English);
+            const bool english_cards = names_whole(en);
+            ui.set_language(aura::InterfaceLanguage::Greek);
+            record("appearance.cards", "four-names", greek_cards && english_cards,
+                   std::to_string(greek_cards) + std::to_string(english_cards));
+
+            tap(351, 186);  // the Marble card, top right
+            pump(3);
+            // The selected card's mark leaves its name whole («Μάρμαρο» in its serif).
+            const bool picked_names = names_whole(el);
+            record("appearance.pick", "marble-card",
+                   ui.appearance() == aura::Appearance::Marble &&
+                   ui.view() == aura::UiView::AppearanceSettings &&
+                   companion.display().snapshot().settings.appearance == aura::Appearance::Marble &&
+                   aura::ui::tokens::text == 0xF2EDE4 && picked_names,
+                   aura::appearance_id(ui.appearance()) + std::string("/names=") + std::to_string(picked_names));
+
+            // Dimming to the always-on clock and waking keep the look and the view.
+            auto display_snapshot = companion.display().snapshot();
+            display_snapshot.mode = aura::DisplayMode::AlwaysOn;
+            display_snapshot.sequence += 1000;
+            ui.apply_display(display_snapshot);
+            const bool dark_kept = ui.appearance() == aura::Appearance::Marble &&
+                                   ui.view() == aura::UiView::AlwaysOn;
+            display_snapshot.mode = aura::DisplayMode::Active;
+            display_snapshot.sequence += 1;
+            ui.apply_display(display_snapshot);
+            pump(2);
+            record("appearance.aod_roundtrip", "always-on",
+                   dark_kept && ui.appearance() == aura::Appearance::Marble &&
+                   ui.view() == aura::UiView::AppearanceSettings,
+                   view_text());
+
+            // A change of look while listening keeps the state and the moving presence.
+            reset_to(aura::UiView::Home);
+            controller.dispatch({aura::EventType::Reset});
+            controller.dispatch({aura::EventType::WakeDetected});
+            controller.dispatch({aura::EventType::BeginRecording});
+            apply();
+            pump(2);
+            const bool listening = controller.snapshot().state == aura::AssistantState::Listening;
+            ui.set_appearance(aura::Appearance::Graphite);
+            const auto frames_before = ui.mercury_frame_count();
+            for (int step = 0; step < 10; ++step) {
+                ui.tick(66);
+                pump(1);
+            }
+            record("appearance.switch_while_listening", "graphite",
+                   listening && ui.view() == aura::UiView::Assistant &&
+                   controller.snapshot().state == aura::AssistantState::Listening &&
+                   ui.mercury_frame_count() > frames_before,
+                   std::to_string(listening) + "/" + std::to_string(static_cast<int>(ui.view())) + "/" +
+                       aura::state_name(controller.snapshot().state) + "/" +
+                       std::to_string(ui.mercury_frame_count() - frames_before));
+            // The same into Μάρμαρο: its pearl takes over and keeps moving.
+            ui.set_appearance(aura::Appearance::Marble);
+            const auto pearl_frames_before = ui.mercury_frame_count();
+            for (int step = 0; step < 10; ++step) {
+                ui.tick(66);
+                pump(1);
+            }
+            record("appearance.switch_while_listening", "marble",
+                   ui.view() == aura::UiView::Assistant &&
+                   controller.snapshot().state == aura::AssistantState::Listening &&
+                   ui.mercury_frame_count() > pearl_frames_before,
+                   aura::state_name(controller.snapshot().state) + std::string("/") +
+                       std::to_string(ui.mercury_frame_count() - pearl_frames_before));
+            controller.dispatch({aura::EventType::Reset});
+            apply();
+            pump(2);
+
+            // Each look's component kit on a real screen: a Settings row, its icon
+            // well and the header's Back button.
+            {
+                bool kit_ok = true;
+                std::string kit_detail;
+                for (const auto look : {aura::Appearance::Marble, aura::Appearance::Aurora,
+                                        aura::Appearance::Graphite}) {
+                    ui.set_appearance(look);
+                    reset_to(aura::UiView::Settings);
+                    const auto& metrics = aura::ui::metrics_for(look);
+                    auto* label = find_text(ui.root(), aura::l10n::el_gr().wifi_title);
+                    auto* row = label ? lv_obj_get_parent(label) : nullptr;
+                    auto* well = row ? lv_obj_get_child(row, 0) : nullptr;
+                    lv_point_t back_point{48, 48};
+                    auto* back = lv_indev_search_obj(ui.root(), &back_point);
+                    bool well_ok = false;
+                    bool back_ok = false;
+                    if (well && back) {
+                        const auto well_radius = lv_obj_get_style_radius(well, LV_PART_MAIN);
+                        if (metrics.wells == aura::ui::WellStyle::HairlineCircle) {
+                            well_ok = lv_obj_get_style_bg_opa(well, LV_PART_MAIN) == LV_OPA_TRANSP &&
+                                      lv_obj_get_style_border_width(well, LV_PART_MAIN) >= 1;
+                            back_ok = lv_obj_get_style_bg_opa(back, LV_PART_MAIN) == LV_OPA_TRANSP &&
+                                      lv_obj_get_style_border_width(back, LV_PART_MAIN) >= 1;
+                        } else {
+                            well_ok = well_radius < 30 && lv_obj_get_style_bg_opa(well, LV_PART_MAIN) > 0;
+                            back_ok = metrics.rows == aura::ui::RowStyle::Glass
+                                          ? lv_obj_get_style_bg_grad_dir(back, LV_PART_MAIN) == LV_GRAD_DIR_VER
+                                          : lv_obj_get_style_radius(back, LV_PART_MAIN) == 20;
+                        }
+                    }
+                    kit_ok = kit_ok && well_ok && back_ok;
+                    kit_detail += std::string(aura::appearance_id(look)) + ":" + std::to_string(well_ok) +
+                                  std::to_string(back_ok) + " ";
+                }
+                ui.set_appearance(aura::Appearance::Halo);
+                record("appearance.kit", "settings-row-well-back", kit_ok, kit_detail);
+            }
+
+            // Signature screens keep every cut label inside its box and every
+            // control at least 64 px (labels made tappable keep their own margin).
+            std::function<bool(lv_obj_t*)> labels_inside = [&](lv_obj_t* object) {
+                bool inside = true;
+                const auto count = lv_obj_get_child_count(object);
+                for (std::uint32_t index = 0; index < count; ++index) {
+                    auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                    if (lv_obj_is_hidden(child)) continue;
+                    if (lv_obj_check_type(child, &lv_label_class) &&
+                        lv_label_get_long_mode(child) == LV_LABEL_LONG_DOT) {
+                        lv_area_t own{};
+                        lv_area_t parent{};
+                        lv_obj_get_coords(child, &own);
+                        lv_obj_get_coords(object, &parent);
+                        inside = inside && own.x1 >= parent.x1 - 1 && own.x2 <= parent.x2 + 1 && own.x1 >= 0 &&
+                                 own.x2 <= 480;
+                    }
+                    inside = labels_inside(child) && inside;
+                }
+                return inside;
+            };
+            std::function<int(lv_obj_t*)> smallest_target = [&](lv_obj_t* object) {
+                int smallest = 9999;
+                const auto count = lv_obj_get_child_count(object);
+                for (std::uint32_t index = 0; index < count; ++index) {
+                    auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                    if (lv_obj_is_hidden(child)) continue;
+                    if (lv_obj_is_clickable(child) && !lv_obj_check_type(child, &lv_label_class)) {
+                        smallest = std::min(smallest, std::min(static_cast<int>(lv_obj_get_width(child)),
+                                                               static_cast<int>(lv_obj_get_height(child))));
+                    }
+                    smallest = std::min(smallest, smallest_target(child));
+                }
+                return smallest;
+            };
+            std::function<lv_obj_t*(lv_obj_t*, aura::UiView)> find_target = [&](lv_obj_t* object, aura::UiView view) {
+                const auto count = lv_obj_get_child_count(object);
+                for (std::uint32_t index = 0; index < count; ++index) {
+                    auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                    if (lv_obj_is_clickable(child) &&
+                        lv_obj_get_user_data(child) == reinterpret_cast<void*>(static_cast<std::intptr_t>(view))) {
+                        return child;
+                    }
+                    if (auto* found = find_target(child, view)) return found;
+                }
+                return static_cast<lv_obj_t*>(nullptr);
+            };
+            std::function<bool(lv_obj_t*, const lv_font_t*)> uses_font = [&](lv_obj_t* object, const lv_font_t* font) {
+                const auto count = lv_obj_get_child_count(object);
+                for (std::uint32_t index = 0; index < count; ++index) {
+                    auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                    if (lv_obj_check_type(child, &lv_label_class) &&
+                        lv_obj_get_style_text_font(child, LV_PART_MAIN) == font) {
+                        return true;
+                    }
+                    if (uses_font(child, font)) return true;
+                }
+                return false;
+            };
+            // The view's own content (the status bar is shared chrome, not a layout).
+            auto view_content = [&]() {
+                const auto count = lv_obj_get_child_count(ui.root());
+                for (std::uint32_t index = 0; index < count; ++index) {
+                    auto* child = lv_obj_get_child(ui.root(), static_cast<std::int32_t>(index));
+                    if (!lv_obj_is_hidden(child) && lv_obj_get_height(child) == 480 && lv_obj_get_child_count(child) > 0) {
+                        return child;
+                    }
+                }
+                return ui.root();
+            };
+            auto tap_center = [&](lv_obj_t* object) {
+                if (!object) return;
+                lv_area_t area{};
+                lv_obj_get_coords(object, &area);
+                tap((area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2);
+            };
+
+            {
+                // Μάρμαρο: Home. Serif numerals, the next alarm beside the weather,
+                // the presence (tap = talk) and Apps, in both languages.
+                ui.set_appearance(aura::Appearance::Marble);
+                const auto& marble_fonts = aura::ui::fonts_for(aura::Appearance::Marble);
+                std::uint32_t alarm_id = 0;
+                companion.clock().add_alarm(7, 30, true, "", &alarm_id);
+                reset_to(aura::UiView::Home);
+                pump(3);
+                const bool serif_clock = uses_font(ui.root(), marble_fonts.numerals_large);
+                const bool alarm_shown = find_text(ui.root(), "07:30") != nullptr;
+                const bool greek_hint = find_text(ui.root(), aura::l10n::el_gr().home_hint) != nullptr;
+                ui.set_language(aura::InterfaceLanguage::English);
+                pump(2);
+                const bool english_hint = find_text(ui.root(), aura::l10n::en_us().home_hint) != nullptr;
+                ui.set_language(aura::InterfaceLanguage::Greek);
+                pump(2);
+                const int ask_before = interaction_counts.ask;
+                tap(240, aura::ui::metrics_for(aura::Appearance::Marble).hero_center_y);
+                const bool talks = interaction_counts.ask == ask_before + 1;
+                controller.dispatch({aura::EventType::Reset});
+                apply();
+                reset_to(aura::UiView::Home);
+                tap_center(find_target(ui.root(), aura::UiView::Launcher));
+                const bool apps = ui.view() == aura::UiView::Launcher;
+                record("marble.home", "layout",
+                       serif_clock && alarm_shown && greek_hint && english_hint && talks && apps,
+                       std::to_string(serif_clock) + std::to_string(alarm_shown) + std::to_string(greek_hint) +
+                           std::to_string(english_hint) + std::to_string(talks) + std::to_string(apps));
+
+                // A long timer label stays inside its box; every control stays 64 px.
+                std::uint32_t timer_id = 0;
+                companion.clock().start_timer(600, "Ζυμαρικά για τέσσερα άτομα με σάλτσα ντομάτας και βασιλικό",
+                                              &timer_id);
+                reset_to(aura::UiView::Home);
+                pump(3);
+                const bool inside = labels_inside(ui.root());
+                const int smallest = smallest_target(view_content());
+                record("marble.home_fit", "long-timer-label", inside && smallest >= 64,
+                       std::to_string(inside) + "/" + std::to_string(smallest));
+                companion.clock().cancel_timer(timer_id);
+                companion.clock().remove_alarm(alarm_id);
+                pump(2);
+
+                const auto font_of = [](lv_obj_t* object) {
+                    return object ? lv_obj_get_style_text_font(object, LV_PART_MAIN) : nullptr;
+                };
+                // Wholly on the first screen, below the header.
+                const auto on_screen = [](lv_obj_t* object) {
+                    if (!object) return false;
+                    lv_area_t area{};
+                    lv_obj_get_coords(object, &area);
+                    return area.y1 >= 96 && area.y2 <= 480;
+                };
+                std::function<lv_obj_t*(lv_obj_t*, const lv_obj_class_t*)> find_type =
+                    [&](lv_obj_t* object, const lv_obj_class_t* type) -> lv_obj_t* {
+                    const auto count = lv_obj_get_child_count(object);
+                    for (std::uint32_t index = 0; index < count; ++index) {
+                        auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                        if (lv_obj_check_type(child, type)) return child;
+                        if (auto* found = find_type(child, type)) return found;
+                    }
+                    return nullptr;
+                };
+                const auto fits = [&] { return labels_inside(view_content()) && smallest_target(view_content()) >= 64; };
+                const aura::InterfaceLanguage languages[] = {aura::InterfaceLanguage::Greek,
+                                                             aura::InterfaceLanguage::English};
+
+                // Answer: a small pearl replaces the title, the question is a serif
+                // quote in the reader's language, and today's actions stay.
+                bool answer_ok = true;
+                std::string answer_detail;
+                for (const auto language : languages) {
+                    ui.set_language(language);
+                    const bool english = language == aura::InterfaceLanguage::English;
+                    const auto& strings = english ? aura::l10n::en_us() : aura::l10n::el_gr();
+                    const auto& extra = english ? aura::l10n::companion_en_us() : aura::l10n::companion_el_gr();
+                    controller.dispatch({aura::EventType::Reset});
+                    controller.dispatch({aura::EventType::TurnStarted, strings.capture_short_prompt});
+                    controller.dispatch({aura::EventType::FinalResult, strings.capture_short_answer});
+                    apply();
+                    pump(4);
+                    char quoted[256];
+                    std::snprintf(quoted, sizeof(quoted), extra.answer_quote_format, strings.capture_short_prompt);
+                    const bool serif = font_of(find_text(view_content(), quoted)) == marble_fonts.title;
+                    const bool no_title = find_text(view_content(), strings.answer_title) == nullptr;
+                    const bool ask = find_text(view_content(), strings.ask_again) != nullptr;
+                    const bool fit = fits();
+                    answer_ok = answer_ok && serif && no_title && ask && fit;
+                    answer_detail += std::to_string(serif) + std::to_string(no_title) + std::to_string(ask) +
+                                     std::to_string(fit) + " ";
+                }
+                controller.dispatch({aura::EventType::Reset});
+                apply();
+                record("marble.answer", "quote-and-actions", answer_ok, answer_detail);
+
+                // Apps: three rows of hairline circles fit the screen, and unread
+                // notifications show a gold dot instead of a count.
+                const int notifications_before = controller.snapshot().notification_count;
+                controller.dispatch({aura::EventType::NotificationReceived});
+                apply();
+                bool launcher_ok = true;
+                std::string launcher_detail;
+                for (const auto language : languages) {
+                    ui.set_language(language);
+                    const auto& visual = language == aura::InterfaceLanguage::English ? aura::l10n::visual_en_us() :
+                                                                                        aura::l10n::visual_el_gr();
+                    reset_to(aura::UiView::Launcher);
+                    pump(2);
+                    auto* notifications = find_target(view_content(), aura::UiView::Notifications);
+                    auto* clock_cell = find_target(view_content(), aura::UiView::Clock);
+                    const bool third_row = on_screen(notifications) && find_text(notifications, visual.notifications);
+                    auto* well = clock_cell ? lv_obj_get_child(clock_cell, 0) : nullptr;
+                    const bool hairline = well && lv_obj_get_style_border_width(well, LV_PART_MAIN) >= 1 &&
+                                          lv_obj_get_style_bg_opa(well, LV_PART_MAIN) == LV_OPA_TRANSP;
+                    bool dot = false;
+                    for (std::uint32_t index = 0; notifications && index < lv_obj_get_child_count(notifications);
+                         ++index) {
+                        auto* child = lv_obj_get_child(notifications, static_cast<std::int32_t>(index));
+                        dot = dot || (lv_obj_get_width(child) == 14 && lv_obj_get_height(child) == 14);
+                    }
+                    const bool fit = fits();
+                    tap_center(clock_cell);
+                    const bool opens = ui.view() == aura::UiView::Clock;
+                    launcher_ok = launcher_ok && third_row && hairline && dot && fit && opens;
+                    launcher_detail += std::to_string(third_row) + std::to_string(hairline) + std::to_string(dot) +
+                                       std::to_string(fit) + std::to_string(opens) + " ";
+                }
+                if (notifications_before == 0) controller.dispatch({aura::EventType::NotificationsCleared});
+                apply();
+                record("marble.launcher", "three-rows-hairline-dot", launcher_ok, launcher_detail);
+
+                // Weather: the city is the title (tap = choose a city); the serif
+                // temperature, the hourly row and the metric list fill the first
+                // screen; DEMO stays visible.
+                bool weather_ok = true;
+                std::string weather_detail;
+                for (const auto language : languages) {
+                    ui.set_language(language);
+                    const bool english = language == aura::InterfaceLanguage::English;
+                    const auto& visual = english ? aura::l10n::visual_en_us() : aura::l10n::visual_el_gr();
+                    weather_model.restore_location(demo_weather_location({}, language));
+                    weather_model.fetch_succeeded(demo_weather_data(aura::WeatherCondition::PartlyCloudy, {}, language));
+                    apply_weather();
+                    reset_to(aura::UiView::Weather);
+                    pump(3);
+                    auto* city = find_text(view_content(), english ? "Athens" : "Αθήνα");
+                    const bool serif_city = font_of(city) == marble_fonts.title;
+                    const bool serif_degrees = font_of(find_text(view_content(), "22°")) == marble_fonts.numerals_large;
+                    const bool first_screen = on_screen(find_text(view_content(), "21:00")) &&
+                                              on_screen(find_text(view_content(), visual.humidity)) &&
+                                              on_screen(find_text(view_content(), visual.wind));
+                    const bool demo = find_text(view_content(), visual.demo_badge) != nullptr;
+                    const bool fit = fits();
+                    tap_center(city);
+                    const bool picker = ui.view() == aura::UiView::WeatherLocation;
+                    weather_ok = weather_ok && serif_city && serif_degrees && first_screen && demo && fit && picker;
+                    weather_detail += std::to_string(serif_city) + std::to_string(serif_degrees) +
+                                      std::to_string(first_screen) + std::to_string(demo) + std::to_string(fit) +
+                                      std::to_string(picker) + " ";
+                }
+                // A long city name ends in an ellipsis inside its box.
+                ui.set_language(aura::InterfaceLanguage::Greek);
+                auto long_city = demo_weather_data();
+                long_city.location.name = "Αγιος Νικόλαος Λασιθίου";
+                weather_model.restore_location(long_city.location);
+                weather_model.fetch_succeeded(long_city);
+                apply_weather();
+                reset_to(aura::UiView::Weather);
+                pump(3);
+                const bool long_city_cut = find_text(view_content(), long_city.location.name.c_str()) == nullptr &&
+                                           fits();
+                weather_ok = weather_ok && long_city_cut;
+                weather_detail += "long=" + std::to_string(long_city_cut);
+                weather_model.restore_location(demo_weather_location());
+                weather_model.fetch_succeeded(demo_weather_data());
+                apply_weather();
+                record("marble.weather", "hero-hourly-metrics", weather_ok, weather_detail);
+
+                // Timer: the watch dial (60 ticks and an arc that shrinks), serif
+                // digits, the label and the end time; pause and cancel still work.
+                bool timer_ok = true;
+                std::string timer_detail;
+                for (const auto language : languages) {
+                    ui.set_language(language);
+                    const auto& extra = language == aura::InterfaceLanguage::English ?
+                        aura::l10n::companion_en_us() : aura::l10n::companion_el_gr();
+                    clear_timers();
+                    clock_model.start_timer(600, "Ζυμαρικά");
+                    reset_to(aura::UiView::Clock);
+                    tap(220, 140);
+                    pump(2);
+                    const bool item = ui.view() == aura::UiView::ClockItem;
+                    auto* scale = find_type(view_content(), &lv_scale_class);
+                    const bool ticks = scale && lv_scale_get_total_tick_count(scale) == 60;
+                    // The end time is set when the screen opens (ten minutes from now);
+                    // tick() below runs the timer without moving the wall clock.
+                    const auto& clock_now = clock_model.snapshot();
+                    const auto end = aura::from_minute_index(clock_now.now_minute + (600 + 30) / 60);
+                    char ends[48];
+                    std::snprintf(ends, sizeof(ends), extra.timer_ends_format, end.hour, end.minute);
+                    const bool end_shown = !clock_now.clock_valid || find_text(view_content(), ends) != nullptr;
+                    const bool label_shown = find_text(view_content(), "Ζυμαρικά") != nullptr;
+                    auto* arc = find_type(view_content(), &lv_arc_class);
+                    const int full = arc ? lv_arc_get_value(arc) : -1;
+                    clock_model.tick(150000);
+                    pump(3);
+                    auto* arc_later = find_type(view_content(), &lv_arc_class);
+                    const int later = arc_later ? lv_arc_get_value(arc_later) : -1;
+                    // The timer also runs in real time between pumps (a few ms).
+                    const bool shrinks = full >= 990 && later <= full - 250 && later >= full - 260;
+                    const bool serif_digits = font_of(find_text(view_content(), "07:30")) == marble_fonts.numerals_small;
+                    const bool fit = fits();
+                    timer_ok = timer_ok && item && ticks && shrinks && serif_digits && end_shown && label_shown && fit;
+                    timer_detail += std::to_string(item) + std::to_string(ticks) + std::to_string(full) + "/" +
+                                    std::to_string(later) + std::to_string(serif_digits) + std::to_string(end_shown) +
+                                    std::to_string(label_shown) + std::to_string(fit) + " ";
+                }
+                ui.set_language(aura::InterfaceLanguage::Greek);
+                clear_timers();
+                clock_model.start_timer(600, "Ζυμαρικά για τέσσερα άτομα με σάλτσα ντομάτας και βασιλικό");
+                reset_to(aura::UiView::Clock);
+                tap(220, 140);
+                pump(2);
+                const bool long_label_inside = fits();
+                tap_center(find_sized_clickable(view_content(), 80, 80));
+                const bool timer_paused = !clock_model.snapshot().timers.empty() &&
+                                          clock_model.snapshot().timers.front().paused;
+                tap_center(find_sized_clickable(view_content(), 72, 72));
+                const bool timer_cancelled = clock_model.snapshot().timers.empty() &&
+                                             ui.view() == aura::UiView::Clock;
+                timer_ok = timer_ok && long_label_inside && timer_paused && timer_cancelled;
+                timer_detail += "long=" + std::to_string(long_label_inside) + std::to_string(timer_paused) +
+                                std::to_string(timer_cancelled);
+                clear_timers();
+                record("marble.timer", "dial-digits-controls", timer_ok, timer_detail);
+
+                // Today: the serif greeting and the date over hairline rows.
+                bool briefing_ok = true;
+                std::string briefing_detail;
+                for (const auto language : languages) {
+                    ui.set_language(language);
+                    reset_to(aura::UiView::Briefing);
+                    pump(2);
+                    const bool serif = uses_font(view_content(), marble_fonts.title);
+                    const bool fit = fits();
+                    briefing_ok = briefing_ok && serif && fit;
+                    briefing_detail += std::to_string(serif) + std::to_string(fit) + " ";
+                }
+                ui.set_language(aura::InterfaceLanguage::Greek);
+                record("marble.briefing", "greeting-rows", briefing_ok, briefing_detail);
+                ui.set_appearance(aura::Appearance::Halo);
+            }
+
+            // Every view in every look, ten times over: no crash and no LVGL growth.
+            const aura::UiView sweep_views[] = {
+                aura::UiView::Home, aura::UiView::Launcher, aura::UiView::Notifications,
+                aura::UiView::Settings, aura::UiView::AppearanceSettings, aura::UiView::Audio,
+                aura::UiView::AoratonRooms, aura::UiView::AoratonConversation, aura::UiView::AoratonCompose,
+                aura::UiView::Weather, aura::UiView::WeatherSettings, aura::UiView::Calendar,
+                aura::UiView::Battery, aura::UiView::VoiceSettings, aura::UiView::Diagnostics,
+                aura::UiView::Wifi, aura::UiView::Clock, aura::UiView::ClockNew, aura::UiView::TimerNew,
+                aura::UiView::AlarmNew, aura::UiView::ReminderNew, aura::UiView::Notes, aura::UiView::NoteNew,
+                aura::UiView::Briefing, aura::UiView::Translate, aura::UiView::PhoneLink,
+                aura::UiView::DisplaySettings, aura::UiView::Update, aura::UiView::Radio,
+                aura::UiView::RadioSearch, aura::UiView::System,
+            };
+            bool sweep_ok = true;
+            std::string sweep_detail;
+            for (const auto appearance : aura::kAppearances) {
+                ui.set_appearance(appearance);
+                ui.show(aura::UiView::Home);
+                pump(2);
+                lv_mem_monitor_t before{};
+                lv_mem_monitor(&before);
+                for (int pass = 0; pass < 10; ++pass) {
+                    for (const auto view : sweep_views) ui.show(view);
+                }
+                ui.show(aura::UiView::Home);
+                pump(2);
+                lv_mem_monitor_t after{};
+                lv_mem_monitor(&after);
+                const long grew = static_cast<long>(after.total_size - after.free_size) -
+                                  static_cast<long>(before.total_size - before.free_size);
+                if (grew > 8192) sweep_ok = false;
+                sweep_detail += std::string(aura::appearance_id(appearance)) + ":" + std::to_string(grew) + " ";
+            }
+            record("appearance.sweep", "all-views", sweep_ok, sweep_detail);
+
+            // Back to Halo through the card, so the stored setting follows.
+            reset_to(aura::UiView::AppearanceSettings);
+            tap(129, 186);  // the Halo card, top left
+            pump(3);
+            record("appearance.restore_halo", "halo-card",
+                   ui.appearance() == aura::Appearance::Halo &&
+                   companion.display().snapshot().settings.appearance == aura::Appearance::Halo &&
+                   aura::ui::tokens::text == 0xF5F8FC,
+                   aura::appearance_id(ui.appearance()));
+        }
 
         {
             // Weather copy: a singular count, no "-0°", metric titles that fit in
@@ -3895,23 +4429,34 @@ int main(int argc, char** argv) {
         ui.apply_display(awake);
 
         // Power off says how to come back: the side button on the device (only
-        // it wakes from deep sleep), a long press in the simulator.
-        reset_to(aura::UiView::System);
-        scroll_view_to(120);
-        tap(220, 356);
+        // it wakes from deep sleep), a long press in the simulator. The row is
+        // found by its name, so the list's scroll cannot send the tap elsewhere.
+        auto open_power_off = [&] {
+            reset_to(aura::UiView::System);
+            auto* name = find_text(ui.root(), aura::l10n::companion_el_gr().system_power_off);
+            if (!name) name = find_text(ui.root(), aura::l10n::companion_en_us().system_power_off);
+            if (!name) return;
+            lv_obj_scroll_to_view_recursive(name, LV_ANIM_OFF);
+            pump(3);
+            lv_area_t area{};
+            lv_obj_get_coords(name, &area);
+            tap((area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2);
+        };
+        open_power_off();
+        const auto device_view = static_cast<int>(ui.view());
         const bool device_copy = ui.view() == aura::UiView::SystemConfirm &&
                                  shows_copy(&aura::l10n::CompanionStrings::system_power_off_detail_button) &&
                                  !shows_copy(&aura::l10n::CompanionStrings::system_power_off_detail);
         companion.set_capabilities(plain_capabilities);
         pump(2);
-        reset_to(aura::UiView::System);
-        scroll_view_to(120);
-        tap(220, 356);
+        open_power_off();
+        const auto simulator_view = static_cast<int>(ui.view());
         const bool simulator_copy = ui.view() == aura::UiView::SystemConfirm &&
                                     shows_copy(&aura::l10n::CompanionStrings::system_power_off_detail) &&
                                     !shows_copy(&aura::l10n::CompanionStrings::system_power_off_detail_button);
         record("system.power_off_copy", "button-or-long-press", device_copy && simulator_copy,
-               std::to_string(device_copy) + std::to_string(simulator_copy));
+               std::to_string(device_copy) + std::to_string(simulator_copy) + " views " +
+                   std::to_string(device_view) + "/" + std::to_string(simulator_view));
 
         {
             // The always-on clock lights as little of the AMOLED as it can: its
@@ -3976,6 +4521,40 @@ int main(int argc, char** argv) {
             }
             companion.set_language(aura::InterfaceLanguage::Greek);
             record("capture.translate_sides", "greek-mine-in-english", greek_mine, view_text());
+        }
+
+        {
+            // The stored look is read from display.txt before the first frame.
+            const auto store = std::filesystem::temp_directory_path() / "aura-appearance-restore-check";
+            std::filesystem::create_directories(store);
+            {
+                std::ofstream file(store / "display.txt", std::ios::binary | std::ios::trunc);
+                file << "aura-display 1\nalways_on=1\nappearance=aurora\n";
+            }
+            const auto stored = aura::simulator::read_stored_appearance(store.string());
+            const auto missing = aura::simulator::read_stored_appearance((store / "missing").string());
+            std::error_code removed;
+            std::filesystem::remove_all(store, removed);
+            record("appearance.restore", "display.txt",
+                   stored == aura::Appearance::Aurora && missing == aura::Appearance::Halo,
+                   aura::appearance_id(stored));
+
+            // Last of all: a factory reset returns to Halo (it clears other state too).
+            reset_to(aura::UiView::AppearanceSettings);
+            tap(351, 186);  // the Marble card
+            pump(3);
+            const bool marble = ui.appearance() == aura::Appearance::Marble;
+            reset_to(aura::UiView::System);
+            scroll_view_to(120);
+            tap(220, 452);
+            const bool asks = ui.view() == aura::UiView::SystemConfirm;
+            tap(352, 420);
+            wait_for_home();
+            record("appearance.factory_reset", "confirm",
+                   marble && asks && ui.appearance() == aura::Appearance::Halo &&
+                   companion.display().snapshot().settings.appearance == aura::Appearance::Halo &&
+                   aura::ui::tokens::text == 0xF5F8FC,
+                   aura::appearance_id(ui.appearance()));
         }
 
         const std::size_t passed = static_cast<std::size_t>(std::count_if(results.begin(), results.end(),

@@ -38,6 +38,7 @@ std::string serialize_display_settings(const DisplaySettings& settings) {
     text += "active_brightness_percent=" + std::to_string(std::clamp(settings.active_brightness_percent, 5, 100)) + "\n";
     text += "timeout_ms=" + std::to_string(std::clamp<std::uint32_t>(settings.timeout_ms, 5000, 300000)) + "\n";
     text += "dim_ms=" + std::to_string(std::clamp<std::uint32_t>(settings.dim_ms, 1000, 60000)) + "\n";
+    text += std::string("appearance=") + appearance_id(settings.appearance) + "\n";
     return text;
 }
 
@@ -51,6 +52,10 @@ DisplaySettings parse_display_settings(const std::string& data) {
         if (equals == std::string::npos) continue;
         const auto key = line.substr(0, equals);
         const auto value = line.substr(equals + 1);
+        if (key == "appearance") {
+            settings.appearance = appearance_from_id(value);
+            continue;
+        }
         if (key == "always_on" || key == "raise_to_wake" || key == "flip_to_mute") {
             if (value != "0" && value != "1") continue;
             const bool enabled = value == "1";

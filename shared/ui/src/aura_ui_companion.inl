@@ -49,6 +49,7 @@
     std::vector<std::pair<std::uint32_t, lv_obj_t*>> timer_labels;
     lv_obj_t* home_timer_label{};
     lv_obj_t* clock_item_label{};
+    lv_obj_t* clock_item_arc{};
     lv_obj_t* alert_ring{};
     lv_obj_t* record_ring{};
     lv_obj_t* record_time{};
@@ -69,6 +70,7 @@
         timer_labels.clear();
         home_timer_label = nullptr;
         clock_item_label = nullptr;
+        clock_item_arc = nullptr;
         alert_ring = nullptr;
         record_ring = nullptr;
         record_time = nullptr;
@@ -264,7 +266,7 @@
         lv_obj_set_size(toggle, 64, 36);
         lv_obj_align(toggle, LV_ALIGN_RIGHT_MID, 0, 0);
         lv_obj_set_style_bg_color(toggle, ui::color(ui::tokens::surface_glass), LV_PART_MAIN);
-        lv_obj_set_style_bg_color(toggle, ui::color(ui::tokens::blue), kIndicatorChecked);
+        lv_obj_set_style_bg_color(toggle, ui::color(ui::tokens::toggle_on), kIndicatorChecked);
         lv_obj_set_style_bg_color(toggle, ui::color(ui::tokens::text), LV_PART_KNOB);
         lv_obj_set_clickable(toggle, false);
         if (checked) lv_obj_add_state(toggle, LV_STATE_CHECKED);
@@ -743,19 +745,28 @@
         // touching, so the grid reads as separate tiles.
         const int inset = launcher_reordering ? 4 : 0;
         const int width = 144 - inset * 2;
+        const auto grid = launcher_grid();
         auto* cell = lv_button_create(parent);
         ui::reset(cell);
         lv_obj_set_clickable(cell, true);
-        lv_obj_set_size(cell, width, 164 - inset * 2);
-        lv_obj_set_pos(cell, kGutter + column * 144 + inset, 8 + row * 172 + inset);
+        lv_obj_set_size(cell, width, grid.cell_height - inset * 2);
+        lv_obj_set_pos(cell, kGutter + column * 144 + inset, grid.top + row * grid.pitch + inset);
         lv_obj_set_style_radius(cell, ui::tokens::radius_large, 0);
         lv_obj_set_style_bg_color(cell, ui::color(ui::tokens::surface), LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
-        auto* circle = make_dot(cell, 104, accent, kTint);
-        lv_obj_align(circle, LV_ALIGN_TOP_MID, 0, 8 - inset);
-        auto* icon = icon_view(circle, role, 46, accent);
-        lv_obj_center(icon);
-        line(cell, title, 0, 120 - inset, width, ui::font_caption(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);
+        if (appearance == Appearance::Marble) {
+            // Μάρμαρο: a hairline ring with an ivory icon and a quieter name.
+            auto* circle = icon_well(cell, grid.circle, role, accent, 40);
+            lv_obj_set_style_image_recolor(lv_obj_get_child(circle, 0), ui::color(ui::tokens::text), 0);
+            lv_obj_align(circle, LV_ALIGN_TOP_MID, 0, grid.circle_y - inset);
+        } else {
+            auto* circle = make_dot(cell, grid.circle, accent, kTint);
+            lv_obj_align(circle, LV_ALIGN_TOP_MID, 0, grid.circle_y - inset);
+            auto* icon = icon_view(circle, role, 46, accent);
+            lv_obj_center(icon);
+        }
+        line(cell, title, 0, grid.title_y - inset, width, ui::font_caption(),
+             appearance == Appearance::Marble ? ui::tokens::text_secondary : ui::tokens::text, LV_TEXT_ALIGN_CENTER);
         if (launcher_reordering) {
             const bool selected = launcher_selected_app && *launcher_selected_app == app_index;
             lv_obj_set_style_border_width(cell, selected ? 3 : 1, 0);
@@ -776,6 +787,37 @@
         return cell;
     }
 
+    struct LauncherGrid {
+        int top;
+        int pitch;
+        int cell_height;
+        int circle;
+        int circle_y;
+        int title_y;
+    };
+
+    // Halo's cells are 164 px with 104 px circles, so a third row peeks in;
+    // Μάρμαρο fits three rows of 84 px hairline circles on one screen.
+    LauncherGrid launcher_grid() const {
+        if (appearance == Appearance::Marble) return {4, 128, 124, 84, 2, 90};
+        return {8, 172, 164, 104, 8, 120};
+    }
+
+    // Unread notifications: a count in Halo, a gold dot by the circle in Μάρμαρο.
+    void launcher_unread_mark(lv_obj_t* cell, int count, std::uint32_t accent) {
+        if (appearance == Appearance::Marble) {
+            auto* dot = make_dot(cell, 14, ui::tokens::indigo);
+            lv_obj_set_pos(dot, 95, 7);
+            return;
+        }
+        char text[12];
+        std::snprintf(text, sizeof(text), "%d", count);
+        auto* badge = ui::make_tag(cell, text, accent);
+        lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(badge, ui::color(ui::tokens::text), 0);
+        lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -12, 4);
+    }
+
     // Apps use a 3-column scrolling grid; later rows intentionally peek.
     void render_launcher_grid() {
         make_header(launcher_reordering ? c().app_layout_title : v().applications,
@@ -791,7 +833,9 @@
                 case LauncherApp::Conversation:
                     cell = app_cell_in(grid, column, row, index, v().conversation, ui::IconRole::Sparkles,
                                        ui::tokens::lilac, UiView::Assistant, conversation_open_event);
-                    if (!launcher_reordering && !extras.conversation_history.empty()) {
+                    // A count of saved talks; Μάρμαρο marks only what is unread.
+                    if (!launcher_reordering && !extras.conversation_history.empty() &&
+                        appearance != Appearance::Marble) {
                         char count[8];
                         std::snprintf(count, sizeof(count), "%u",
                                       static_cast<unsigned>(extras.conversation_history.size()));
@@ -834,12 +878,7 @@
                     cell = app_cell_in(grid, column, row, index, v().notifications, ui::IconRole::Notification,
                                        ui::tokens::indigo, UiView::Notifications);
                     if (!launcher_reordering && notification_total() > 0) {
-                        char count[12];
-                        std::snprintf(count, sizeof(count), "%d", notification_total());
-                        auto* badge = ui::make_tag(cell, count, ui::tokens::pink);
-                        lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
-                        lv_obj_set_style_text_color(badge, ui::color(ui::tokens::text), 0);
-                        lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -12, 4);
+                        launcher_unread_mark(cell, notification_total(), ui::tokens::pink);
                     }
                     break;
                 case LauncherApp::Settings:
@@ -855,7 +894,8 @@
             (void)cell;
         }
         const int rows = static_cast<int>((launcher_layout.order.size() + 2U) / 3U);
-        list_end(grid, 8 + rows * 172, 8);
+        const auto layout = launcher_grid();
+        list_end(grid, layout.top + rows * layout.pitch, 8);
     }
 
     static std::uintptr_t organizer_value(OrganizerKind kind, std::uint32_t id) {
@@ -983,7 +1023,7 @@
             }
             const bool reorder = !results && radio_reordering && callbacks.on_radio_move;
             auto* row = list_row(list, y, station.name.c_str(), subtitle, ui::IconRole::Audio,
-                                 kIconAccents[index % kIconAccents.size()], kRowHeight, reorder ? 218 : 0);
+                                 icon_accent(index), kRowHeight, reorder ? 218 : 0);
             if (reorder) {
                 constexpr std::uintptr_t kDown = 1U << 16U;
                 auto* up = round_button(row, 326, 24, 40, ui::IconRole::ChevronLeft, ui::tokens::ice,
@@ -1210,17 +1250,26 @@
         else if (audio.state != AudioState::Playing && audio.state != AudioState::Paused) render(UiView::Assistant);
     }
 
+    bool can_speak_answer() const {
+        return capabilities.speech_output && callbacks.on_speak && !snapshot.answer_text.empty();
+    }
+
     void render_answer_companion() {
-        const bool can_speak = capabilities.speech_output && callbacks.on_speak && !snapshot.answer_text.empty();
-        if (can_speak) make_header(t().answer_title, ui::IconRole::VolumeUp, speak_answer_event, ui::tokens::mint);
+        if (can_speak_answer()) make_header(t().answer_title, ui::IconRole::VolumeUp, speak_answer_event, ui::tokens::mint);
         else make_header(t().answer_title);
         line(content, snapshot.user_text.empty() ? t().ask_example : snapshot.user_text.c_str(),
              kGutter + 4, 100, kWidth - 8, ui::font_caption(), ui::tokens::text_tertiary);
+        answer_body(132, 236);
+    }
+
+    // The answer in a scroller at `y`, then the actions; a pending action takes
+    // 100 px of the reader for its card.
+    void answer_body(int y, int height) {
         const bool confirming = snapshot.state == AssistantState::ActionConfirmation && extras.pending_action;
         auto* reader = lv_obj_create(content);
         ui::reset(reader);
-        lv_obj_set_size(reader, kWidth, confirming ? 136 : 236);
-        lv_obj_set_pos(reader, kGutter, 132);
+        lv_obj_set_size(reader, kWidth, confirming ? height - 100 : height);
+        lv_obj_set_pos(reader, kGutter, y);
         lv_obj_set_clickable(reader, true);
         lv_obj_set_scrollable(reader, true);
         lv_obj_set_scroll_dir(reader, LV_DIR_VER);
@@ -1453,6 +1502,10 @@
                 state_text(200, c().clock_empty, nullptr);
                 return;
             }
+            if (appearance == Appearance::Marble) {
+                render_timer_marble(*timer);
+                return;
+            }
             const auto text = countdown_text(timer->remaining_ms);
             clock_item_label = label(content, text.c_str(), 0, 128, ui::tokens::display_width, ui::font_display(),
                                      timer->paused ? ui::tokens::text_secondary : ui::tokens::text,
@@ -1544,8 +1597,12 @@
         }
         if (clock_item_label && selected_clock_kind == ClockAlertKind::Timer) {
             for (const auto& timer : clock.timers) {
-                if (timer.id == selected_clock_id) {
-                    set_text_if_changed(clock_item_label, countdown_text(timer.remaining_ms).c_str());
+                if (timer.id != selected_clock_id) continue;
+                const auto text = countdown_text(timer.remaining_ms);
+                set_text_if_changed(clock_item_label, text.c_str());
+                if (clock_item_arc) {
+                    lv_arc_set_value(clock_item_arc, timer_permille(timer));
+                    place_timer_digits(text);
                 }
             }
         }
@@ -2514,6 +2571,7 @@
             case UiView::PhoneNotification: render_phone_notification(); break;
             case UiView::PhoneLink: render_phone_link(); break;
             case UiView::DisplaySettings: render_display_settings(); break;
+            case UiView::AppearanceSettings: render_appearance_settings(); break;
             case UiView::Update: render_update(); break;
             case UiView::Radio: render_radio(); break;
             case UiView::RadioSearch: render_radio_search(); break;

@@ -117,6 +117,9 @@ public:
     std::uint64_t now_ms() const noexcept;
     const SoundSettings& sound() const noexcept { return sound_; }
     InterfaceLanguage language() const noexcept { return language_; }
+    // The look stored in display.txt, read at construction so the UI can take
+    // it before its first frame (the display store itself loads in start()).
+    Appearance appearance() const noexcept { return stored_appearance_; }
     void set_language(InterfaceLanguage language);
     // Requests the localized preview through the configured speech service.
     void preview_voice(AssistantVoice voice);
@@ -252,8 +255,12 @@ private:
     std::string saved_display_text_;
     std::uint64_t saved_display_sequence_{0};
     InterfaceLanguage language_{InterfaceLanguage::Greek};
+    Appearance stored_appearance_{Appearance::Halo};
     std::string saved_language_text_;
     bool powered_off_{false};
 };
+
+// The look stored in `store_dir`/display.txt; Halo when there is none.
+Appearance read_stored_appearance(const std::string& store_dir);
 
 }  // namespace aura::simulator

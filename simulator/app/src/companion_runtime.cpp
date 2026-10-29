@@ -162,6 +162,11 @@ const l10n::CompanionStrings& strings_for(InterfaceLanguage language) {
 
 }  // namespace
 
+Appearance read_stored_appearance(const std::string& store_dir) {
+    const auto data = read_file(std::filesystem::path(store_dir) / "display.txt");
+    return data.empty() ? Appearance::Halo : parse_display_settings(data).appearance;
+}
+
 CompanionRuntime::CompanionRuntime(CompanionContext context) : ctx_(std::move(context)) {
     capabilities_.imu = true;          // simulated through the control panel
     // A normal interactive run exposes pairing only when a real platform
@@ -173,6 +178,7 @@ CompanionRuntime::CompanionRuntime(CompanionContext context) : ctx_(std::move(co
         saved_language_text_ = read_file(std::filesystem::path(ctx_.store_dir) / "language.txt");
         language_ = saved_language_text_.rfind("en", 0) == 0 ? InterfaceLanguage::English :
                                                                InterfaceLanguage::Greek;
+        stored_appearance_ = read_stored_appearance(ctx_.store_dir);
     }
     if (ctx_.aoraton) ctx_.aoraton->set_interface_language(language_);
 }

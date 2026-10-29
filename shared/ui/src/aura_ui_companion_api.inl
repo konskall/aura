@@ -126,6 +126,11 @@ void AuraUi::apply_display(const DisplaySnapshot& snapshot) {
     if (snapshot.sequence == self.display_power.sequence) return;
     const auto previous = self.display_power;
     self.display_power = snapshot;
+    // Only a changed stored look applies: a snapshot that repeats an older one
+    // never undoes a choice made on this screen before the platform saw it.
+    if (snapshot.settings.appearance != previous.settings.appearance) {
+        self.apply_appearance(snapshot.settings.appearance);
+    }
     self.update_dim_overlay();
     const bool dark = snapshot.mode == DisplayMode::AlwaysOn || snapshot.mode == DisplayMode::Off;
     if (dark) {
@@ -247,6 +252,12 @@ void AuraUi::open_organizer(OrganizerKind kind) {
 void AuraUi::open_note(std::uint32_t id) {
     impl_->selected_note = id;
     impl_->navigate(UiView::NoteDetail);
+}
+
+void AuraUi::open_clock_item(ClockAlertKind kind, std::uint32_t id) {
+    impl_->selected_clock_kind = kind;
+    impl_->selected_clock_id = id;
+    impl_->navigate(UiView::ClockItem);
 }
 
 void AuraUi::open_phone_notification(std::uint32_t uid) {

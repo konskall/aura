@@ -34,10 +34,10 @@ AuraMercuryView::AuraMercuryView() {
     descriptor_.data = buffer_.data();
 }
 
-lv_obj_t* AuraMercuryView::attach(lv_obj_t* parent, int x, int y) {
+lv_obj_t* AuraMercuryView::attach(lv_obj_t* parent, int center_x, int center_y) {
     image_ = lv_image_create(parent);
     lv_image_set_src(image_, &descriptor_);
-    lv_obj_set_pos(image_, x, y);
+    lv_obj_set_pos(image_, center_x - size / 2, center_y - size / 2);
     lv_obj_set_clickable(image_, false);
     lv_obj_set_scrollable(image_, false);
     accumulator_ms_ = frame_interval_ms;

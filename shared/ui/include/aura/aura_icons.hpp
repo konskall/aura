@@ -2,6 +2,7 @@
 
 #include <cstddef>
 
+#include "aura/appearance.hpp"
 #include "lvgl.h"
 
 namespace aura::ui {
@@ -19,10 +20,16 @@ enum class IconRole {
     WifiLow, WifiMedium, VisibilityOff, Sparkles,
     ChevronLeft, Check, Plus,
     Languages, Notebook, Sunrise, Smartphone, Phone, PhoneOff, Download, BellRing, Moon, Hand, Flip, Ear, Swap,
+    Palette,
     Count,
 };
 
+// The icon in the active appearance's family.
 const lv_image_dsc_t* icon_asset(IconRole role) noexcept;
+// The icon in `appearance`'s family (Lucide for Halo); a role the family has
+// no faithful glyph for uses the Lucide asset.
+const lv_image_dsc_t* icon_asset(IconRole role, Appearance appearance) noexcept;
+bool icon_is_fallback(IconRole role, Appearance appearance) noexcept;
 const char* icon_role_name(IconRole role) noexcept;
 constexpr std::size_t icon_role_count() noexcept { return static_cast<std::size_t>(IconRole::Count); }
 

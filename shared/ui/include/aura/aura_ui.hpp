@@ -77,6 +77,7 @@ enum class UiView {
     PhoneNotification,
     PhoneLink,
     DisplaySettings,
+    AppearanceSettings,
     Update,
     Radio,
     RadioSearch,
@@ -252,11 +253,17 @@ public:
     // Greek first-frame flash. User changes are reported through the callback.
     void set_language(InterfaceLanguage language);
     InterfaceLanguage language() const noexcept;
+    // The look of the whole device (Settings > Appearance). May be called before
+    // create() to restore the persisted choice without a Halo first frame; a
+    // user's choice is reported through on_display_settings.
+    void set_appearance(Appearance appearance);
+    Appearance appearance() const noexcept;
     void set_capabilities(const CompanionCapabilities& capabilities);
     // Opens "Today" (the platform does so once each morning).
     void open_briefing();
     void open_organizer(OrganizerKind kind);
     void open_note(std::uint32_t id);
+    void open_clock_item(ClockAlertKind kind, std::uint32_t id);
     void open_phone_notification(std::uint32_t uid);
     // Opens the same confirmation flow used by Settings > System. It never
     // executes the action; the user still has to press the confirm button.

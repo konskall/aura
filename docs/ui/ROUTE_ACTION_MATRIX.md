@@ -15,6 +15,8 @@ This is the product action source of truth. Enabled actions must appear in the m
 | All secondary screens | Home | `nav.home` | NAVIGATE | Clear stack → Home | Route stack | Home | N/A | Pointer tap |
 | Notifications | Mock message row | `notifications.open` | NAVIGATE | Aoraton rooms | Mock Aoraton | Rooms and unread handling | Disconnected state | Four-point SDL tap |
 | Notifications | Clear | `notifications.clear` | EXECUTE | `NotificationsCleared` | Assistant controller | Count becomes zero, empty state | N/A | Pointer + state assertion |
+| Settings | Appearance row (after Language) | `appearance.settings_row` | NAVIGATE | AppearanceSettings, Back returns to Settings | Shared UI | Four cards; the active look is checked | N/A | Pointer route |
+| AppearanceSettings | Look card (Άλως, Μάρμαρο, Σέλας, Γραφίτης) | `appearance.pick` | TOGGLE | `set_appearance` + `on_display_settings` (stored in display.txt) | Display settings store | Whole UI re-renders in the look at once | N/A | Pointer + token assertion |
 | Settings | Provider row | `settings.provider` | TOGGLE | Mock ↔ local Codex | Desktop provider adapter | Provider switches | Live request later surfaces bridge error | Pointer + state assertion |
 | Settings | Reduced motion | `settings.motion` | TOGGLE | UI motion controller | Shared UI | Persists for runtime | N/A | Pointer + motion counter assertion |
 | Settings | Audio | `settings.audio` | NAVIGATE | Audio | Audio service | Audio screen | Unavailable diagnostic | Pointer route |
