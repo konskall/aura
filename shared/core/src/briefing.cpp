@@ -102,11 +102,17 @@ Briefing build_briefing(const BriefingInput& input) {
             }
         }
         if (!clock.timers.empty()) {
+            // The running timer that ends first (a paused one only if all are).
+            const TimerItem* soonest = nullptr;
+            for (const auto& timer : clock.timers) {
+                if (!timer.paused && (!soonest || timer.remaining_ms < soonest->remaining_ms)) soonest = &timer;
+            }
+            if (!soonest) soonest = &clock.timers.front();
             BriefingItem item;
             item.kind = BriefingItemKind::Timers;
             item.count = static_cast<int>(clock.timers.size());
-            item.value = static_cast<int>((clock.timers.front().remaining_ms + 999U) / 1000U);
-            item.text = clock.timers.front().label;
+            item.value = static_cast<int>((soonest->remaining_ms + 999U) / 1000U);
+            item.text = soonest->label;
             briefing.items.push_back(std::move(item));
         }
     }

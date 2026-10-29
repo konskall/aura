@@ -60,7 +60,7 @@ AssistantReply mock_answer(const TurnRequest& request) {
         if (english) return AssistantReply{true,
             "DEMO · Taygetos is the prominent mountain range of the southern Peloponnese. Its highest summit is Profitis Ilias. This is general, non-live information from deterministic Demo Mode.", {}};
         return AssistantReply{true,
-            "Ο Ταΰγετος είναι η επιβλητική οροσειρά της νότιας Πελοποννήσου. Η ψηλότερη κορυφή του είναι ο Προφήτης Ηλίας. Αυτή είναι γενική, μη ζωντανή πληροφορία από το deterministic Demo Mode.", {}};
+            "Ο Ταΰγετος είναι η επιβλητική οροσειρά της νότιας Πελοποννήσου. Η ψηλότερη κορυφή του είναι ο Προφήτης Ηλίας. Αυτή είναι γενική, μη ζωντανή πληροφορία από τη λειτουργία DEMO.", {}};
     }
     if (!request.history.empty()) {
         if (english) return AssistantReply{true,

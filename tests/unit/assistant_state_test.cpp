@@ -63,6 +63,22 @@ int main() {
            controller.snapshot().state == AssistantState::Responding &&
            controller.snapshot().answer_text == "Τελική απάντηση.", "declining keeps the answer");
     expect(!controller.dispatch({EventType::DeclineAction}), "nothing to decline twice");
+
+    // Only work in progress keeps the screen on; a finished answer lets it time out.
+    AssistantController awake;
+    expect(!holds_screen_awake(awake.snapshot()), "idle lets the screen sleep");
+    awake.dispatch({EventType::TurnStarted, "ερώτηση"});
+    expect(holds_screen_awake(awake.snapshot()), "thinking keeps the screen on");
+    awake.dispatch({EventType::PartialResult, "Μισή απάντηση"});
+    expect(holds_screen_awake(awake.snapshot()), "a streaming answer keeps the screen on");
+    awake.dispatch({EventType::FinalResult, "Απάντηση."});
+    expect(!holds_screen_awake(awake.snapshot()), "a finished answer lets the screen time out");
+    awake.dispatch({EventType::RequireConfirmation, "timer"});
+    expect(!holds_screen_awake(awake.snapshot()), "a waiting confirmation does not hold the screen");
+    awake.dispatch({EventType::Reset});
+    awake.dispatch({EventType::WakeDetected});
+    awake.dispatch({EventType::BeginRecording});
+    expect(holds_screen_awake(awake.snapshot()), "listening keeps the screen on");
     std::cout << "assistant_state_test: PASS\n";
     return 0;
 }

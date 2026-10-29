@@ -87,8 +87,15 @@ public:
     static constexpr std::uint32_t kMaxMs = 15000;
     static constexpr std::uint32_t kSilenceEndMs = 1200;
     static constexpr std::uint32_t kNoSpeechMs = 6000;
+    // A dictated note may pause to think and may last half a minute.
+    static constexpr std::uint32_t kDictationMaxMs = 30000;
+    static constexpr std::uint32_t kDictationSilenceEndMs = 3500;
+    static constexpr std::uint32_t kDictationNoSpeechMs = 8000;
 
-    void start();
+    // A spoken question or phrase (Turn), or a dictated note.
+    enum class Mode { Turn, Dictation };
+
+    void start(Mode mode = Mode::Turn);
     void append(const std::int16_t* samples, std::size_t count);
     void cancel();
     // A finished recording: a mono 16-bit WAV at kSampleRate.
@@ -106,11 +113,13 @@ public:
 
 private:
     void analyse_frame(const std::int16_t* samples, std::size_t count);
+    std::uint32_t max_ms() const noexcept { return mode_ == Mode::Dictation ? kDictationMaxMs : kMaxMs; }
 
     std::vector<std::int16_t> pcm_;
     std::vector<std::int16_t> frame_;
     std::vector<std::int16_t> processed_;  // reused: no allocation per 20 ms frame
     VoiceFrontEnd front_end_;
+    Mode mode_{Mode::Turn};
     bool recording_{false};
     bool speech_detected_{false};
     float level_{0.0F};

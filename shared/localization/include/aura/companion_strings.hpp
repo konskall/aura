@@ -72,6 +72,13 @@ struct CompanionStrings {
     const char* action_alarm_format;  // %02d:%02d
     const char* action_reminder_title;
     const char* action_in_minutes_format;  // %d
+    const char* action_in_one_minute;
+    const char* compose_left_format;  // %u characters left
+    const char* compose_one_left;
+    const char* compose_over_limit;
+    const char* aoraton_timeout_hint;  // the owner's copy; the detail is for developers
+    const char* voice_note_header;     // a voice note's page title (fits the header)
+    const char* decimal_separator;  // "," or "."
     const char* action_at_format;  // day word, %02d:%02d
     const char* action_note_title;
     const char* action_task_title;
@@ -82,6 +89,10 @@ struct CompanionStrings {
     const char* action_unmute_title;
     const char* action_done;
     const char* action_failed;
+    // Under an answer whose proposed action was refused: nothing was done.
+    const char* action_refused;
+    // An answer that came back with no words.
+    const char* empty_answer;
     const char* voice_error_title;
     const char* no_speech_detail;
     const char* stt_unavailable_detail;
@@ -361,6 +372,7 @@ struct CompanionStrings {
     const char* system_restart_detail;
     const char* system_power_off_question;
     const char* system_power_off_detail;
+    const char* system_power_off_detail_button;
     const char* system_reset_question;
     const char* system_reset_detail;
     const char* system_reset_confirm;
@@ -372,6 +384,7 @@ struct CompanionStrings {
     const char* system_powering_on;
     const char* system_powering_on_detail;
     const char* system_power_off_hint;
+    const char* system_power_off_hint_button;
 
     // Interface language. Language names are endonyms; all explanatory copy
     // follows the currently selected interface language.

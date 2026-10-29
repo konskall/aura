@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -68,6 +69,9 @@ public:
     // A station the owner named ("βάλε Σφαίρα", "Kiss"): favourites first,
     // then the last search. Null when nothing matches.
     const RadioStation* find_spoken(std::string_view spoken) const;
+    // What "βάλε ραδιόφωνο" plays: the station heard last, else the first
+    // favourite. Null when there is neither.
+    const RadioStation* station_to_resume() const;
 
     // Favourites survive restarts; the default list returns when the file is empty.
     std::string serialize_favorites() const;
@@ -87,10 +91,24 @@ std::vector<RadioStation> greek_default_stations();
 // radio-browser JSON (an array of stations) to MP3 stations with http(s) URLs.
 bool parse_radio_browser_stations(std::string_view json, std::vector<RadioStation>& out,
                                   std::size_t max_count = RadioModel::kMaxResults);
-// The search path for Greek MP3 stations whose name contains `query`.
-std::string radio_browser_search_path(std::string_view query, std::size_t limit = RadioModel::kMaxResults);
+// The search path for MP3 stations whose name contains `query`: Greek ones,
+// or from every country when `worldwide` (the fallback when none is Greek).
+std::string radio_browser_search_path(std::string_view query, std::size_t limit = RadioModel::kMaxResults,
+                                      bool worldwide = false);
 // The radio-browser servers to try, in order.
 std::vector<std::string> radio_browser_hosts();
+
+struct RadioSearchResult {
+    bool ok{false};
+    std::vector<RadioStation> stations;
+    std::string error_code;
+};
+
+// A directory search by name: Greek stations first and, when the directory
+// answers but has no Greek one, the same name worldwide ("BBC Radio 1").
+// `fetch` asks the directory for one search path.
+RadioSearchResult search_radio_directory(std::string_view query,
+                                         const std::function<RadioSearchResult(const std::string&)>& fetch);
 
 // Local, deterministic command recognition. The complete utterance is kept so
 // RadioModel::find_spoken can match a station without sending a control action

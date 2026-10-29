@@ -50,6 +50,28 @@ int main() {
     expect(audio.diagnostics().state == AudioState::Error, "invalid wav reports error");
     audio.shutdown();
     expect(audio.diagnostics().state == AudioState::Uninitialized, "shutdown is deterministic");
+
+    // Alarms, timers and reminders ring through mute, never too quietly to hear.
+    expect(playback_gain(0.3F, false, false) == 0.3F && playback_gain(0.8F, true, false) == 0.0F,
+           "ordinary clips follow volume and mute");
+    expect(playback_gain(0.8F, true, true) == 0.8F, "an alert rings through mute at the owner's volume");
+    expect(playback_gain(0.0F, true, true) == kAlertMinimumVolume &&
+           playback_gain(0.1F, false, true) == kAlertMinimumVolume,
+           "an alert is never quieter than the alert minimum");
+    MockAudioService muted;
+    expect(muted.initialize(), "a second mock initializes");
+    muted.set_volume(0.0F);
+    muted.set_muted(true);
+    PcmClip beep;
+    beep.format = {16000, 1, 16};
+    beep.samples.assign(1600, 8000);
+    expect(muted.play_alert(beep), "a muted device starts an alert");
+    muted.tick(20);
+    expect(muted.diagnostics().state == AudioState::Playing && muted.diagnostics().envelope > 0.0F,
+           "the alert is heard through mute");
+    expect(muted.play_pcm(beep), "an ordinary clip starts");
+    muted.tick(20);
+    expect(muted.diagnostics().envelope == 0.0F, "an ordinary clip stays muted");
     std::cout << "audio_service_test: PASS\n";
     return 0;
 }

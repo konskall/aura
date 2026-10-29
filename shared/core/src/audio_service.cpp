@@ -91,13 +91,26 @@ bool MockAudioService::start(std::uint32_t duration_ms, AudioFormat format) {
     return true;
 }
 
+float playback_gain(float volume, bool muted, bool alert) noexcept {
+    const float owner = std::clamp(volume, 0.0F, 1.0F);
+    if (alert) return std::max(owner, kAlertMinimumVolume);
+    return muted ? 0.0F : owner;
+}
+
 bool MockAudioService::play_pcm(const PcmClip& clip) {
     if (clip.samples.empty() || clip.format.channels == 0) {
         fail_for_test("EMPTY_PCM");
         return false;
     }
     const auto frames = clip.samples.size() / clip.format.channels;
+    alert_ = false;
     return start(static_cast<std::uint32_t>(frames * 1000 / clip.format.sample_rate), clip.format);
+}
+
+bool MockAudioService::play_alert(const PcmClip& clip) {
+    const bool started = play_pcm(clip);
+    alert_ = started;
+    return started;
 }
 
 bool MockAudioService::play_wav(const std::string& path) {
@@ -143,8 +156,8 @@ void MockAudioService::tick(std::uint32_t elapsed_ms) {
     elapsed_ms_ = std::min(duration_ms_, elapsed_ms_ + elapsed_ms);
     diagnostics_.progress = duration_ms_ ? static_cast<float>(elapsed_ms_) / duration_ms_ : 1.0F;
     const float phase = static_cast<float>(elapsed_ms_) / 90.0F;
-    diagnostics_.envelope = diagnostics_.muted ? 0.0F :
-        diagnostics_.volume * (0.32F + 0.18F * std::abs(std::sin(phase)));
+    diagnostics_.envelope = playback_gain(diagnostics_.volume, diagnostics_.muted, alert_) *
+        (0.32F + 0.18F * std::abs(std::sin(phase)));
     const auto played = static_cast<std::size_t>(diagnostics_.format.sample_rate) * elapsed_ms_ / 1000;
     diagnostics_.buffered_frames = diagnostics_.buffered_frames > played ? diagnostics_.buffered_frames - played : 0;
     if (elapsed_ms_ >= duration_ms_) {

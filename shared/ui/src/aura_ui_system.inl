@@ -291,7 +291,7 @@
         ui::ButtonTone tone = ui::ButtonTone::Primary;
         if (pending_system == SystemAction::PowerOff) {
             question = c().system_power_off_question;
-            detail = c().system_power_off_detail;
+            detail = capabilities.power_button ? c().system_power_off_detail_button : c().system_power_off_detail;
             confirm = c().system_power_off;
             role = ui::IconRole::Power;
             accent = ui::tokens::amber;
@@ -331,7 +331,9 @@
         lv_obj_set_style_text_letter_space(brand, 8, 0);
         lv_obj_set_style_opa(brand, LV_OPA_40, 0);
         system_orb(220, ui::IconRole::Power, ui::tokens::ice, true);
-        auto* hint = label(content, c().system_power_off_hint, 48, 322, 384, ui::font_caption(),
+        auto* hint = label(content, capabilities.power_button ? c().system_power_off_hint_button
+                                                              : c().system_power_off_hint,
+                           48, 322, 384, ui::font_caption(),
                            ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
         lv_obj_set_style_opa(hint, LV_OPA_40, 0);
 

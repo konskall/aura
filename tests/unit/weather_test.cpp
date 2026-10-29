@@ -250,5 +250,11 @@ int main() {
     std::filesystem::remove(store_base.parent_path(), cleanup_error);
 
     if (failures == 0) std::cout << "Weather tests passed\n";
+    // Shown temperatures are whole degrees and never "-0".
+    check(aura::whole_degrees(-0.4F) == 0, "-0.4 C reads 0, not -0");
+    check(aura::whole_degrees(-0.6F) == -1, "-0.6 C reads -1");
+    check(aura::whole_degrees(21.5F) == 22, "halves round away from zero");
+    check(aura::whole_degrees(-3.2F) == -3, "below zero keeps its sign");
+
     return failures == 0 ? 0 : 1;
 }

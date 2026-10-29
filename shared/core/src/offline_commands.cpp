@@ -194,6 +194,34 @@ bool starts_with_pronoun(const std::string& text) {
                                                        "μασ", "σου", "του", "τησ", "τουσ"});
 }
 
+// Greek past tense is written like a command ("Σημείωσε γκολ ο Ολυμπιακός;",
+// "Αγόρασε η Μαρία τα εισιτήρια;"): a question is never a dictated item.
+bool ends_as_question(const std::string& text) {
+    if (text.empty()) return false;
+    const char last = text.back();
+    return last == '?' || last == ';' || (text.size() >= 2 && text.compare(text.size() - 2, 2, "\xCD\xBE") == 0);
+}
+
+constexpr int kVolumeStep = 10;
+
+// "Δυνάμωσε την ένταση", "πιο σιγά", "turn the volume down": one step up or
+// down; 0 when the words ask for no step.
+int volume_step(const Words& words) {
+    const bool volume_word = folded_has_word_prefix(words, {"εντασ"}) ||
+                             folded_has_word(words, {"ηχο", "ηχοσ", "ηχου", "volume", "sound"});
+    const bool turn = folded_has_word(words, {"turn"});
+    const bool up = folded_has_word(words, {"δυναμωσε", "δυναμωσεισ", "ανεβασε", "ανεβασεισ", "αυξησε", "αυξησεισ",
+                                            "raise", "increase"}) ||
+                    (turn && folded_has_word(words, {"up"}));
+    const bool down = folded_has_word(words, {"χαμηλωσε", "χαμηλωσεισ", "μειωσε", "μειωσεισ", "κατεβασε",
+                                              "κατεβασεισ", "lower", "decrease", "reduce"}) ||
+                      (turn && folded_has_word(words, {"down"}));
+    if (volume_word && up != down) return up ? kVolumeStep : -kVolumeStep;
+    if (only_phrase(words, {"πιο δυνατα", "louder", "volume up"})) return kVolumeStep;
+    if (only_phrase(words, {"πιο σιγα", "πιο χαμηλα", "quieter", "volume down"})) return -kVolumeStep;
+    return 0;
+}
+
 bool parse_clock(const std::string& text, int& hour, int& minute) {
     for (std::size_t index = 0; index + 3 < text.size(); ++index) {
         if (!std::isdigit(static_cast<unsigned char>(text[index]))) continue;
@@ -307,6 +335,12 @@ OfflineCommand parse_offline_command(const std::string& text) {
             return command;
         }
     }
+    if (const int step = volume_step(words); step != 0 && first_number(folded, 0, 100) < 0) {
+        command = action(AssistantActionType::Volume);
+        command.action.value = step;
+        command.action.relative = true;
+        return command;
+    }
     if (folded_has_word_prefix(words, {"φωτεινοτητ"}) || folded_has_word(words, {"brightness"})) {
         const int value = first_number(folded, 5, 100);
         if (value >= 0 && (has_request_verb(words) || bare_request(words, {"φωτεινοτητα", "brightness"}))) {
@@ -339,6 +373,7 @@ OfflineCommand parse_offline_command(const std::string& text) {
         }
     }
 
+    if (ends_as_question(clean)) return command;
     std::string value = text_after(clean, {"σημείωσε ", "Σημείωσε ", "note ", "Note "});
     if (!value.empty()) {
         command = action(AssistantActionType::Note);

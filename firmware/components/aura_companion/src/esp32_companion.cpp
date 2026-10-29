@@ -7,6 +7,7 @@
 #include "bsp/esp-bsp.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_sleep.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -93,6 +94,10 @@ void Esp32Companion::start() {
     capabilities_.speech_recognition = false;
     capabilities_.speech_output = false;
     capabilities_.wake_word = false;
+    // The panel dims itself (no veil from the UI), and the side button is the
+    // only way back from power off.
+    capabilities_.panel_brightness = true;
+    capabilities_.power_button = true;
     capabilities_dirty_ = true;
 
     gpio_config_t button{};
@@ -221,7 +226,8 @@ void Esp32Companion::begin_note() {
     if (recording_note_ || voice_.state != VoiceCaptureState::Idle ||
         !capabilities_.microphone || !microphone_.start()) return;
     audio_.stop();
-    recorder_.start();
+    // A note is dictated: it may pause to think and may last half a minute.
+    recorder_.start(VoiceRecorder::Mode::Dictation);
     recording_note_ = true;
     voice_.state = VoiceCaptureState::Recording;
     voice_.purpose = VoicePurpose::Note;
@@ -245,9 +251,9 @@ void Esp32Companion::finish_note() {
     const auto elapsed = recorder_.elapsed_ms();
     auto wav = recorder_.finish_wav();
     recording_note_ = false;
-    char name[48];
-    std::snprintf(name, sizeof(name), "note-%lld-%u.wav", static_cast<long long>(now_minute()),
-                  static_cast<unsigned>(++note_counter_));
+    // The random part keeps the name unique when the clock is unknown or the
+    // counter restarted with the device: a new note never overwrites an old one.
+    const auto name = voice_note_file_name(now_minute(), ++note_counter_, esp_random());
     auto* job = new (std::nothrow) StoreJob;
     if (!job) {
         voice_.error_code = "NOTE_NOT_SAVED";
@@ -344,14 +350,13 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
         applied_brightness_ = brightness;
         bsp_display_brightness_set(brightness);
     }
-    // The alert rings until it is handled, a little louder each pass.
+    // The alert rings until it is handled, a little louder each pass and
+    // through mute; face down silences it.
     const auto audio = audio_.diagnostics();
-    if (!clock_.snapshot().alert) alert_since_ms_ = 0;
-    else if (alert_since_ms_ == 0) alert_since_ms_ = now;
-    if (clock_.snapshot().alert && !display_.snapshot().muted_by_flip && now >= chime_next_ms_ &&
-        audio.state != AudioState::Playing) {
-        audio_.play_pcm(make_alarm_melody(alarm_loudness(now - alert_since_ms_)));
-        chime_next_ms_ = now + kAlarmCycleMs;
+    if (const auto* pass = alarm_ringer_.next(clock_.snapshot().alert.has_value(),
+                                              display_.snapshot().muted_by_flip,
+                                              audio.state == AudioState::Playing, now)) {
+        audio_.play_alert(*pass);
     }
     if (display_.snapshot().muted_by_flip && audio.state == AudioState::Playing) audio_.stop();
     // A soft chime for a phone notification that was not there before.
@@ -438,13 +443,16 @@ void Esp32Companion::poll_storage_results() {
                     saved_organizer_text_ = job->text;
                 }
                 break;
+            // A failed write is tried again on the next poll.
             case StoreJobKind::Sound:
                 sound_save_pending_ = false;
                 if (job->success) saved_sound_text_ = job->text;
+                else sound_pending_ = true;
                 break;
             case StoreJobKind::Display:
                 display_save_pending_ = false;
                 if (job->success) saved_display_text_ = job->text;
+                else saved_display_sequence_ = 0;
                 break;
             case StoreJobKind::Language:
                 language_save_pending_ = false;
@@ -453,6 +461,7 @@ void Esp32Companion::poll_storage_results() {
             case StoreJobKind::Layout:
                 layout_save_pending_ = false;
                 if (job->success) saved_layout_text_ = job->text;
+                else saved_layout_sequence_ = 0;
                 break;
             case StoreJobKind::Voice: {
                 std::uint32_t id = 0;
@@ -517,21 +526,42 @@ void Esp32Companion::save() {
         else queue_text(StoreJobKind::Organizer, "organizer.txt", std::move(data), sequence,
                         organizer_save_pending_);
     }
-    auto sound_text = serialize_sound_settings(sound_);
-    if (!sound_save_pending_ && sound_text != saved_sound_text_ && sound_settle_.settled(sound_text, now_ms())) {
-        queue_text(StoreJobKind::Sound, "sound.txt", std::move(sound_text), 0, sound_save_pending_);
+    // The volume slider and the mute switch change only the audio service:
+    // what is stored follows it. Values are compared every poll; text is
+    // built only after a change, not for every frame.
+    sound_ = current_sound_settings(sound_, audio_.diagnostics());
+    if (sound_ != seen_sound_) {
+        seen_sound_ = sound_;
+        sound_pending_ = true;
     }
-    auto display_text = serialize_display_settings(display_.snapshot().settings);
-    if (!display_save_pending_ && display_text != saved_display_text_) {
-        queue_text(StoreJobKind::Display, "display.txt", std::move(display_text), 0, display_save_pending_);
+    if (sound_pending_ && !sound_save_pending_) {
+        auto sound_text = serialize_sound_settings(sound_);
+        if (sound_text == saved_sound_text_) {
+            sound_pending_ = false;
+        } else if (sound_settle_.settled(sound_text, now_ms())) {
+            queue_text(StoreJobKind::Sound, "sound.txt", std::move(sound_text), 0, sound_save_pending_);
+            sound_pending_ = !sound_save_pending_;
+        }
     }
-    auto language_text = std::string(interface_language_code(language_)) + "\n";
-    if (!language_save_pending_ && language_text != saved_language_text_) {
-        queue_text(StoreJobKind::Language, "language.txt", std::move(language_text), 0, language_save_pending_);
+    if (!display_save_pending_ && display_.snapshot().sequence != saved_display_sequence_) {
+        saved_display_sequence_ = display_.snapshot().sequence;
+        auto display_text = serialize_display_settings(display_.snapshot().settings);
+        if (display_text != saved_display_text_) {
+            queue_text(StoreJobKind::Display, "display.txt", std::move(display_text), 0, display_save_pending_);
+            if (!display_save_pending_) saved_display_sequence_ = 0;
+        }
     }
-    auto layout_text = launcher_layout_.serialize();
-    if (!layout_save_pending_ && layout_text != saved_layout_text_) {
-        queue_text(StoreJobKind::Layout, "app-layout.txt", std::move(layout_text), 0, layout_save_pending_);
+    if (!language_save_pending_ && saved_language_text_.compare(0, 2, interface_language_code(language_)) != 0) {
+        queue_text(StoreJobKind::Language, "language.txt",
+                   std::string(interface_language_code(language_)) + "\n", 0, language_save_pending_);
+    }
+    if (!layout_save_pending_ && launcher_layout_.snapshot().sequence != saved_layout_sequence_) {
+        saved_layout_sequence_ = launcher_layout_.snapshot().sequence;
+        auto layout_text = launcher_layout_.serialize();
+        if (layout_text != saved_layout_text_) {
+            queue_text(StoreJobKind::Layout, "app-layout.txt", std::move(layout_text), 0, layout_save_pending_);
+            if (!layout_save_pending_) saved_layout_sequence_ = 0;
+        }
     }
 }
 
@@ -598,15 +628,16 @@ void Esp32Companion::run_deferred_system_action() {
     }
     if (action == SystemAction::PowerOff) {
         bsp_display_brightness_set(0);
-        const std::uint64_t wake_mask = (1ULL << aura_board::Pins::user_button) |
-                                        (1ULL << aura_board::Pins::touch_interrupt);
+        // The side button only: a touch in a pocket or a bag must not switch
+        // AURA on (the screen says to press the button).
+        const std::uint64_t wake_mask = 1ULL << aura_board::Pins::user_button;
         const auto wake = esp_sleep_enable_ext1_wakeup_io(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
         if (wake != ESP_OK) {
             ESP_LOGE(kTag, "deep-sleep wake configuration failed: %s", esp_err_to_name(wake));
             storage_accepting_ = true;
             return;
         }
-        ESP_LOGI(kTag, "entering deep sleep; side button or touch interrupt wakes AURA");
+        ESP_LOGI(kTag, "entering deep sleep; the side button wakes AURA");
         esp_deep_sleep_start();
     }
     // Restart and PowerOn both perform a real clean boot.

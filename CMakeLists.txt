@@ -222,6 +222,15 @@ if(BUILD_TESTING)
         target_compile_definitions(aura_windows_radio_icy_tests PRIVATE SDL_MAIN_HANDLED)
         target_link_libraries(aura_windows_radio_icy_tests PRIVATE aura_core SDL2::SDL2-static winhttp ws2_32)
         add_test(NAME aura_windows_radio_icy_tests COMMAND aura_windows_radio_icy_tests)
+        # SDL's dummy driver only: alerts are heard through mute.
+        add_executable(aura_windows_audio_alert_tests
+            tests/unit/windows_audio_alert_test.cpp
+            simulator/app/src/windows_audio_backend.cpp
+        )
+        target_include_directories(aura_windows_audio_alert_tests PRIVATE simulator/app/include)
+        target_compile_definitions(aura_windows_audio_alert_tests PRIVATE SDL_MAIN_HANDLED)
+        target_link_libraries(aura_windows_audio_alert_tests PRIVATE aura_core SDL2::SDL2-static)
+        add_test(NAME aura_windows_audio_alert_tests COMMAND aura_windows_audio_alert_tests)
         add_executable(aura_bridge_stream_tests
             tests/unit/bridge_stream_test.cpp
             simulator/app/src/local_codex_provider.cpp

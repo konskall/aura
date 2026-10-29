@@ -51,11 +51,11 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 | Conversation | The assistant, with recent history, follow-up and new-topic actions |
 | Weather | Open-Meteo forecast for any city, hourly and daily views, animated conditions, offline cache |
 | Messages | Aoraton end-to-end-encrypted rooms: sign-in through the PC browser, read and send with confirmation, optional `@inco` AI answers |
-| Clock | Timers, alarms (once or daily) and reminders, with a full-screen alert |
-| Notes | Typed and voice notes; voice notes are transcribed |
+| Clock | Timers, alarms (once or daily) and reminders, with a full-screen alert that rings even when muted |
+| Notes | Typed and voice notes; a voice note is dictated (up to 30 s, past short pauses) and transcribed |
 | Translate | Face-to-face translation with one card turned towards the other person |
 | Today | Greeting, namedays, next public holiday, weather, average Greek fuel prices, alarms, reminders, timers and unread messages |
-| Radio | Greek stations, a station directory search, favourites with your own order, now-playing titles, automatic reconnection |
+| Radio | Greek stations, a station directory search (worldwide when no Greek station matches), favourites with your own order, now-playing titles, automatic reconnection; "βάλε ραδιόφωνο" plays the last station again |
 | Notifications | AURA and phone notifications in one place |
 | Organizer | Agenda, tasks and shopping list |
 | Settings | Wi-Fi, language, AI provider, reduced motion, sound, display, voice, weather and system |

@@ -23,6 +23,7 @@ public:
     bool initialize() override;
     void shutdown() override;
     bool play_pcm(const PcmClip& clip) override;
+    bool play_alert(const PcmClip& clip) override;
     bool play_wav(const std::string& path) override;
     bool play_test_tone(std::uint32_t duration_ms = 900) override;
     bool play_bundled_wav();
@@ -55,7 +56,7 @@ public:
 private:
     static void audio_callback(void* userdata, Uint8* stream, int length);
     void render(Uint8* stream, int length);
-    bool play_converted(const Uint8* bytes, std::size_t length, const SDL_AudioSpec& source);
+    bool play_converted(const Uint8* bytes, std::size_t length, const SDL_AudioSpec& source, bool alert = false);
     bool play_wav_stream(SDL_RWops* stream);
     void fail(const char* code);
 
@@ -68,6 +69,7 @@ private:
     std::atomic<float> volume_{0.55F};
     std::atomic<float> envelope_{0.0F};
     std::atomic<bool> muted_{false};
+    std::atomic<bool> alert_{false};  // the clip is a clock alert: heard through mute
     std::atomic<bool> paused_{false};
     std::atomic<bool> active_{false};
     std::atomic<bool> completed_{false};

@@ -49,6 +49,12 @@ int main() {
     expect(!service.snapshot().awaiting_confirmation, "reset clears sensitive pending state");
     expect(service.snapshot().sequence > sequence_before_reset,
            "reset keeps the sequence increasing so the UI applies it");
+    // The message limit is in bytes; the counter speaks in characters, and a
+    // Greek letter takes two bytes.
+    expect(aura::aoraton_characters_left("", 512) == 512, "an empty message has the whole room");
+    expect(aura::aoraton_characters_left("abc", 512) == 509, "Latin letters take one byte each");
+    expect(aura::aoraton_characters_left("Γειά", 512) == 252, "Greek letters take two bytes each");
+    expect(aura::aoraton_characters_left(std::string(600, 'a'), 512) == 0, "nothing is left past the limit");
     std::cout << "aoraton_service_test: PASS\n";
     return 0;
 }

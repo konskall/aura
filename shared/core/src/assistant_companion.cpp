@@ -224,10 +224,16 @@ bool question_requests_web_search(std::string_view question) {
 }
 
 std::string build_device_context(const DeviceContextInput& input) {
+    // The time, battery and connection lead; then what the question asks about
+    // (notes, organizer, phone); general facts come last and are the ones left
+    // out, a whole line at a time, when the context is full.
     std::string out;
-    auto add = [&out](const std::string& line) {
-        out += line;
-        out += '\n';
+    std::string asked;
+    std::string general;
+    std::string* target = &out;
+    auto add = [&target](const std::string& line) {
+        *target += line;
+        *target += '\n';
     };
     if (const auto* status = input.status) {
         if (status->clock_valid && status->date_valid && status->weekday >= 0 && status->weekday <= 6) {
@@ -243,6 +249,7 @@ std::string build_device_context(const DeviceContextInput& input) {
                        status->power_origin == StatusOrigin::Simulated ? " (simulated)" : ""));
         }
         if (status->connection_known) add(status->online ? "internet: connected" : "internet: offline");
+        target = &general;
         if (status->date_valid) {
             const auto calendar = greek_calendar_day(status->year, status->month, status->day);
             add(calendar.namedays.empty() ? "Greek namedays today: none in the local common-name calendar" :
@@ -266,25 +273,25 @@ std::string build_device_context(const DeviceContextInput& input) {
             if (data.origin == WeatherDataOrigin::Demo) header += " DEMO sample data, not real weather";
             if (data.stale) header += " (cached, may be outdated)";
             add(header);
-            add(format("now: %.0f C (feels %.0f C), %s, wind %.0f km/h, humidity %d%%, rain chance %d%%",
-                       static_cast<double>(data.temperature_c), static_cast<double>(data.apparent_temperature_c),
+            add(format("now: %d C (feels %d C), %s, wind %.0f km/h, humidity %d%%, rain chance %d%%",
+                       whole_degrees(data.temperature_c), whole_degrees(data.apparent_temperature_c),
                        condition_name(data.condition), static_cast<double>(data.wind_kmh), data.humidity_percent,
                        data.rain_probability_percent));
-            add(format("today: min %.0f C, max %.0f C", static_cast<double>(data.daily_minimum_c),
-                       static_cast<double>(data.daily_maximum_c)));
+            add(format("today: min %d C, max %d C", whole_degrees(data.daily_minimum_c),
+                       whole_degrees(data.daily_maximum_c)));
             std::string hourly;
             for (std::size_t index = 0; index < std::min<std::size_t>(data.hourly_count, 8); ++index) {
                 const auto& hour = data.hourly[index];
                 const auto t = hour.time.find('T');
                 const std::string when = t == std::string::npos ? hour.time : hour.time.substr(t + 1, 5);
-                hourly += format("%s %.0fC %s %d%%; ", when.c_str(), static_cast<double>(hour.temperature_c),
+                hourly += format("%s %dC %s %d%%; ", when.c_str(), whole_degrees(hour.temperature_c),
                                  condition_name(hour.condition), hour.rain_probability_percent);
             }
             if (!hourly.empty()) add("hourly: " + hourly);
             for (std::size_t index = 0; index < std::min<std::size_t>(data.daily_count, 5); ++index) {
                 const auto& day = data.daily[index];
-                add(format("day %s: min %.0f C, max %.0f C, %s, rain chance %d%%", day.date.c_str(),
-                           static_cast<double>(day.minimum_c), static_cast<double>(day.maximum_c),
+                add(format("day %s: min %d C, max %d C, %s, rain chance %d%%", day.date.c_str(),
+                           whole_degrees(day.minimum_c), whole_degrees(day.maximum_c),
                            condition_name(day.condition), day.rain_probability_max_percent));
             }
         } else if (weather->has_saved_location) {
@@ -343,25 +350,33 @@ std::string build_device_context(const DeviceContextInput& input) {
         }
     }
     if (input.unread_messages > 0) add(format("unread Aoraton messages: %d", input.unread_messages));
+    target = &asked;
     if (input.notes) {
         const auto notes = input.notes->context_for(input.question);
-        if (!notes.empty()) out += "notes (newest first):\n" + notes;
+        if (!notes.empty()) asked += "notes (newest first):\n" + notes;
         else if (question_mentions_notes(input.question)) add("notes: none saved");
     }
     if (input.organizer) {
         const auto organizer = input.organizer->context_for(input.question,
             input.clock ? input.clock->snapshot().now_minute : 0);
-        if (!organizer.empty()) out += "organizer:\n" + organizer;
+        if (!organizer.empty()) asked += "organizer:\n" + organizer;
         else if (question_mentions_organizer(input.question)) add("organizer: no matching saved items");
     }
     if (input.phone && question_mentions_phone(input.question)) {
         const auto& phone = input.phone->snapshot();
         const auto items = input.phone->context_for(input.question);
         if (phone.link != PhoneLinkState::Connected) add("phone: not connected");
-        if (!items.empty()) out += "phone notifications (newest first):\n" + items;
+        if (!items.empty()) asked += "phone notifications (newest first):\n" + items;
         else if (phone.link == PhoneLinkState::Connected) add("phone notifications: none");
     }
-    return utf8_truncate(out, kContextLimit);
+    out = utf8_truncate(out + asked, kContextLimit);
+    for (std::size_t position = 0; position < general.size();) {
+        const auto end = general.find('\n', position);
+        const auto next = end == std::string::npos ? general.size() : end + 1;
+        if (out.size() + (next - position) <= kContextLimit) out.append(general, position, next - position);
+        position = next;
+    }
+    return out;
 }
 
 ParsedAnswer parse_assistant_answer(const std::string& raw) {
@@ -404,6 +419,13 @@ ParsedAnswer parse_assistant_answer(const std::string& raw) {
         result.action_rejected = any_action;
     }
     return result;
+}
+
+std::string answer_display_text(const ParsedAnswer& parsed, const std::string& action_question,
+                                const std::string& refused_note) {
+    if (parsed.action_rejected) return parsed.text.empty() ? refused_note : parsed.text + "\n\n" + refused_note;
+    if (parsed.text.empty() && parsed.action) return action_question;
+    return parsed.text;
 }
 
 std::int64_t reminder_due_minute(const AssistantAction& action, std::int64_t now_minute) noexcept {

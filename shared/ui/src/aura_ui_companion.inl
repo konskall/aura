@@ -1156,7 +1156,9 @@
                 return {ui::IconRole::Reminder, ui::tokens::amber, text, detail};
             }
             case AssistantActionType::Reminder: {
-                if (action.in_minutes > 0) {
+                if (action.in_minutes == 1) {
+                    std::snprintf(text, sizeof(text), "%s", c().action_in_one_minute);
+                } else if (action.in_minutes > 0) {
                     std::snprintf(text, sizeof(text), c().action_in_minutes_format, action.in_minutes);
                 } else {
                     std::snprintf(text, sizeof(text), c().action_at_format, action.tomorrow ? c().tomorrow : c().today,
@@ -1177,7 +1179,7 @@
                 return {ui::IconRole::Calendar, ui::tokens::blue, action.text, text};
             }
             case AssistantActionType::Volume:
-                std::snprintf(text, sizeof(text), "%d%%", action.value);
+                std::snprintf(text, sizeof(text), action.relative ? "%+d%%" : "%d%%", action.value);
                 return {ui::IconRole::VolumeUp, ui::tokens::mint, c().action_volume_title, text};
             case AssistantActionType::Brightness:
                 std::snprintf(text, sizeof(text), "%d%%", action.value);
@@ -1190,6 +1192,22 @@
             case AssistantActionType::None: break;
         }
         return {ui::IconRole::Sparkles, ui::tokens::lilac, c().action_question, {}};
+    }
+
+    // The final answer, or the streamed part of it while it still arrives.
+    const char* shown_answer() const {
+        if (!snapshot.answer_text.empty()) return snapshot.answer_text.c_str();
+        if (snapshot.state == AssistantState::Responding && !snapshot.partial_text.empty()) {
+            return snapshot.partial_text.c_str();
+        }
+        return t().no_answer_yet;
+    }
+
+    // A streamed delta changes only the answer text: it is set on the shown
+    // label (the speaking screen shows no text) instead of rebuilding the screen.
+    void update_streamed_answer() {
+        if (answer_label) lv_label_set_text(answer_label, shown_answer());
+        else if (audio.state != AudioState::Playing && audio.state != AudioState::Paused) render(UiView::Assistant);
     }
 
     void render_answer_companion() {
@@ -1209,9 +1227,7 @@
         lv_obj_set_overflow_visible(reader, false);
         ui::style_scrollbar(reader);
         primary_scroller = reader;
-        answer_label = ui::make_label(reader,
-            snapshot.answer_text.empty() ? t().no_answer_yet : snapshot.answer_text.c_str(),
-            ui::tokens::text, ui::font_body());
+        answer_label = ui::make_label(reader, shown_answer(), ui::tokens::text, ui::font_body());
         lv_obj_set_width(answer_label, kWidth - 16);
         lv_obj_set_style_text_line_space(answer_label, 6, 0);
         lv_obj_align(answer_label, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -1707,11 +1723,11 @@
             state_symbol(112, 112, ui::IconRole::Notebook, ui::tokens::pink);
             state_text(244, c().notes_empty, c().notes_empty_hint);
         } else {
+            // Every kept note (at most NotesModel::kMaxNotes) has a row: an older
+            // note must stay reachable to be read or deleted.
             auto* list = make_list(kHeader, kActionY - 4 - kHeader);
             int y = 0;
-            std::size_t shown = 0;
             for (const auto& note : notes.notes) {
-                if (++shown > 30) break;
                 const bool voice_note = !note.audio_file.empty();
                 const std::string title = note.text.empty() ? std::string(c().voice_note_title) : first_line(note.text);
                 std::string detail = note_stamp(note.created_minute);
@@ -1765,7 +1781,7 @@
         }
         const auto stamp = note_stamp(note->created_minute);
         const bool voice_note = !note->audio_file.empty();
-        make_header(voice_note ? c().note_voice : c().app_notes, ui::IconRole::Delete, note_delete_event,
+        make_header(voice_note ? c().voice_note_header : c().app_notes, ui::IconRole::Delete, note_delete_event,
                     ui::tokens::coral, static_cast<bool>(callbacks.on_note_delete));
         if (!stamp.empty()) {
             line(content, stamp.c_str(), kGutter + 4, 100, kWidth - 8, ui::font_caption(), ui::tokens::text_tertiary);
@@ -1883,11 +1899,8 @@
                                      UiView::Briefing, false});
                     break;
                 case BriefingItemKind::FuelPrices: {
-                    const auto price = [](int millieur) {
-                        if (millieur < 0) return std::string("—");
-                        char value[16];
-                        std::snprintf(value, sizeof(value), "%d,%03d", millieur / 1000, millieur % 1000);
-                        return std::string(value);
+                    const auto price = [this](int millieur) {
+                        return fuel_price_text(millieur, c().decimal_separator);
                     };
                     std::snprintf(detail, sizeof(detail), c().briefing_fuel_prices_format,
                                   price(item.value).c_str(), price(item.high).c_str(), price(item.low).c_str());
@@ -2175,11 +2188,12 @@
         if (radio_on) block_height += (total > 0 ? 40 : 62);
         if (alarm) block_height += (total > 0 || radio_on) ? 40 : 62;
         const int top = ui::tokens::display_height / 2 - block_height / 2;
-        // A faint halo in the colour of the sky behind the clock: eight thin
-        // steps read as one soft glow, and only its core rises above black.
+        // A faint halo in the colour of the sky behind the clock: four thin
+        // steps read as one soft glow, and only its core rises above black. It
+        // stays within the clock block (260 px), so most of the AMOLED is dark.
         if (lit) {
-            for (int size = 420; size >= 140; size -= 40) {
-                auto* halo = make_dot(content, size, tint, 7);
+            for (int size = 260; size >= 140; size -= 40) {
+                auto* halo = make_dot(content, size, tint, 10);
                 lv_obj_set_pos(halo, ui::tokens::display_width / 2 + dx - size / 2,
                                ui::tokens::display_height / 2 + dy - size / 2);
             }
@@ -2201,13 +2215,14 @@
                 lv_obj_set_style_opa(icon, LV_OPA_70, 0);
             }
             char temperature[16];
-            std::snprintf(temperature, sizeof(temperature), "%.0f°", sky.temperature_c);
+            std::snprintf(temperature, sizeof(temperature), "%d°", whole_degrees(sky.temperature_c));
             ui::make_label(row, temperature, kDim, ui::font_title());
             auto* city = ui::make_label(row, sky.location.name.c_str(), kFaint, ui::font_caption());
             lv_label_set_long_mode(city, LV_LABEL_LONG_DOT);
             lv_obj_set_style_max_width(city, 200, 0);
             char range[48];
-            std::snprintf(range, sizeof(range), "↑ %.0f°   ↓ %.0f°", sky.daily_maximum_c, sky.daily_minimum_c);
+            std::snprintf(range, sizeof(range), "↑ %d°   ↓ %d°", whole_degrees(sky.daily_maximum_c),
+                          whole_degrees(sky.daily_minimum_c));
             std::string detail = range;
             if (sky.origin == WeatherDataOrigin::Demo) {
                 detail += std::string(" · ") + v().demo_badge;
@@ -2556,10 +2571,12 @@
         if (note_delete_armed && phase_ms - note_delete_armed_at > kForgetArmMs) note_delete_armed = false;
     }
 
-    // Dimmed screens: a translucent black veil (the panel brightness on device).
+    // Dimmed screens: a translucent black veil where nothing else dims them.
+    // A device that lowers its own backlight gets no veil on top of that.
     void update_dim_overlay() {
-        const bool dim = display_power.mode == DisplayMode::Dimmed ||
-                         (display_power.mode == DisplayMode::Active && display_power.brightness_percent < 100);
+        const bool dim = !capabilities.panel_brightness &&
+                         (display_power.mode == DisplayMode::Dimmed ||
+                          (display_power.mode == DisplayMode::Active && display_power.brightness_percent < 100));
         if (!dim && !dim_overlay) return;
         if (!dim_overlay) {
             dim_overlay = lv_obj_create(lv_layer_top());

@@ -140,8 +140,9 @@ private:
     bool begin_voice(VoiceJob job, TranslateSide side, ListenOrigin origin = ListenOrigin::Manual);
     bool begin_automatic_listening(ListenOrigin origin);
     void finish_voice();
-    void transcribe(std::vector<std::uint8_t> wav, const std::string& language, VoiceJob job, std::uint32_t note);
-    void finish_transcript(TranscriptResult result);
+    // Recognition for the assistant or a translation (voice notes have their own).
+    void transcribe(std::vector<std::uint8_t> wav, const std::string& language, VoiceJob job);
+    void deliver_transcript(VoiceJob job, TranscriptResult result);
     void translate(std::uint32_t entry, const std::string& text);
     bool speak(const std::string& text, const std::string& language);
     void pump_speech();
@@ -194,8 +195,8 @@ private:
 
     std::optional<std::future<TranscriptResult>> transcript_;
     VoiceJob transcript_job_{VoiceJob::None};
-    std::uint32_t transcript_note_{0};
     bool transcript_ignored_{false};
+    NoteTranscriptions note_transcriptions_;
     std::optional<std::future<SpeechResult>> speech_job_;
     std::optional<SpeechResult> speech_ready_;
     struct PendingSpeech {
@@ -226,8 +227,7 @@ private:
     std::uint64_t update_check_ms_{0};
     std::uint64_t update_started_ms_{0};
     std::uint64_t update_verify_ms_{0};
-    std::uint64_t chime_next_ms_{0};
-    std::uint64_t alert_since_ms_{0};
+    AlarmRinger alarm_ringer_;
     MessageChimeGate message_chime_;
     std::uint64_t chime_aoraton_sequence_{0};
     std::uint64_t chime_phone_sequence_{0};
@@ -245,7 +245,12 @@ private:
     SoundSettings sound_{};
     std::string saved_sound_text_;
     SettingSettle sound_settle_;
+    // Settings are compared as values each poll; text is built only after a
+    // change, not for every frame.
+    SoundSettings seen_sound_{};
+    bool sound_pending_{false};
     std::string saved_display_text_;
+    std::uint64_t saved_display_sequence_{0};
     InterfaceLanguage language_{InterfaceLanguage::Greek};
     std::string saved_language_text_;
     bool powered_off_{false};

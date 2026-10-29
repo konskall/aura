@@ -8,12 +8,15 @@
 #include "lvgl.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <thread>
 
@@ -178,6 +181,7 @@ CompanionRuntime::~CompanionRuntime() {
     if (!ctx_.deterministic && !ctx_.store_dir.empty()) save_stores(true);
     capture_.stop();
     if (job_ != VoiceJob::None && ctx_.on_voice_active) ctx_.on_voice_active(false);
+    for (auto& job : note_transcriptions_.release()) retired_transcripts_.push_back(std::move(job));
     const bool pending_work = has_work(transcript_) || has_work(speech_job_) ||
         has_work(translation_reply_) || has_work(health_) || !retired_transcripts_.empty() ||
         !retired_speech_.empty() || !retired_translations_.empty();
@@ -569,9 +573,10 @@ void CompanionRuntime::deliver_reply(const std::string& raw) {
     auto parsed = parse_assistant_answer(raw);
     auto& controller = *ctx_.controller;
     const std::string question = controller.snapshot().user_text;
-    std::string text = parsed.text;
-    if (text.empty() && parsed.action) text = strings_for(language_).action_question;
-    if (text.empty()) text = raw;
+    const auto& strings = strings_for(language_);
+    // A refused action says so; the raw ACTION line is never shown or spoken.
+    std::string text = answer_display_text(parsed, strings.action_question, strings.action_refused);
+    if (text.empty()) text = strings.empty_answer;
     controller.dispatch({EventType::FinalResult, text});
     memory_.record(question, text, now_ms());
     extras_.conversation_history = memory_.recent(now_ms());
@@ -622,11 +627,20 @@ bool CompanionRuntime::execute(const AssistantAction& action) {
         case AssistantActionType::CalendarEvent:
             organizer_.prune_events_before(now_minute());
             return organizer_.add_event(action.text, action.start_minute, action.duration_minutes) == OrganizerResult::Ok;
-        case AssistantActionType::Volume:
-            if (action.value < 0 || action.value > 100) return false;
-            sound_.volume = static_cast<float>(action.value) / 100.0F;
+        case AssistantActionType::Volume: {
+            // "Louder" and "quieter" step from the volume heard now; louder
+            // also ends a mute, as on a phone.
+            const int current = static_cast<int>(std::lround(ctx_.audio->diagnostics().volume * 100.0F));
+            const int target = action.relative ? std::clamp(current + action.value, 0, 100) : action.value;
+            if (target < 0 || target > 100) return false;
+            sound_.volume = static_cast<float>(target) / 100.0F;
             ctx_.audio->set_volume(sound_.volume);
+            if (action.relative && action.value > 0 && ctx_.audio->diagnostics().muted) {
+                sound_.muted = false;
+                ctx_.audio->set_muted(false);
+            }
             return true;
+        }
         case AssistantActionType::Brightness: {
             if (action.value < 5 || action.value > 100) return false;
             auto settings = display_.snapshot().settings;
@@ -699,7 +713,8 @@ bool CompanionRuntime::begin_voice(VoiceJob job, TranslateSide side, ListenOrigi
         return false;
     }
     if (ctx_.on_voice_active) ctx_.on_voice_active(true);
-    recorder_.start();
+    // A note is dictated: it may pause to think and may last half a minute.
+    recorder_.start(job == VoiceJob::Note ? VoiceRecorder::Mode::Dictation : VoiceRecorder::Mode::Turn);
     job_ = job;
     listen_origin_ = job == VoiceJob::Assistant ? origin : ListenOrigin::Manual;
     translate_side_ = side;
@@ -786,12 +801,15 @@ void CompanionRuntime::finish_voice() {
             if (controller.snapshot().state == AssistantState::Listening) controller.dispatch({EventType::EndRecording});
             listen_origin_ = ListenOrigin::Manual;
             voice_.state = VoiceCaptureState::Processing;
-            transcribe(std::move(wav), interface_language_code(language_), VoiceJob::Assistant, 0);
+            transcribe(std::move(wav), interface_language_code(language_), VoiceJob::Assistant);
             break;
         }
         case VoiceJob::Note: {
-            const auto name = "note-" + std::to_string(std::time(nullptr)) + "-" + std::to_string(++note_file_counter_) +
-                              ".wav";
+            // The random part keeps the name unique whatever the clock and counter say.
+            const auto nonce = static_cast<std::uint32_t>(std::random_device{}()) ^
+                static_cast<std::uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+            const auto name = voice_note_file_name(static_cast<std::int64_t>(std::time(nullptr)),
+                                                   ++note_file_counter_, nonce);
             const auto note_path = std::filesystem::path(ctx_.store_dir) / "notes" / name;
             const bool audio_saved = write_file(note_path, std::string(wav.begin(), wav.end()),
                                                 kMaximumVoiceNoteBytes);
@@ -802,8 +820,10 @@ void CompanionRuntime::finish_voice() {
                 std::error_code remove_error;
                 std::filesystem::remove(note_path, remove_error);
                 voice_.error_code = "NOTES_FULL";
-            } else if (heard && capabilities_.speech_recognition) {
-                transcribe(std::move(wav), interface_language_code(language_), VoiceJob::Note, id);
+            } else if (heard && capabilities_.speech_recognition && speech_) {
+                // Its own job: a question or a cancelled listen meanwhile never drops it.
+                note_transcriptions_.start(id, speech_->transcribe(std::move(wav), interface_language_code(language_)),
+                                           notes_);
             } else {
                 notes_.set_transcript_failed(id);
             }
@@ -818,33 +838,29 @@ void CompanionRuntime::finish_voice() {
             }
             translation_.set_status(translate_entry_, TranslationStatus::Transcribing);
             voice_.state = VoiceCaptureState::Processing;
-            transcribe(std::move(wav), source_language(translate_side_, translation_), VoiceJob::Translate, 0);
+            transcribe(std::move(wav), source_language(translate_side_, translation_), VoiceJob::Translate);
             break;
         case VoiceJob::None: break;
     }
     bump_voice();
 }
 
-void CompanionRuntime::transcribe(std::vector<std::uint8_t> wav, const std::string& language, VoiceJob job,
-                                   std::uint32_t note) {
+void CompanionRuntime::transcribe(std::vector<std::uint8_t> wav, const std::string& language, VoiceJob job) {
+    // A failure here belongs to `job`, not to whatever ran before it.
     if (!speech_) {
-        finish_transcript({false, {}, "STT_UNAVAILABLE"});
+        deliver_transcript(job, {false, {}, "STT_UNAVAILABLE"});
         return;
     }
     if (!retire(transcript_, retired_transcripts_)) {
-        finish_transcript({false, {}, "SPEECH_BUSY"});
+        deliver_transcript(job, {false, {}, "SPEECH_BUSY"});
         return;
     }
     transcript_ = speech_->transcribe(std::move(wav), language);
     transcript_job_ = job;
-    transcript_note_ = note;
     transcript_ignored_ = false;
 }
 
-void CompanionRuntime::finish_transcript(TranscriptResult result) {
-    const auto job = transcript_job_;
-    transcript_job_ = VoiceJob::None;
-    if (transcript_ignored_) return;
+void CompanionRuntime::deliver_transcript(VoiceJob job, TranscriptResult result) {
     switch (job) {
         case VoiceJob::Assistant: {
             voice_.state = VoiceCaptureState::Idle;
@@ -859,10 +875,7 @@ void CompanionRuntime::finish_transcript(TranscriptResult result) {
             ctx_.start_turn(result.text);
             return;
         }
-        case VoiceJob::Note:
-            if (result.ok) notes_.set_transcript(transcript_note_, result.text);
-            else notes_.set_transcript_failed(transcript_note_);
-            return;
+        case VoiceJob::Note: return;  // notes use note_transcriptions_
         case VoiceJob::Translate:
             voice_.state = VoiceCaptureState::Idle;
             bump_voice();
@@ -1034,8 +1047,11 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
     if (ready(transcript_)) {
         auto result = transcript_->get();
         transcript_.reset();
-        finish_transcript(std::move(result));
+        const auto job = transcript_job_;
+        transcript_job_ = VoiceJob::None;
+        if (!transcript_ignored_) deliver_transcript(job, std::move(result));
     }
+    note_transcriptions_.poll(notes_);
     if (ready(translation_reply_)) {
         const auto reply = translation_reply_->get();
         translation_reply_.reset();
@@ -1102,7 +1118,8 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
         if (inactive < last_inactive_ms_) display_.user_activity(now);
         last_inactive_ms_ = inactive;
         const auto audio_state = ctx_.audio->diagnostics().state;
-        const bool busy = is_turn_active(ctx_.controller->snapshot().state) || clock_.snapshot().alert ||
+        // A finished answer or a waiting confirmation lets the screen time out.
+        const bool busy = holds_screen_awake(ctx_.controller->snapshot()) || clock_.snapshot().alert ||
                           job_ != VoiceJob::None || audio_state == AudioState::Playing ||
                           phone_.snapshot().incoming_call || ota_.snapshot().state == UpdateState::Downloading;
         display_.hold_awake(busy, now);
@@ -1115,14 +1132,12 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
             ctx_.ui->open_briefing();
         }
         was_dark_ = dark;
-        // The alert rings until it is handled, a little louder each pass; face
-        // down silences it.
-        if (!clock_.snapshot().alert) alert_since_ms_ = 0;
-        else if (alert_since_ms_ == 0) alert_since_ms_ = now;
-        if (clock_.snapshot().alert && !display_.snapshot().muted_by_flip && now >= chime_next_ms_ &&
-            audio_state != AudioState::Playing) {
-            ctx_.audio->play_pcm(make_alarm_melody(alarm_loudness(now - alert_since_ms_)));
-            chime_next_ms_ = now + kAlarmCycleMs;
+        // The alert rings until it is handled, a little louder each pass and
+        // through mute; face down silences it.
+        if (const auto* pass = alarm_ringer_.next(clock_.snapshot().alert.has_value(),
+                                                  display_.snapshot().muted_by_flip,
+                                                  audio_state == AudioState::Playing, now)) {
+            ctx_.audio->play_alert(*pass);
         }
         if (display_.snapshot().muted_by_flip && audio_state == AudioState::Playing) ctx_.audio->stop();
         chime_for_new_messages(now, audio_state);
@@ -1130,7 +1145,7 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
 
     if (pair_ready_ms_ != 0 && now >= pair_ready_ms_) {
         pair_ready_ms_ = 0;
-        phone_.set_link(PhoneLinkState::Connected, PhonePlatform::Iphone, "iPhone · DEMO");
+        phone_.set_link(PhoneLinkState::Connected, PhonePlatform::Iphone, "DEMO · iPhone");
     }
     if (update_check_ms_ != 0 && now >= update_check_ms_) {
         update_check_ms_ = 0;
@@ -1285,7 +1300,7 @@ void CompanionRuntime::simulate_imu(const std::string& kind) {
 
 void CompanionRuntime::demo_phone_notification(const std::string& payload) {
     if (phone_.snapshot().link != PhoneLinkState::Connected) {
-        phone_.set_link(PhoneLinkState::Connected, PhonePlatform::Iphone, "iPhone · DEMO");
+        phone_.set_link(PhoneLinkState::Connected, PhonePlatform::Iphone, "DEMO · iPhone");
     }
     PhoneNotification item;
     item.uid = next_phone_uid_++;
@@ -1335,7 +1350,7 @@ bool CompanionRuntime::handle_event(const std::string& type, const std::string& 
         demo_phone_notification(payload);
     } else if (type == "phone_call") {
         if (phone_.snapshot().link != PhoneLinkState::Connected) {
-            phone_.set_link(PhoneLinkState::Connected, PhonePlatform::Iphone, "iPhone · DEMO");
+            phone_.set_link(PhoneLinkState::Connected, PhonePlatform::Iphone, "DEMO · iPhone");
         }
         PhoneNotification call;
         call.uid = next_phone_uid_++;
@@ -1437,22 +1452,36 @@ void CompanionRuntime::save_stores(bool flush) {
             saved_organizer_text_ = std::move(organizer_text);
         }
     }
-    const auto audio = ctx_.audio->diagnostics();
-    sound_.volume = audio.volume;
-    sound_.muted = audio.muted;
-    auto sound_text = serialize_sound_settings(sound_);
-    // A dragged volume slider is written once it rests, not from the UI thread
-    // on every step.
-    if (sound_text != saved_sound_text_ && (flush || sound_settle_.settled(sound_text, now_ms()))) {
-        if (write_file(root / "sound.txt", sound_text)) saved_sound_text_ = std::move(sound_text);
+    // Values are compared every poll; text is built only after a change. A
+    // dragged volume slider is written once it rests, not on every step.
+    sound_ = current_sound_settings(sound_, ctx_.audio->diagnostics());
+    if (sound_ != seen_sound_) {
+        seen_sound_ = sound_;
+        sound_pending_ = true;
     }
-    auto display_text = serialize_display_settings(display_.snapshot().settings);
-    if (display_text != saved_display_text_ && write_file(root / "display.txt", display_text)) {
-        saved_display_text_ = std::move(display_text);
+    if (sound_pending_ || flush) {
+        auto sound_text = serialize_sound_settings(sound_);
+        if (sound_text == saved_sound_text_) {
+            sound_pending_ = false;
+        } else if ((flush || sound_settle_.settled(sound_text, now_ms())) &&
+                   write_file(root / "sound.txt", sound_text)) {
+            saved_sound_text_ = std::move(sound_text);
+            sound_pending_ = false;
+        }
     }
-    const auto language_text = std::string(interface_language_code(language_)) + "\n";
-    if (language_text != saved_language_text_ && write_file(root / "language.txt", language_text)) {
-        saved_language_text_ = language_text;
+    if (display_.snapshot().sequence != saved_display_sequence_) {
+        const auto sequence = display_.snapshot().sequence;
+        auto display_text = serialize_display_settings(display_.snapshot().settings);
+        if (display_text == saved_display_text_) {
+            saved_display_sequence_ = sequence;
+        } else if (write_file(root / "display.txt", display_text)) {
+            saved_display_text_ = std::move(display_text);
+            saved_display_sequence_ = sequence;
+        }
+    }
+    if (saved_language_text_.compare(0, 2, interface_language_code(language_)) != 0) {
+        const auto language_text = std::string(interface_language_code(language_)) + "\n";
+        if (write_file(root / "language.txt", language_text)) saved_language_text_ = language_text;
     }
 }
 
@@ -1469,39 +1498,39 @@ bool CompanionRuntime::capture(const std::string& scenario) {
     const auto today = (minute_index(evening) / 1440) * 1440;
     const bool english = language_ == InterfaceLanguage::English;
     auto seed_clock = [&] {
-        clock_.start_timer(600, english ? "Pasta · DEMO" : "Ζυμαρικά · DEMO");
+        clock_.start_timer(600, english ? "DEMO · Pasta" : "DEMO · Ζυμαρικά");
         clock_.tick(18000);
-        clock_.add_alarm(7, 30, true, english ? "Gym · DEMO" : "Γυμναστήριο · DEMO");
+        clock_.add_alarm(7, 30, true, english ? "DEMO · Gym" : "DEMO · Γυμναστήριο");
         std::uint32_t off = 0;
         clock_.add_alarm(6, 45, false, {}, &off);
         clock_.set_alarm_enabled(off, false);
-        clock_.add_reminder_at(today + 20 * 60, english ? "Medicine · DEMO" : "Φάρμακα · DEMO");
+        clock_.add_reminder_at(today + 20 * 60, english ? "DEMO · Medicine" : "DEMO · Φάρμακα");
     };
     auto seed_notes = [&] {
-        notes_.add_text(english ? "Buy milk, bread and fruit · DEMO" :
-                                  "Αγόρασε γάλα, ψωμί και φρούτα · DEMO", today + 9 * 60 + 5);
+        notes_.add_text(english ? "DEMO · Buy milk, bread and fruit" :
+                                  "DEMO · Αγόρασε γάλα, ψωμί και φρούτα", today + 9 * 60 + 5);
         std::uint32_t voice = 0;
         notes_.add_voice("note-demo.wav", 4200, today + 12 * 60 + 40, &voice);
-        notes_.set_transcript(voice, english ? "Dentist appointment on Thursday at six · DEMO" :
-                                               "Ραντεβού με τον οδοντίατρο την Πέμπτη στις έξι · DEMO");
-        notes_.add_text(english ? "The office Wi-Fi password is in the drawer · DEMO" :
-                                  "Ο κωδικός του Wi‑Fi του γραφείου είναι στο συρτάρι · DEMO",
+        notes_.set_transcript(voice, english ? "DEMO · Dentist appointment on Thursday at six" :
+                                               "DEMO · Ραντεβού με τον οδοντίατρο την Πέμπτη στις έξι");
+        notes_.add_text(english ? "DEMO · The office Wi-Fi password is in the drawer" :
+                                  "DEMO · Ο κωδικός του Wi‑Fi του γραφείου είναι στο συρτάρι",
                         today + 17 * 60 + 52);
     };
     auto seed_organizer = [&] {
-        organizer_.add_event(english ? "Dentist · DEMO" : "Οδοντίατρος · DEMO",
+        organizer_.add_event(english ? "DEMO · Dentist" : "DEMO · Οδοντίατρος",
                              today + 19 * 60 + 30, 45);
-        organizer_.add_event(english ? "Team call · DEMO" : "Κλήση ομάδας · DEMO",
+        organizer_.add_event(english ? "DEMO · Team call" : "DEMO · Κλήση ομάδας",
                              today + 1440 + 10 * 60, 60);
-        organizer_.add_task(english ? "Send the documents · DEMO" : "Στείλε τα έγγραφα · DEMO",
+        organizer_.add_task(english ? "DEMO · Send the documents" : "DEMO · Στείλε τα έγγραφα",
                             today + 9 * 60);
-        organizer_.add_task(english ? "Book service · DEMO" : "Κλείσε service · DEMO",
+        organizer_.add_task(english ? "DEMO · Book service" : "DEMO · Κλείσε service",
                             today + 9 * 60 + 5);
-        organizer_.add_shopping(english ? "Milk · DEMO" : "Γάλα · DEMO");
-        organizer_.add_shopping(english ? "Coffee · DEMO" : "Καφές · DEMO");
+        organizer_.add_shopping(english ? "DEMO · Milk" : "DEMO · Γάλα");
+        organizer_.add_shopping(english ? "DEMO · Coffee" : "DEMO · Καφές");
     };
     auto seed_phone = [&] {
-        phone_.set_link(PhoneLinkState::Connected, PhonePlatform::Iphone, "iPhone · DEMO");
+        phone_.set_link(PhoneLinkState::Connected, PhonePlatform::Iphone, "DEMO · iPhone");
         demo_phone_notification(english ? "WhatsApp|Maria|I will be 10 minutes late, start without me" :
                                           "WhatsApp|Μαρία|Θα αργήσω 10 λεπτά, ξεκίνα χωρίς εμένα");
         demo_phone_notification(english ? "Mail|Tax office|Your return was submitted successfully" :
@@ -1524,7 +1553,7 @@ bool CompanionRuntime::capture(const std::string& scenario) {
     } else if (scenario == "reminder-new") {
         ui.show(UiView::ReminderNew);
     } else if (scenario == "clock-alert") {
-        clock_.start_timer(600, english ? "Pasta · DEMO" : "Ζυμαρικά · DEMO");
+        clock_.start_timer(600, english ? "DEMO · Pasta" : "DEMO · Ζυμαρικά");
         clock_.tick(600000);
     } else if (scenario == "home-timer") {
         seed_clock();
@@ -1559,28 +1588,28 @@ bool CompanionRuntime::capture(const std::string& scenario) {
         ui.show(UiView::Briefing);
     } else if (scenario == "translate") {
         set_capabilities(voice_capabilities);
+        // The owner's side speaks Greek in either interface language: every
+        // pair is Greek with another language.
         const auto entry = translation_.begin(TranslateSide::Mine, TranslationStatus::Translating);
-        translation_.set_source(entry, english ? "Where is the metro station?" :
-                                                "Πού είναι ο σταθμός του μετρό;");
-        translation_.complete(entry, english ? "Πού είναι ο σταθμός του μετρό;" :
-                                              "Where is the metro station?");
+        translation_.set_source(entry, "Πού είναι ο σταθμός του μετρό;");
+        translation_.complete(entry, "Where is the metro station?");
         ui.show(UiView::Translate);
     } else if (scenario == "conversation-history") {
         memory_.clear();
-        memory_.record(english ? "Find pizza in Sparta · DEMO" : "Ψάξε για πίτσα στη Σπάρτη · DEMO",
-                       english ? "Three verified results were found · DEMO" :
-                                 "Βρέθηκαν τρία επιβεβαιωμένα αποτελέσματα · DEMO", now_ms());
-        memory_.record(english ? "Which one is open late? · DEMO" : "Ποιο μένει ανοιχτό αργά; · DEMO",
-                       english ? "Opening times need a live check · DEMO" :
-                                 "Τα ωράρια χρειάζονται ζωντανό έλεγχο · DEMO", now_ms());
+        memory_.record(english ? "DEMO · Find pizza in Sparta" : "DEMO · Ψάξε για πίτσα στη Σπάρτη",
+                       english ? "DEMO · Three verified results were found" :
+                                 "DEMO · Βρέθηκαν τρία επιβεβαιωμένα αποτελέσματα", now_ms());
+        memory_.record(english ? "DEMO · Which one is open late?" : "DEMO · Ποιο μένει ανοιχτό αργά;",
+                       english ? "DEMO · Opening times need a live check" :
+                                 "DEMO · Τα ωράρια χρειάζονται ζωντανό έλεγχο", now_ms());
         extras_.conversation_history = memory_.recent(now_ms());
         extras_.memory_turns = extras_.conversation_history.size();
         bump_extras();
         ui.show(UiView::ConversationHistory);
     } else if (scenario == "status-services") {
-        extras_.assistant_provider = "Codex CLI · DEMO";
-        extras_.speech_recognition_provider = "Groq STT · DEMO";
-        extras_.speech_output_provider = "Azure Neural · DEMO";
+        extras_.assistant_provider = "DEMO · Codex CLI";
+        extras_.speech_recognition_provider = "DEMO · Groq STT";
+        extras_.speech_output_provider = "DEMO · Azure Neural";
         extras_.web_search_ready = true;
         bump_extras();
         ui.show(UiView::Battery);

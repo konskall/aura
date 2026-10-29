@@ -76,5 +76,9 @@ private:
 
 const char* state_name(AssistantState state) noexcept;
 bool is_turn_active(AssistantState state) noexcept;
+// Work in progress keeps the screen on (listening, recognising, thinking, an
+// answer still streaming); a finished answer or a waiting confirmation lets
+// the screen time out.
+bool holds_screen_awake(const AssistantSnapshot& snapshot) noexcept;
 
 }  // namespace aura

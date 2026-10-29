@@ -233,6 +233,8 @@ struct WeatherIntent {
 };
 
 WeatherCondition weather_condition_from_wmo(int code) noexcept;
+// A shown temperature in whole degrees: never "-0" (-0.4 C reads 0).
+int whole_degrees(float celsius) noexcept;
 WeatherIntent analyze_weather_intent(std::string_view text);
 const char* weather_state_name(WeatherState state) noexcept;
 

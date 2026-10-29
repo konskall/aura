@@ -2,6 +2,7 @@
 #include "aura/assistant_stream.hpp"
 #include "aura/aoraton.hpp"
 #include "aura/aoraton_real.hpp"
+#include "aura/aura_theme.hpp"
 #include "aura/aura_ui.hpp"
 #include "aura/bridge_speech_service.hpp"
 #include "aura/companion_runtime.hpp"
@@ -17,6 +18,7 @@
 #include "aura/radio.hpp"
 #include "aura/screenshot.hpp"
 #include "aura/strings.hpp"
+#include "aura/visual_strings.hpp"
 #include "aura/weather.hpp"
 #include "aura/weather_store.hpp"
 #include "aura/wifi.hpp"
@@ -33,6 +35,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <future>
 #include <filesystem>
@@ -454,7 +457,7 @@ int main(int argc, char** argv) {
     std::optional<std::future<aura::WeatherGeocodingResult>> pending_weather_search;
     std::optional<std::future<aura::WeatherFetchResult>> pending_weather_fetch;
     std::optional<std::chrono::steady_clock::time_point> next_weather_refresh_at;
-    std::optional<std::future<aura::simulator::RadioSearchResult>> pending_radio_search;
+    std::optional<std::future<aura::RadioSearchResult>> pending_radio_search;
     std::optional<std::future<aura::simulator::FuelFetchResult>> pending_fuel_fetch;
     bool weather_auto_fetch_first{false};
     bool weather_fetch_persist{false};
@@ -473,7 +476,7 @@ int main(int argc, char** argv) {
     std::vector<std::future<aura::AssistantReply>> retired_replies;
     std::vector<std::future<aura::WeatherGeocodingResult>> retired_weather_searches;
     std::vector<std::future<aura::WeatherFetchResult>> retired_weather_fetches;
-    std::vector<std::future<aura::simulator::RadioSearchResult>> retired_radio_searches;
+    std::vector<std::future<aura::RadioSearchResult>> retired_radio_searches;
     bool pending = false;
     std::uint64_t pending_generation = 0;
     float manual_input_amplitude = -1.0F;
@@ -827,7 +830,8 @@ int main(int argc, char** argv) {
         if (deterministic_run) {
             auto results = aura::greek_default_stations();
             if (results.size() > 4) results.resize(4);
-            for (auto& station : results) station.name += " · " + std::string(text().demo);
+            // DEMO first: a long station name is cut short in the list.
+            for (auto& station : results) station.name = std::string(text().demo) + " · " + station.name;
             radio_model.search_finished(std::move(results), {});
             apply_radio();
             return;
@@ -924,8 +928,14 @@ int main(int argc, char** argv) {
             if (aura::is_turn_active(controller.snapshot().state)) controller.dispatch({aura::EventType::Cancel});
             if (end_voice_turn_hook) end_voice_turn_hook();
             ui.show(aura::UiView::Radio);
+            // "Βάλε ραδιόφωνο" with no station named plays the last one again
+            // (or the first favourite); a station already on keeps playing.
+            const auto* resume = radio_intent.kind == aura::RadioIntentKind::PlayStation && !spoken_station &&
+                                         radio_model.snapshot().state == aura::RadioState::Idle ?
+                radio_model.station_to_resume() : nullptr;
             if (radio_intent.kind == aura::RadioIntentKind::Stop) stop_radio();
             else if (spoken_station) play_radio(*spoken_station);
+            else if (resume) play_radio(*resume);
             else apply_radio();
             return;
         }
@@ -1551,8 +1561,7 @@ int main(int argc, char** argv) {
             apply();
             audio.play_test_tone(1600);
             ui.apply_audio(audio.diagnostics());
-        } else if (capture_scenario == "cards" || capture_scenario == "search") ui.show(aura::UiView::Cards);
-        else if (capture_scenario == "settings") ui.show(aura::UiView::Settings);
+        } else if (capture_scenario == "settings") ui.show(aura::UiView::Settings);
         else if (capture_scenario == "language") ui.show(aura::UiView::LanguageSettings);
         else if (capture_scenario == "diagnostics") ui.show(aura::UiView::Diagnostics);
         else if (capture_scenario == "system") ui.show(aura::UiView::System);
@@ -1598,13 +1607,15 @@ int main(int argc, char** argv) {
             ui.apply_aoraton(snapshot);
             ui.show(aura::UiView::AoratonRooms);
         } else if (capture_scenario.rfind("aoraton-account", 0) == 0) {
-            // aoraton.com account screens with a DEMO label (no real account).
+            // aoraton.com account screens with a DEMO label (no real account),
+            // in the capture's language.
+            const bool english_capture = ui.language() == aura::InterfaceLanguage::English;
             aura::AoratonSnapshot snapshot;
             snapshot.mock_mode = false;
             snapshot.runtime_mode = aura::AoratonRuntimeMode::Live;
             snapshot.pairing = aura::AoratonPairingState::Paired;
             snapshot.connection = aura::AoratonConnectionState::Connected;
-            snapshot.account_label = "DEMO λογαριασμός";
+            snapshot.account_label = english_capture ? "DEMO account" : "DEMO λογαριασμός";
             snapshot.key_state = aura::AoratonKeyState::Ready;
             snapshot.key_count = 3;
             aura::UiView view = aura::UiView::AoratonPair;
@@ -1628,12 +1639,12 @@ int main(int argc, char** argv) {
             } else if (capture_scenario == "aoraton-account-rooms") {
                 aura::AoratonRoom open;
                 open.id = "demo-open";
-                open.display_name = "DEMO Οικογένεια";
-                open.preview = "DEMO Τα λέμε το βράδυ";
+                open.display_name = english_capture ? "DEMO Family" : "DEMO Οικογένεια";
+                open.preview = english_capture ? "DEMO See you tonight" : "DEMO Τα λέμε το βράδυ";
                 open.unread = 2;
                 aura::AoratonRoom locked;
                 locked.id = "demo-locked";
-                locked.display_name = "DEMO Δουλειά";
+                locked.display_name = english_capture ? "DEMO Work" : "DEMO Δουλειά";
                 locked.key_available = false;
                 snapshot.rooms = {open, locked};
                 view = aura::UiView::AoratonRooms;
@@ -1680,8 +1691,6 @@ int main(int argc, char** argv) {
             aoraton.select_room("demo-family");
             ui.apply_aoraton(aoraton.snapshot());
             ui.show(aura::UiView::AoratonCompose);
-        } else if (capture_scenario == "navigation") {
-            ui.show(aura::UiView::Navigation);
         } else if (capture_scenario == "weather-sunny" || capture_scenario == "weather-cloudy" ||
                    capture_scenario == "weather-rainy" || capture_scenario == "weather-stormy" ||
                    capture_scenario == "weather-snowy" || capture_scenario == "weather-night" ||
@@ -1771,8 +1780,6 @@ int main(int argc, char** argv) {
             ui.show(aura::UiView::Wifi);
         } else if (capture_scenario == "calendar") {
             companion.capture("calendar");
-        } else if (capture_scenario == "camera") {
-            ui.show(aura::UiView::Camera);
         } else if (capture_scenario == "battery") {
             controller.dispatch({aura::EventType::ChargingChanged, {}, 1});
             device_status.set_power(92, true, aura::StatusOrigin::Simulated);
@@ -1901,13 +1908,13 @@ int main(int argc, char** argv) {
         aoraton.select_room("demo-family");
         ui.apply_aoraton(aoraton_capture_override ? *aoraton_capture_override : aoraton.snapshot());
         const aura::UiView views[] = {
-            aura::UiView::Home, aura::UiView::Launcher, aura::UiView::Cards,
+            aura::UiView::Home, aura::UiView::Launcher,
             aura::UiView::Notifications, aura::UiView::Settings, aura::UiView::Audio,
             aura::UiView::AoratonRooms, aura::UiView::AoratonPair, aura::UiView::AoratonConversation,
-            aura::UiView::AoratonCompose, aura::UiView::AoratonConfirm, aura::UiView::Navigation,
+            aura::UiView::AoratonCompose, aura::UiView::AoratonConfirm,
             aura::UiView::Weather, aura::UiView::WeatherSettings, aura::UiView::WeatherLocation,
             aura::UiView::Calendar,
-            aura::UiView::Camera, aura::UiView::Battery, aura::UiView::VoiceSettings,
+            aura::UiView::Battery, aura::UiView::VoiceSettings,
             aura::UiView::Diagnostics, aura::UiView::Wifi, aura::UiView::WifiPassword,
             aura::UiView::WifiDetails, aura::UiView::Clock, aura::UiView::ClockNew, aura::UiView::TimerNew,
             aura::UiView::AlarmNew, aura::UiView::ReminderNew, aura::UiView::Notes, aura::UiView::NoteNew,
@@ -1988,7 +1995,13 @@ int main(int argc, char** argv) {
         };
         std::vector<InteractionResult> results;
         auto record = [&](std::string action, std::string point, bool passed, std::string observed) {
-            results.push_back({std::move(action), std::move(point), passed, std::move(observed)});
+            // Observed text may quote anything (a raw reply): the report stays valid JSON.
+            std::string escaped;
+            for (const char ch : observed) {
+                if (ch == '"' || ch == '\\') escaped += '\\';
+                if (static_cast<unsigned char>(ch) >= 0x20) escaped += ch;
+            }
+            results.push_back({std::move(action), std::move(point), passed, std::move(escaped)});
         };
         auto pump = [&](int iterations = 9) {
             for (int i = 0; i < iterations; ++i) {
@@ -3050,18 +3063,34 @@ int main(int argc, char** argv) {
         record("status.mute", "button-center", audio.diagnostics().muted != status_muted_before,
                audio.diagnostics().muted ? "muted" : "unmuted");
 
-        reset_to(aura::UiView::Cards);
-        const auto view_before_disabled = ui.view();
-        const int total_callbacks_before = interaction_counts.ask + interaction_counts.provider + interaction_counts.audio_tone +
-            interaction_counts.audio_wav + interaction_counts.audio_pause + interaction_counts.audio_stop + interaction_counts.audio_mute;
-        tap(240, 240);
-        const int total_callbacks_after = interaction_counts.ask + interaction_counts.provider + interaction_counts.audio_tone +
-            interaction_counts.audio_wav + interaction_counts.audio_pause + interaction_counts.audio_stop + interaction_counts.audio_mute;
-        record("unavailable.search", "screen-center", ui.view() == view_before_disabled && total_callbacks_before == total_callbacks_after,
-               "inactive");
-
         // ---- v13 "Companion": real SDL taps on the new screens ----------------
         auto view_text = [&] { return std::to_string(static_cast<int>(ui.view())); };
+        // The label with this exact text anywhere under object, if any.
+        std::function<lv_obj_t*(lv_obj_t*, const char*)> find_text = [&](lv_obj_t* object,
+                                                                          const char* text) -> lv_obj_t* {
+            if (lv_obj_check_type(object, &lv_label_class) && std::strcmp(lv_label_get_text(object), text) == 0) {
+                return object;
+            }
+            for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                if (auto* found = find_text(lv_obj_get_child(object, static_cast<int32_t>(index)), text)) return found;
+            }
+            return nullptr;
+        };
+        auto shows_text = [&](const char* text) { return find_text(ui.root(), text) != nullptr; };
+        // Copy in either language.
+        auto shows_copy = [&](const char* aura::l10n::CompanionStrings::*field) {
+            return shows_text(aura::l10n::companion_el_gr().*field) || shows_text(aura::l10n::companion_en_us().*field);
+        };
+        // A visible, non-transparent object above the screens.
+        auto veil_visible = [] {
+            for (std::uint32_t index = 0; index < lv_obj_get_child_count(lv_layer_top()); ++index) {
+                auto* child = lv_obj_get_child(lv_layer_top(), static_cast<int32_t>(index));
+                if (!lv_obj_is_hidden(child) && lv_obj_get_style_bg_opa(child, LV_PART_MAIN) > 0) {
+                    return true;
+                }
+            }
+            return false;
+        };
         auto& clock_model = companion.clock();
         // Typing goes straight into the focused text area; the keyboard itself
         // is covered by the Wi-Fi and compose checks above.
@@ -3217,6 +3246,19 @@ int main(int argc, char** argv) {
                interaction_counts.radio_stop == radio_stop_before + 1 &&
                radio_model.snapshot().state == aura::RadioState::Idle,
                aura::radio_state_name(radio_model.snapshot().state));
+        {
+            // "Put the radio on" with no station plays the last one again.
+            const auto* resume = radio_model.station_to_resume();
+            const std::string resume_id = resume ? resume->id : std::string{};
+            start_turn("Βάλε ραδιόφωνο");
+            pump(2);
+            record("radio.resume_spoken", "last-station",
+                   !resume_id.empty() && ui.view() == aura::UiView::Radio &&
+                       radio_model.snapshot().state == aura::RadioState::Playing &&
+                       radio_model.snapshot().station.id == resume_id,
+                   aura::radio_state_name(radio_model.snapshot().state));
+            stop_radio();
+        }
 
         reset_to(aura::UiView::Radio);
         tap(432, 48);
@@ -3228,6 +3270,30 @@ int main(int argc, char** argv) {
                radio_search_opened && interaction_counts.radio_search == radio_search_before + 1 &&
                !radio_model.snapshot().results.empty(),
                std::to_string(radio_model.snapshot().results.size()));
+        {
+            // Radio, its search results and the conversation history swipe back
+            // like every other list (a swipe over a result never plays it);
+            // while typing, the keyboard keeps the swipe.
+            const int plays_before_swipe = interaction_counts.radio_play;
+            swipe(60, 300, 420, 300);
+            const bool results_back = ui.view() == aura::UiView::Radio &&
+                                      interaction_counts.radio_play == plays_before_swipe;
+            if (radio_model.snapshot().state != aura::RadioState::Idle) stop_radio();
+            reset_to(aura::UiView::Radio);
+            tap(432, 48);
+            swipe(60, 136, 420, 136);
+            const bool typing_kept = ui.view() == aura::UiView::RadioSearch;
+            reset_to(aura::UiView::Radio);
+            swipe(60, 300, 420, 300);
+            const bool radio_back = ui.view() == aura::UiView::Home;
+            reset_to(aura::UiView::ConversationHistory);
+            swipe(60, 300, 420, 300);
+            const bool history_back = ui.view() == aura::UiView::Home;
+            record("nav.swipe_back_lists", "radio-search-history",
+                   results_back && typing_kept && radio_back && history_back,
+                   std::to_string(results_back) + std::to_string(typing_kept) + std::to_string(radio_back) +
+                       std::to_string(history_back));
+        }
 
         reset_to(aura::UiView::Home);
         tap(240, 132);
@@ -3264,7 +3330,7 @@ int main(int argc, char** argv) {
         reset_to(aura::UiView::ClockNew);
         tap(220, 332);
         const bool reminder_form = ui.view() == aura::UiView::ReminderNew;
-        type_text("Πότισμα · DEMO");
+        type_text("DEMO · Πότισμα");
         tap(432, 48);
         const auto reminders_before = clock_model.snapshot().reminders.size();
         tap(220, 140);
@@ -3318,7 +3384,7 @@ int main(int argc, char** argv) {
         reset_to(aura::UiView::Notes);
         tap(352, 420);
         const bool note_form = ui.view() == aura::UiView::NoteNew;
-        type_text("Γραπτή σημείωση · DEMO");
+        type_text("DEMO · Γραπτή σημείωση");
         const auto typed_before = companion.notes().snapshot().notes.size();
         tap(432, 48);
         record("notes.typed", "save-header",
@@ -3328,6 +3394,38 @@ int main(int argc, char** argv) {
         reset_to(aura::UiView::Notes);
         tap(128, 420);
         record("notes.voice_without_mic", "disabled-button", ui.view() == aura::UiView::Notes, view_text());
+        {
+            // A voice note's page has a whole title ("Ηχογράφηση", not the bare
+            // adjective "Φωνητική") that fits the header uncut.
+            std::uint32_t voice_id = 0;
+            companion.notes().add_voice("note-demo.wav", 4000, 0, &voice_id);
+            reset_to(aura::UiView::Notes);
+            tap(220, 140);
+            record("notes.voice_header", "voice-note-title",
+                   ui.view() == aura::UiView::NoteDetail &&
+                       shows_copy(&aura::l10n::CompanionStrings::voice_note_header),
+                   view_text());
+            companion.notes().remove(voice_id);
+        }
+
+        {
+            // Every kept note is reachable from the list, the oldest too.
+            std::vector<std::uint32_t> filled;
+            std::uint32_t id = 0;
+            for (int index = 0; companion.notes().add_text("Σημείωση " + std::to_string(index) + " · DEMO", 0, &id) ==
+                                aura::NoteResult::Ok; ++index) {
+                filled.push_back(id);
+            }
+            reset_to(aura::UiView::Notes);
+            // One row per note, then the list's end spacer.
+            auto* list = find_scrollable(ui.root());
+            const std::uint32_t rows = list ? lv_obj_get_child_count(list) - 1 : 0;
+            record("notes.all_listed", "one-row-each",
+                   companion.notes().snapshot().notes.size() == aura::NotesModel::kMaxNotes &&
+                       rows == aura::NotesModel::kMaxNotes,
+                   std::to_string(rows));
+            for (const auto filled_id : filled) companion.notes().remove(filled_id);
+        }
 
         auto propose = [&](const char* reply) {
             controller.dispatch({aura::EventType::Reset});
@@ -3350,8 +3448,48 @@ int main(int argc, char** argv) {
         record("assistant.action_decline", "decline-button",
                clock_model.snapshot().timers.empty() && controller.snapshot().state == aura::AssistantState::Responding,
                aura::state_name(controller.snapshot().state));
+        // "In 1 minute", not "in 1 minutes".
+        propose("DEMO • Θα σου θυμίσω.\nACTION: {\"type\":\"reminder\",\"text\":\"DEMO\",\"in_minutes\":1}");
+        record("assistant.reminder_one_minute", "singular",
+               controller.snapshot().state == aura::AssistantState::ActionConfirmation &&
+                   shows_copy(&aura::l10n::CompanionStrings::action_in_one_minute),
+               aura::state_name(controller.snapshot().state));
+        tap(352, 420);
+        // An action that is not valid says so: never silence, never the raw line.
+        propose("ACTION: {\"type\":\"timer\",\"seconds\":-5}");
+        record("assistant.action_refused", "only-invalid-action",
+               controller.snapshot().state == aura::AssistantState::Responding && !companion.extras().pending_action &&
+                   shows_copy(&aura::l10n::CompanionStrings::action_refused) &&
+                   controller.snapshot().answer_text.find("ACTION") == std::string::npos,
+               controller.snapshot().answer_text);
         controller.dispatch({aura::EventType::Reset});
         apply();
+
+        // A streamed answer shows as it arrives, and each delta updates the
+        // same label instead of rebuilding the screen.
+        {
+            controller.dispatch({aura::EventType::TurnStarted, "Πες μου κάτι · DEMO"});
+            apply();
+            ui.show(aura::UiView::Assistant);
+            aura::AssistantStreamSnapshot update;
+            update.text = "DEMO • Πρώτη πρόταση.";
+            companion.deliver_stream_update(update);
+            apply();
+            pump(2);
+            int marker = 0;
+            auto* first = find_text(ui.root(), "DEMO • Πρώτη πρόταση.");
+            if (first) lv_obj_set_user_data(first, &marker);
+            update.text = "DEMO • Πρώτη πρόταση. Δεύτερη.";
+            companion.deliver_stream_update(update);
+            apply();
+            pump(2);
+            auto* second = find_text(ui.root(), "DEMO • Πρώτη πρόταση. Δεύτερη.");
+            record("assistant.partial_text", "shown-in-place",
+                   first && second && lv_obj_get_user_data(second) == &marker,
+                   std::to_string(first != nullptr) + std::to_string(second != nullptr));
+            controller.dispatch({aura::EventType::Reset});
+            apply();
+        }
 
         reset_to(aura::UiView::Launcher);
         tap(96, 188);
@@ -3372,6 +3510,16 @@ int main(int argc, char** argv) {
         record("offline.volume", "confirm-button",
                offline_volume_card && std::fabs(audio.diagnostics().volume - 0.35F) < 0.01F,
                aura::state_name(controller.snapshot().state));
+        // "Louder" without a number is one step up from the volume heard now.
+        start_turn("Δυνάμωσε την ένταση");
+        pump(4);
+        const bool step_card = controller.snapshot().state == aura::AssistantState::ActionConfirmation &&
+            companion.extras().pending_action && companion.extras().pending_action->relative &&
+            shows_text("+10%");
+        tap(128, 420);
+        record("offline.volume_step", "louder-confirm",
+               step_card && std::fabs(audio.diagnostics().volume - 0.45F) < 0.01F,
+               std::to_string(audio.diagnostics().volume));
 
         companion.organizer().clear();
         start_turn("Αγόρασε ψωμί");
@@ -3586,6 +3734,250 @@ int main(int argc, char** argv) {
         tap(220, settings_row_y(10, 680));
         record("settings.wake_word", "info-row", ui.view() == aura::UiView::Settings, view_text());
 
+        {
+            // Weather copy: a singular count, no "-0°", metric titles that fit in
+            // both languages and a toast in the interface language.
+            auto weather_check = weather_model.snapshot();
+            weather_check.state = aura::WeatherState::Ready;
+            weather_check.has_data = true;
+            weather_check.data = demo_tlesdetector_weather_data();
+            weather_check.data.temperature_c = -0.4F;
+            weather_check.sequence += 1000;
+            reset_to(aura::UiView::Weather);
+            ui.apply_weather(weather_check);
+            const auto& visual_el = aura::l10n::visual_el_gr();
+            const auto& visual_en = aura::l10n::visual_en_us();
+            const bool singular = shows_text(visual_el.weather_nearby_alert_one);
+            const bool no_negative_zero = shows_text("0°C") && !shows_text("-0°C");
+            // Every metric title cut short (with its full width), or empty.
+            auto title_cut = [&](const aura::l10n::VisualStrings& strings) -> std::string {
+                std::string cut;
+                for (const char* title : {strings.humidity, strings.wind, strings.feels_like, strings.weather_rain,
+                                          strings.weather_pressure, strings.weather_gusts, strings.weather_visibility,
+                                          strings.weather_uv, strings.weather_air_quality}) {
+                    auto* label = find_text(ui.root(), title);
+                    if (!label) {
+                        // A dotted label no longer holds its full text.
+                        lv_point_t full{};
+                        lv_text_get_size(&full, title, aura::ui::font_caption(), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+                        cut += std::to_string(full.x) + ";";
+                        continue;
+                    }
+                    lv_obj_update_layout(label);
+                    lv_point_t size{};
+                    lv_text_get_size(&size, title, lv_obj_get_style_text_font(label, LV_PART_MAIN),
+                                     lv_obj_get_style_text_letter_space(label, LV_PART_MAIN), 0, LV_COORD_MAX,
+                                     LV_TEXT_FLAG_NONE);
+                    if (size.x > lv_obj_get_content_width(label)) {
+                        cut += std::to_string(size.x) + ">" + std::to_string(lv_obj_get_content_width(label)) + ";";
+                    }
+                }
+                return cut;
+            };
+            // The widest demo values stay whole beside their icon.
+            std::string values_cut;
+            for (const char* value : {"1007 hPa", "46 km/h", "24 km/h", "41 AQI", "8.4 km"}) {
+                if (!find_text(ui.root(), value)) values_cut += std::string(value) + ";";
+            }
+            const auto greek_cut = title_cut(visual_el);
+            ui.set_language(aura::InterfaceLanguage::English);
+            const auto english_cut = title_cut(visual_en);
+            const bool greek_fit = greek_cut.empty();
+            const bool english_fit = english_cut.empty();
+            reset_to(aura::UiView::WeatherLocation);
+            auto offline = weather_check;
+            offline.state = aura::WeatherState::Offline;
+            offline.sequence += 1;
+            ui.apply_weather(offline);
+            const bool english_toast = find_text(lv_screen_active(), visual_en.weather_offline_title) != nullptr;
+            ui.set_language(aura::InterfaceLanguage::Greek);
+            auto restored = weather_model.snapshot();
+            restored.sequence = offline.sequence + 1;
+            ui.apply_weather(restored);
+            record("weather.copy", "singular-zero-titles-toast",
+                   singular && no_negative_zero && greek_fit && english_fit && english_toast && values_cut.empty(),
+                   std::to_string(singular) + std::to_string(no_negative_zero) + std::to_string(english_toast) +
+                       " " + greek_cut + " " + english_cut + " " + values_cut);
+        }
+
+        {
+            // The compose counter (characters left) reads whole beside the DEMO
+            // tag in both languages.
+            aoraton.select_room("demo-family");
+            ui.apply_aoraton(aoraton.snapshot());
+            reset_to(aura::UiView::AoratonCompose);
+            auto counter_whole = [&](const aura::l10n::CompanionStrings& strings) {
+                auto* area = lv_group_get_focused(lv_group_get_default());
+                const char* typed = area && lv_obj_check_type(area, &lv_textarea_class) ? lv_textarea_get_text(area) : "";
+                char expected[64];
+                std::snprintf(expected, sizeof(expected), strings.compose_left_format,
+                              static_cast<unsigned>(aura::aoraton_characters_left(typed ? typed : "",
+                                                                                  aoraton.snapshot().max_message_bytes)));
+                return find_text(ui.root(), expected) != nullptr;
+            };
+            const bool greek_counter = counter_whole(aura::l10n::companion_el_gr());
+            ui.set_language(aura::InterfaceLanguage::English);
+            const bool english_counter = counter_whole(aura::l10n::companion_en_us());
+            ui.set_language(aura::InterfaceLanguage::Greek);
+            record("aoraton.compose_counter", "whole-both-languages", greek_counter && english_counter,
+                   std::to_string(greek_counter) + std::to_string(english_counter));
+        }
+        {
+            // The note recorder says how long it listens and when it stops, uncut
+            // in both languages (a dictated note runs to 30 s, past short pauses).
+            reset_to(aura::UiView::NoteRecord);
+            const bool greek_whole = find_text(ui.root(), aura::l10n::companion_el_gr().recording_detail) != nullptr;
+            ui.set_language(aura::InterfaceLanguage::English);
+            const bool english_whole = find_text(ui.root(), aura::l10n::companion_en_us().recording_detail) != nullptr;
+            ui.set_language(aura::InterfaceLanguage::Greek);
+            const std::string greek_copy = aura::l10n::companion_el_gr().recording_detail;
+            record("notes.record_copy", "limits-uncut",
+                   greek_whole && english_whole && greek_copy.find("30") != std::string::npos,
+                   std::to_string(greek_whole) + std::to_string(english_whole));
+        }
+        {
+            // A sign-in that timed out tells the owner what to do; the server
+            // setup hint (Supabase redirect URLs) is for developer mode only.
+            auto timed_out = aoraton.snapshot();
+            timed_out.pairing = aura::AoratonPairingState::Error;
+            timed_out.last_error = "SIGN_IN_TIMEOUT";
+            timed_out.sequence += 1000;
+            reset_to(aura::UiView::AoratonPair);
+            ui.apply_aoraton(timed_out);
+            ui.show(aura::UiView::AoratonPair);
+            const bool owner_copy = shows_copy(&aura::l10n::CompanionStrings::aoraton_timeout_hint) &&
+                                    !shows_copy(&aura::l10n::CompanionStrings::aoraton_timeout_detail);
+            ui.set_developer_mode(true);
+            ui.show(aura::UiView::AoratonPair);
+            const bool developer_copy = shows_copy(&aura::l10n::CompanionStrings::aoraton_timeout_detail);
+            ui.set_developer_mode(false);
+            auto restored = aoraton.snapshot();
+            restored.sequence = timed_out.sequence + 1;
+            ui.apply_aoraton(restored);
+            record("aoraton.timeout_copy", "owner-or-developer", owner_copy && developer_copy,
+                   std::to_string(owner_copy) + std::to_string(developer_copy));
+
+            // The Status screen names the demo assistant without English copy
+            // (an earlier check switched to the live provider).
+            const bool was_live = live_provider;
+            select_provider(false);
+            pump(2);
+            reset_to(aura::UiView::Battery);
+            const std::string assistant_name = companion.extras().assistant_provider;
+            record("status.demo_provider", "no-english-name",
+                   !live_provider && !assistant_name.empty() && shows_text(assistant_name.c_str()) &&
+                       !shows_text("Demo Mode"),
+                   assistant_name);
+            if (was_live) select_provider(true);
+        }
+
+        // The simulator has no panel to dim, so a veil stands in for it; the
+        // device dims its backlight and must not get a veil on top of that.
+        aura::CompanionCapabilities panel_capabilities{};
+        panel_capabilities.panel_brightness = true;
+        panel_capabilities.power_button = true;
+        reset_to(aura::UiView::Home);
+        auto dimmed = companion.display().snapshot();
+        dimmed.mode = aura::DisplayMode::Dimmed;
+        dimmed.brightness_percent = 30;
+        dimmed.sequence += 1000;
+        ui.apply_display(dimmed);
+        const bool simulator_veil = veil_visible();
+        ui.set_capabilities(panel_capabilities);
+        const bool veil_after_capability = veil_visible();
+        dimmed.sequence += 1;
+        ui.apply_display(dimmed);
+        const bool device_veil = veil_visible();
+        record("display.dim_veil", "simulator-only", simulator_veil && !veil_after_capability && !device_veil,
+               std::to_string(simulator_veil) + std::to_string(veil_after_capability) + std::to_string(device_veil));
+        auto awake = companion.display().snapshot();
+        awake.sequence = dimmed.sequence + 1;
+        ui.apply_display(awake);
+
+        // Power off says how to come back: the side button on the device (only
+        // it wakes from deep sleep), a long press in the simulator.
+        reset_to(aura::UiView::System);
+        scroll_view_to(120);
+        tap(220, 356);
+        const bool device_copy = ui.view() == aura::UiView::SystemConfirm &&
+                                 shows_copy(&aura::l10n::CompanionStrings::system_power_off_detail_button) &&
+                                 !shows_copy(&aura::l10n::CompanionStrings::system_power_off_detail);
+        companion.set_capabilities(plain_capabilities);
+        pump(2);
+        reset_to(aura::UiView::System);
+        scroll_view_to(120);
+        tap(220, 356);
+        const bool simulator_copy = ui.view() == aura::UiView::SystemConfirm &&
+                                    shows_copy(&aura::l10n::CompanionStrings::system_power_off_detail) &&
+                                    !shows_copy(&aura::l10n::CompanionStrings::system_power_off_detail_button);
+        record("system.power_off_copy", "button-or-long-press", device_copy && simulator_copy,
+               std::to_string(device_copy) + std::to_string(simulator_copy));
+
+        {
+            // The always-on clock lights as little of the AMOLED as it can: its
+            // sky halo stays within the clock block, not the whole screen.
+            auto settings = companion.display().snapshot().settings;
+            const bool always_on_before = settings.always_on;
+            settings.always_on = true;
+            companion.display().set_settings(settings);
+            reset_to(aura::UiView::Home);
+            companion.display().sleep_now(companion.now_ms());
+            pump(3);
+            const bool asleep = ui.view() == aura::UiView::AlwaysOn;
+            int widest = 0;
+            std::function<void(lv_obj_t*)> measure = [&](lv_obj_t* object) {
+                if (!lv_obj_is_hidden(object) && lv_obj_get_style_bg_opa(object, LV_PART_MAIN) > 0 &&
+                    lv_color_brightness(lv_obj_get_style_bg_color(object, LV_PART_MAIN)) > 0) {
+                    widest = std::max(widest, static_cast<int>(lv_obj_get_width(object)));
+                }
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    measure(lv_obj_get_child(object, static_cast<int32_t>(index)));
+                }
+            };
+            lv_obj_update_layout(ui.root());
+            measure(ui.root());
+            tap(240, 240);
+            pump(3);
+            settings.always_on = always_on_before;
+            companion.display().set_settings(settings);
+            record("display.aod_glow", "lit-area", asleep && widest > 0 && widest <= 280, std::to_string(widest));
+        }
+        {
+            // Demo data leads with DEMO: a chip or row that cuts its text short
+            // ("Ζυμαρικά · D…") must still say it is DEMO. Runs last: the capture
+            // seeds change the clock and the stores.
+            companion.capture("home-timer");
+            companion.capture("calendar");
+            companion.capture("notes");
+            pump(2);
+            std::string unmarked;
+            auto check_label = [&](const std::string& label) {
+                if (label.find("DEMO") != std::string::npos && label.rfind("DEMO", 0) != 0) unmarked += label + ";";
+            };
+            for (const auto& timer : companion.clock().snapshot().timers) check_label(timer.label);
+            for (const auto& alarm : companion.clock().snapshot().alarms) check_label(alarm.label);
+            for (const auto& reminder : companion.clock().snapshot().reminders) check_label(reminder.text);
+            for (const auto& event : companion.organizer().snapshot().events) check_label(event.title);
+            for (const auto& task : companion.organizer().snapshot().tasks) check_label(task.text);
+            for (const auto& item : companion.organizer().snapshot().shopping) check_label(item.text);
+            for (const auto& note : companion.notes().snapshot().notes) check_label(note.text);
+            for (const auto& station : radio_model.snapshot().results) check_label(station.name);
+            record("capture.demo_first", "seed-labels", unmarked.empty(), unmarked);
+
+            // The owner's side of a translation speaks Greek in either interface
+            // language (every pair is Greek with another language).
+            companion.set_language(aura::InterfaceLanguage::English);
+            companion.capture("translate");
+            bool greek_mine = false;
+            for (const auto& entry : companion.translation().snapshot().entries) {
+                if (entry.side != aura::TranslateSide::Mine) continue;
+                greek_mine = std::any_of(entry.source.begin(), entry.source.end(),
+                                         [](char ch) { return static_cast<unsigned char>(ch) >= 0x80; });
+            }
+            companion.set_language(aura::InterfaceLanguage::Greek);
+            record("capture.translate_sides", "greek-mine-in-english", greek_mine, view_text());
+        }
+
         const std::size_t passed = static_cast<std::size_t>(std::count_if(results.begin(), results.end(),
             [](const InteractionResult& result) { return result.passed; }));
         std::filesystem::create_directories(std::filesystem::path(interaction_report).parent_path());
@@ -3711,7 +4103,6 @@ int main(int argc, char** argv) {
                 if (event.payload == "home") ui.show(aura::UiView::Home);
                 else if (event.payload == "launcher") ui.show(aura::UiView::Launcher);
                 else if (event.payload == "assistant") ui.show(aura::UiView::Assistant);
-                else if (event.payload == "cards") ui.show(aura::UiView::Cards);
                 else if (event.payload == "notifications") ui.show(aura::UiView::Notifications);
                 else if (event.payload == "settings") ui.show(aura::UiView::Settings);
                 else if (event.payload == "language") ui.show(aura::UiView::LanguageSettings);
@@ -3721,7 +4112,6 @@ int main(int argc, char** argv) {
                 else if (event.payload == "radio") ui.show(aura::UiView::Radio);
                 else if (event.payload == "radio-search") ui.show(aura::UiView::RadioSearch);
                 else if (event.payload == "aoraton") ui.show(aura::UiView::AoratonRooms);
-                else if (event.payload == "navigation") ui.show(aura::UiView::Navigation);
                 else if (event.payload == "weather") {
                     ui.show(aura::UiView::Weather);
                     open_weather();
@@ -3729,7 +4119,6 @@ int main(int argc, char** argv) {
                 else if (event.payload == "weather-settings") ui.show(aura::UiView::WeatherSettings);
                 else if (event.payload == "weather-location") ui.show(aura::UiView::WeatherLocation);
                 else if (event.payload == "calendar") ui.show(aura::UiView::Calendar);
-                else if (event.payload == "camera") ui.show(aura::UiView::Camera);
                 else if (event.payload == "battery") ui.show(aura::UiView::Battery);
                 else if (event.payload == "voice") ui.show(aura::UiView::VoiceSettings);
                 else if (event.payload == "wifi") ui.show(aura::UiView::Wifi);

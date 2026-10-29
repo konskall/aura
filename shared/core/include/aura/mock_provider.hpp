@@ -14,7 +14,8 @@ public:
     explicit MockProvider(std::uint32_t delay_ms = 850) : delay_ms_(delay_ms) {}
     std::future<AssistantReply> start_turn(TurnRequest request) override;
     void cancel() override;
-    const char* name() const noexcept override { return "Demo Mode"; }
+    // Shown as the assistant service on the Status screen, in any language.
+    const char* name() const noexcept override { return "DEMO"; }
 
 private:
     std::uint32_t delay_ms_;

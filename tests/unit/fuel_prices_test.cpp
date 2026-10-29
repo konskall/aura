@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <string>
 
 namespace {
 void expect(bool value, const char* message) {
@@ -43,5 +44,10 @@ int main() {
                fuel_refresh_interval_ms(FuelPriceSnapshot{}) <= 30U * 60U * 1000U,
            "missing, failed or stale prices are retried within half an hour");
     std::cout << "Fuel price tests passed\n";
+    expect(fuel_price_text(1912, ",") == "1,912", "Greek prices use a decimal comma");
+    expect(fuel_price_text(1912, ".") == "1.912", "English prices use a decimal point");
+    expect(fuel_price_text(1005, ".") == "1.005", "the thousandths keep their zeros");
+    expect(fuel_price_text(-1, ".") == "\u2014", "an unknown price is a dash");
+
     return 0;
 }

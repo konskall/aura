@@ -73,8 +73,8 @@ test('fuel endpoint is authenticated and fails closed when its cache is invalid'
   }
 });
 
-test('one active turn, cancellation, and recovery', async () => {
-  const runner = {
+function slowRunner() {
+  return {
     health: async () => ({ installed: true, loggedIn: true }),
     runTurn: ({ signal }) => new Promise((resolve) => {
       const timer = setTimeout(() => resolve({ ok: true, text: 'late' }), 2000);
@@ -84,20 +84,31 @@ test('one active turn, cancellation, and recovery', async () => {
       }, { once: true });
     }),
   };
+}
+
+test('a new question replaces the running one; cancellation and recovery', async () => {
+  const runner = slowRunner();
   await withServer(runner, async (base) => {
     const first = fetch(`${base}/v1/assistant/turn`, {
       method: 'POST', headers: headers(), body: JSON.stringify({ id: 'first', prompt: 'wait' }),
     });
     await new Promise((resolve) => setTimeout(resolve, 40));
-    const concurrent = await fetch(`${base}/v1/assistant/turn`, {
-      method: 'POST', headers: headers(), body: JSON.stringify({ id: 'second', prompt: 'busy' }),
+    // The same request again is a duplicate, not a new question.
+    const duplicate = await fetch(`${base}/v1/assistant/turn`, {
+      method: 'POST', headers: headers(), body: JSON.stringify({ id: 'first', prompt: 'wait' }),
     });
-    assert.equal(concurrent.status, 409);
+    assert.equal(duplicate.status, 409);
+    // A new question (its cancel of the old one may still be on the way) wins.
+    const second = fetch(`${base}/v1/assistant/turn`, {
+      method: 'POST', headers: headers(), body: JSON.stringify({ id: 'second', prompt: 'newer' }),
+    });
+    assert.equal((await first).status, 499);
+    await new Promise((resolve) => setTimeout(resolve, 40));
     const cancelled = await fetch(`${base}/v1/assistant/cancel`, {
-      method: 'POST', headers: headers(), body: JSON.stringify({ id: 'first' }),
+      method: 'POST', headers: headers(), body: JSON.stringify({ id: 'second' }),
     });
     assert.equal(cancelled.status, 200);
-    assert.equal((await first).status, 499);
+    assert.equal((await second).status, 499);
 
     runner.runTurn = async () => ({ ok: true, text: 'recovered' });
     const recovered = await fetch(`${base}/v1/assistant/turn`, {
@@ -108,6 +119,31 @@ test('one active turn, cancellation, and recovery', async () => {
   });
 });
 
+
+test('a translation runs beside a chat question', async () => {
+  const runner = slowRunner();
+  const slowTurn = runner.runTurn;
+  runner.runTurn = (request) => (/professional interpreter/.test(request.instructions) ?
+    Promise.resolve({ ok: true, text: 'Thank you' }) : slowTurn(request));
+  await withServer(runner, async (base) => {
+    const chat = fetch(`${base}/v1/assistant/turn`, {
+      method: 'POST', headers: headers(), body: JSON.stringify({ id: 'chat', prompt: 'wait' }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const translate = await fetch(`${base}/v1/assistant/turn`, {
+      method: 'POST', headers: headers(),
+      body: JSON.stringify({ id: 'tr', prompt: 'Ευχαριστώ', mode: 'translate', source: 'el', target: 'en' }),
+    });
+    assert.equal(translate.status, 200);
+    assert.equal((await translate.json()).text, 'Thank you');
+    // The chat question is still running: only its own cancel ends it.
+    const cancelled = await fetch(`${base}/v1/assistant/cancel`, {
+      method: 'POST', headers: headers(), body: JSON.stringify({ id: 'chat' }),
+    });
+    assert.equal(cancelled.status, 200);
+    assert.equal((await chat).status, 499);
+  });
+});
 
 test('turns send device facts, history and translation as built instructions', async () => {
   const seen = [];
@@ -231,7 +267,7 @@ test('stream endpoint emits bounded NDJSON deltas and an authoritative final rep
   });
 });
 
-test('speech endpoints: media type, busy guard and binary WAV replies', async () => {
+test('speech endpoints: media type, a queue instead of BUSY, and binary WAV replies', async () => {
   let release;
   const slow = new Promise((resolve) => { release = resolve; });
   const speech = fakeSpeech({
@@ -260,12 +296,14 @@ test('speech endpoints: media type, busy guard and binary WAV replies', async ()
       method: 'POST', headers: { ...headers(), 'content-type': 'audio/wav' }, body: Buffer.alloc(64),
     });
     await new Promise((resolve) => setTimeout(resolve, 40));
-    const busy = await fetch(`${base}/v1/speech/synthesize`, {
+    // A second job waits its turn instead of failing BUSY.
+    const queued = fetch(`${base}/v1/speech/synthesize`, {
       method: 'POST', headers: headers(), body: JSON.stringify({ text: 'Γεια', lang: 'el' }),
     });
-    assert.equal(busy.status, 409);
+    await new Promise((resolve) => setTimeout(resolve, 40));
     release();
     assert.deepEqual(await (await first).json(), { ok: true, text: 'el:64' });
+    assert.equal((await queued).status, 200);
     const spoken = await fetch(`${base}/v1/speech/synthesize`, {
       method: 'POST', headers: headers(), body: JSON.stringify({ text: 'Γεια', lang: 'el' }),
     });

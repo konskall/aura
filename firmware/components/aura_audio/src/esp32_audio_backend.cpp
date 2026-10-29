@@ -93,13 +93,18 @@ void Esp32AudioBackend::shutdown() {
     xSemaphoreGive(mutex_);
 }
 
-bool Esp32AudioBackend::play_pcm(const PcmClip& clip) {
+bool Esp32AudioBackend::play_pcm(const PcmClip& clip) { return play_clip(clip, false); }
+
+bool Esp32AudioBackend::play_alert(const PcmClip& clip) { return play_clip(clip, true); }
+
+bool Esp32AudioBackend::play_clip(const PcmClip& clip, bool alert) {
     if (!mutex_ || !codec_ || clip.samples.empty() || clip.samples.size() > kMaxPcmSamples ||
         clip.format.bits_per_sample != 16 || clip.format.channels < 1 || clip.format.channels > 2 ||
         (clip.format.sample_rate != 16000 && clip.format.sample_rate != 24000)) return false;
     stop();
     xSemaphoreTake(mutex_, portMAX_DELAY);
     clip_ = clip;
+    alert_clip_ = alert;
     pending_wav_path_.clear();
     cursor_ = 0;
     ++generation_;
@@ -159,6 +164,7 @@ bool Esp32AudioBackend::play_wav(const std::string& path) {
     stop();
     xSemaphoreTake(mutex_, portMAX_DELAY);
     pending_wav_path_ = path;
+    alert_clip_ = false;
     clip_.samples.clear();
     cursor_ = 0;
     ++generation_;
@@ -218,6 +224,7 @@ void Esp32AudioBackend::stop() {
     diagnostics_.buffered_frames = 0;
     clip_.samples.clear();
     pending_wav_path_.clear();
+    alert_clip_ = false;
     xSemaphoreGive(mutex_);
     amplifier_.disable();
 }
@@ -315,9 +322,15 @@ void Esp32AudioBackend::playback_task() {
         machine_.dispatch(AudioCommand::BeginPlayback);
         diagnostics_.state = machine_.state();
         const bool muted = diagnostics_.muted;
+        const bool alert = alert_clip_;
+        const float owner_volume = diagnostics_.volume;
         xSemaphoreGive(mutex_);
-        // A muted device stays muted for new clips; set_muted(false) unmutes.
-        if (!muted) amplifier_.enable();
+        // A muted device stays muted for new clips (set_muted(false) unmutes),
+        // except a clock alert: it rings through mute, never below the alert minimum.
+        if (alert) {
+            esp_codec_dev_set_out_vol(codec_, static_cast<int>(playback_gain(owner_volume, muted, true) * 100.0F));
+        }
+        if (!muted || alert) amplifier_.enable();
 
         bool failed = false;
         for (;;) {
@@ -340,7 +353,7 @@ void Esp32AudioBackend::playback_task() {
             cursor_ += count;
             float peak = 0.0F;
             for (std::size_t i = 0; i < count; ++i) peak = std::max(peak, std::abs(static_cast<float>(chunk[i])) / 32768.0F);
-            diagnostics_.envelope = diagnostics_.muted ? 0.0F : diagnostics_.envelope * 0.7F + peak * 0.3F;
+            diagnostics_.envelope = diagnostics_.muted && !alert ? 0.0F : diagnostics_.envelope * 0.7F + peak * 0.3F;
             diagnostics_.progress = static_cast<float>(cursor_) / clip_.samples.size();
             diagnostics_.buffered_frames = (clip_.samples.size() - cursor_) / std::max<std::uint8_t>(1, format.channels);
             xSemaphoreGive(mutex_);
@@ -348,6 +361,13 @@ void Esp32AudioBackend::playback_task() {
                 failed = true;
                 break;
             }
+        }
+        if (alert) {
+            // Back to the owner's level for everything else.
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            const float volume = diagnostics_.volume;
+            xSemaphoreGive(mutex_);
+            esp_codec_dev_set_out_vol(codec_, static_cast<int>(volume * 100.0F));
         }
         amplifier_.disable();
         esp_codec_dev_close(codec_);

@@ -171,6 +171,10 @@ struct VisualStrings {
     const char* typography_roles[6];
     const char* send_action;
     const char* wifi_connecting;
+    // Exactly one (the formats above are the plural forms).
+    const char* weather_active_alert_one;
+    const char* weather_nearby_alert_one;
+    const char* weather_nearby_lightning_one_minute_format;  // %.0f km
 };
 
 const VisualStrings& visual_el_gr() noexcept;

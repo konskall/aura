@@ -163,6 +163,17 @@ const char* state_name(AssistantState state) noexcept {
     return "UNKNOWN";
 }
 
+bool holds_screen_awake(const AssistantSnapshot& snapshot) noexcept {
+    switch (snapshot.state) {
+        case AssistantState::WakeDetected:
+        case AssistantState::Listening:
+        case AssistantState::Transcribing:
+        case AssistantState::Thinking: return true;
+        case AssistantState::Responding: return !snapshot.partial_text.empty();
+        default: return false;
+    }
+}
+
 bool is_turn_active(AssistantState state) noexcept {
     return state == AssistantState::WakeDetected || state == AssistantState::Listening ||
            state == AssistantState::Transcribing || state == AssistantState::Thinking ||

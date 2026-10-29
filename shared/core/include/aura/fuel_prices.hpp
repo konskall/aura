@@ -42,6 +42,8 @@ std::optional<FuelPriceData> parse_fuel_price_json(std::string_view json);
 bool fuel_prices_stale(const FuelPriceData& data, int current_year, int current_month, int current_day,
                        int maximum_age_days = 14) noexcept;
 const char* fuel_price_state_name(FuelPriceState state) noexcept;
+// "1,912" or "1.912" (the interface language's separator); "—" when unknown.
+std::string fuel_price_text(int millieur_per_litre, const char* decimal_separator);
 // How long until the prices should be fetched again: every 6 hours when they
 // are current, every 15 minutes while they are missing, failed or stale.
 std::uint32_t fuel_refresh_interval_ms(const FuelPriceSnapshot& snapshot) noexcept;

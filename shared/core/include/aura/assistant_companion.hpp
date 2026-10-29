@@ -88,6 +88,7 @@ struct AssistantAction {
     std::int64_t start_minute{0};  // CalendarEvent
     std::uint32_t duration_minutes{60};
     int value{0};        // Volume/Brightness percentage, Mute: 0 or 1
+    bool relative{false};  // Volume: `value` is a step ("louder": +10)
 };
 
 struct ParsedAnswer {
@@ -99,6 +100,13 @@ struct ParsedAnswer {
 // Splits an answer into display text and an optional final
 // `ACTION: {json}` line (see bridge/src/turn-prompt.mjs).
 ParsedAnswer parse_assistant_answer(const std::string& raw);
+
+// What the answer screen shows: the model's text; `action_question` when an
+// action came without words; and `refused_note` under it when the proposed
+// action was refused, so the owner never believes it was done. Never the raw
+// ACTION line.
+std::string answer_display_text(const ParsedAnswer& parsed, const std::string& action_question,
+                                const std::string& refused_note);
 
 // When a reminder "at HH:MM" is due: today if still ahead, else tomorrow
 // (or tomorrow when asked). Returns a minute_index().

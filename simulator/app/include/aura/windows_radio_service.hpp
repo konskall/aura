@@ -17,12 +17,6 @@ namespace aura::simulator {
 
 class WindowsAudioBackend;
 
-struct RadioSearchResult {
-    bool ok{false};
-    std::vector<RadioStation> stations;
-    std::string error_code;
-};
-
 // Reconnecting: the stream dropped and is being joined again (text: why).
 enum class RadioWorkerEventType { Playing, Title, Reconnecting, Failed };
 

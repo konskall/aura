@@ -23,6 +23,7 @@ public:
     bool initialize() override;
     void shutdown() override;
     bool play_pcm(const PcmClip& clip) override;
+    bool play_alert(const PcmClip& clip) override;
     bool play_wav(const std::string& path) override;
     bool play_test_tone(std::uint32_t duration_ms = 900) override;
     bool pause() override;
@@ -36,6 +37,7 @@ public:
 private:
     static void task_entry(void* context);
     void playback_task();
+    bool play_clip(const PcmClip& clip, bool alert);
     bool load_pcm_wav(const std::string& path, PcmClip& clip);
     void set_error_locked(const char* code);
 
@@ -49,6 +51,7 @@ private:
     std::string pending_wav_path_;
     std::size_t cursor_{0};
     std::uint32_t generation_{0};
+    bool alert_clip_{false};  // a clock alert: heard through mute (playback_gain)
     bool shutting_down_{false};
 };
 

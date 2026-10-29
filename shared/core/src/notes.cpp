@@ -3,6 +3,7 @@
 #include "aura/text_util.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <sstream>
 
@@ -212,6 +213,42 @@ bool NotesModel::restore(const std::string& data) {
 bool question_mentions_notes(const std::string& question) {
     const auto folded = fold_text(question);
     return folded_contains_any(folded, {"σημειωσ", "σημειωμ", "σημειωσα", "σημειωνα", "note", "notes", "memo"});
+}
+
+std::string voice_note_file_name(std::int64_t minute, std::uint32_t counter, std::uint32_t nonce) {
+    char name[64];
+    std::snprintf(name, sizeof(name), "note-%lld-%lu-%08lx.wav", static_cast<long long>(std::max<std::int64_t>(minute, 0)),
+                  static_cast<unsigned long>(counter), static_cast<unsigned long>(nonce));
+    return name;
+}
+
+bool NoteTranscriptions::start(std::uint32_t note, std::future<TranscriptResult> job, NotesModel& notes) {
+    if (jobs_.size() >= kMaxPending || !job.valid()) {
+        notes.set_transcript_failed(note);
+        return false;
+    }
+    jobs_.push_back({note, std::move(job)});
+    return true;
+}
+
+void NoteTranscriptions::poll(NotesModel& notes) {
+    for (auto job = jobs_.begin(); job != jobs_.end();) {
+        if (job->result.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+            ++job;
+            continue;
+        }
+        const auto result = job->result.get();
+        if (result.ok) notes.set_transcript(job->note, result.text);
+        else notes.set_transcript_failed(job->note);
+        job = jobs_.erase(job);
+    }
+}
+
+std::vector<std::future<TranscriptResult>> NoteTranscriptions::release() {
+    std::vector<std::future<TranscriptResult>> pending;
+    for (auto& job : jobs_) pending.push_back(std::move(job.result));
+    jobs_.clear();
+    return pending;
 }
 
 }  // namespace aura

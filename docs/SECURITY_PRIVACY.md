@@ -1,6 +1,6 @@
 # Security and privacy
 
-The local bridge binds only to `127.0.0.1`, rejects non-loopback peers and unapproved browser origins, requires a bearer token, limits JSON body/prompt/output sizes, permits one turn at a time, and enforces timeout/cancellation. Prompts, answers, credentials and tokens are not logged by default.
+The local bridge binds only to `127.0.0.1`, rejects non-loopback peers and unapproved browser origins, requires a bearer token, limits JSON body/prompt/output sizes, runs at most one chat turn and one translation at a time (a newer question replaces the one still running, and a repeated id is refused), runs speech jobs one at a time in arrival order (at most four waiting or running), and enforces timeout/cancellation. Prompts, answers, credentials and tokens are not logged by default.
 
 Codex is spawned with an argument array and `shell: false`, receives its prompt through standard input and runs in an isolated minimal directory with read-only/ephemeral restrictions. The bridge does not read or print authentication files. Saved ChatGPT authentication is reused by the CLI and is not equivalent to production API entitlement.
 

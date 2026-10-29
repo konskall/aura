@@ -62,6 +62,55 @@ void station_tests() {
     expect(path.find("countrycode=GR") != std::string::npos && path.find("codec=MP3") != std::string::npos &&
                path.find("%26") != std::string::npos,
            "Greek MP3 stations only, and '&' cannot inject a parameter");
+    const auto worldwide = radio_browser_search_path("BBC Radio", RadioModel::kMaxResults, true);
+    expect(worldwide.find("countrycode") == std::string::npos && worldwide.find("codec=MP3") != std::string::npos,
+           "the worldwide search drops only the country");
+
+    // A name with no Greek station is looked up worldwide; a Greek hit or a
+    // directory failure is asked once.
+    std::vector<std::string> asked;
+    const auto found = search_radio_directory("BBC Radio 1", [&](const std::string& path) {
+        asked.push_back(path);
+        RadioSearchResult reply;
+        reply.ok = true;
+        if (path.find("countrycode=GR") == std::string::npos) reply.stations.push_back(greek_default_stations().front());
+        return reply;
+    });
+    expect(found.ok && found.stations.size() == 1 && asked.size() == 2 &&
+               asked[0].find("countrycode=GR") != std::string::npos &&
+               asked[1].find("countrycode") == std::string::npos,
+           "no Greek station: the same name is searched worldwide");
+    asked.clear();
+    const auto greek = search_radio_directory("Sfera", [&](const std::string& path) {
+        asked.push_back(path);
+        RadioSearchResult reply;
+        reply.ok = true;
+        reply.stations.push_back(greek_default_stations().front());
+        return reply;
+    });
+    expect(greek.ok && greek.stations.size() == 1 && asked.size() == 1, "a Greek hit is asked once");
+    asked.clear();
+    const auto failed = search_radio_directory("Sfera", [&](const std::string& path) {
+        asked.push_back(path);
+        RadioSearchResult reply;
+        reply.error_code = "RADIO_DIRECTORY_UNAVAILABLE";
+        return reply;
+    });
+    expect(!failed.ok && failed.error_code == "RADIO_DIRECTORY_UNAVAILABLE" && asked.size() == 1,
+           "a directory failure is not asked again worldwide");
+
+    // "Βάλε ραδιόφωνο" plays: the station heard last, else the first favourite.
+    RadioModel resume;
+    expect(resume.station_to_resume() && resume.station_to_resume()->id == resume.snapshot().favorites.front().id,
+           "a first radio request plays the first favourite");
+    const auto heard = resume.snapshot().favorites.at(2);
+    resume.begin_connect(heard);
+    resume.stop();
+    expect(resume.station_to_resume() && resume.station_to_resume()->id == heard.id,
+           "afterwards it plays the station heard last");
+    RadioModel empty;
+    empty.restore_favorites("aura-radio 1\n");
+    expect(!empty.station_to_resume(), "nothing to resume without stations");
 
     expect(analyze_radio_intent("Άνοιξε το ραδιόφωνο").kind == RadioIntentKind::PlayStation,
            "Greek open-radio intent");

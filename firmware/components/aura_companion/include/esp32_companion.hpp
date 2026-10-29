@@ -99,8 +99,7 @@ private:
     int applied_brightness_{-1};
     bool button_down_{false};
     std::uint64_t button_since_ms_{0};
-    std::uint64_t chime_next_ms_{0};
-    std::uint64_t alert_since_ms_{0};
+    AlarmRinger alarm_ringer_;  // one melody pass per cycle, through mute
     MessageChimeGate message_chime_;
     SoundSettings sound_{};
     std::uint64_t chime_phone_sequence_{0};
@@ -113,6 +112,11 @@ private:
     std::string saved_organizer_text_;
     std::string saved_sound_text_;
     SettingSettle sound_settle_;  // a dragged volume slider is written once it rests
+    // Settings are compared as values each poll; text is built only after a change.
+    SoundSettings seen_sound_{};
+    bool sound_pending_{false};
+    std::uint64_t saved_display_sequence_{0};
+    std::uint64_t saved_layout_sequence_{0};
     std::string saved_display_text_;
     std::string saved_language_text_;
     std::string saved_layout_text_;

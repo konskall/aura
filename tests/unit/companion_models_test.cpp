@@ -13,8 +13,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <future>
 #include <iostream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -142,6 +145,32 @@ void clock_tests() {
     expect(restored.snapshot().alert && restored.snapshot().alert->kind == ClockAlertKind::Reminder,
            "an overdue reminder still fires after a restart");
 
+    // A snoozed reminder and an alert still waiting for the owner survive a restart.
+    ClockServicesModel snoozing;
+    snoozing.set_clock(at(2026, 10, 22, 9, 0));
+    snoozing.add_reminder_in(1, "Ραντεβού");
+    snoozing.set_clock(at(2026, 10, 22, 9, 1));
+    expect(snoozing.snooze_alert(5) == ClockResult::Ok && !snoozing.snapshot().alert, "a reminder is snoozed");
+    ClockServicesModel after_snooze;
+    expect(after_snooze.restore(snoozing.serialize()) && !after_snooze.snapshot().alert, "the snooze is restored");
+    after_snooze.set_clock(at(2026, 10, 22, 9, 6));
+    expect(after_snooze.snapshot().alert && after_snooze.snapshot().alert->kind == ClockAlertKind::Reminder &&
+           after_snooze.snapshot().alert->label == "Ραντεβού", "a snoozed reminder rings after a restart");
+    ClockServicesModel unanswered;
+    unanswered.set_clock(at(2026, 10, 22, 9, 0));
+    unanswered.start_timer(60, "Αυγά");
+    unanswered.tick(60000);
+    expect(unanswered.snapshot().alert.has_value(), "a timer rings");
+    ClockServicesModel after_alert;
+    expect(after_alert.restore(unanswered.serialize()) && after_alert.snapshot().alert &&
+           after_alert.snapshot().alert->kind == ClockAlertKind::Timer &&
+           after_alert.snapshot().alert->label == "Αυγά" && after_alert.snapshot().alert->duration_s == 60,
+           "an alert nobody answered rings again after a restart");
+    after_alert.dismiss_alert();
+    ClockServicesModel after_dismiss;
+    expect(after_dismiss.restore(after_alert.serialize()) && !after_dismiss.snapshot().alert,
+           "a dismissed alert stays dismissed");
+
     ClockServicesModel backwards;
     backwards.add_alarm(8, 0, true, "");
     backwards.set_clock(at(2026, 10, 22, 8, 5));
@@ -180,6 +209,52 @@ void notes_tests() {
     expect(restored.remove(voice, &removed_file) == NoteResult::Ok && removed_file == "note-2.wav",
            "deleting a voice note reports its file");
     expect(question_mentions_notes("ΣΗΜΕΙΏΣΕΙΣ") && !question_mentions_notes("τι ώρα είναι"), "notes intent");
+
+    // Voice-note files stay unique when the clock is unknown or the counter
+    // restarts with the device: a new note never overwrites an old one's audio.
+    const auto unknown_clock = voice_note_file_name(0, 1, 0x1234abcdU);
+    expect(unknown_clock != voice_note_file_name(0, 1, 0x00c0ffeeU), "the random part separates restarts");
+    const auto longest = voice_note_file_name(INT64_MAX / 2, UINT32_MAX, UINT32_MAX);
+    NotesModel named;
+    expect(named.add_voice(unknown_clock, 1000, 0) == NoteResult::Ok &&
+           named.add_voice(longest, 1000, 0) == NoteResult::Ok, "generated names are safe note file names");
+
+    // A transcription keeps its note: a spoken question or a cancelled listen
+    // in the meantime never drops it.
+    NotesModel pending;
+    std::uint32_t first_note = 0;
+    std::uint32_t second_note = 0;
+    pending.add_voice("note-a.wav", 1000, 0, &first_note);
+    pending.add_voice("note-b.wav", 1000, 0, &second_note);
+    NoteTranscriptions jobs;
+    std::promise<TranscriptResult> first_job;
+    std::promise<TranscriptResult> second_job;
+    expect(jobs.start(first_note, first_job.get_future(), pending) &&
+           jobs.start(second_note, second_job.get_future(), pending), "two notes transcribe at once");
+    second_job.set_value({true, "Δεύτερη σημείωση", {}});
+    jobs.poll(pending);
+    expect(pending.find(second_note)->transcript == NoteTranscript::Ready &&
+           pending.find(second_note)->text == "Δεύτερη σημείωση" &&
+           pending.find(first_note)->transcript == NoteTranscript::Pending, "each result reaches its own note");
+    first_job.set_value({false, {}, "STT_FAILED"});
+    jobs.poll(pending);
+    expect(pending.find(first_note)->transcript == NoteTranscript::Failed && jobs.empty(),
+           "a failed transcription is marked on its note");
+    std::vector<std::promise<TranscriptResult>> waiting(NoteTranscriptions::kMaxPending + 1);
+    std::vector<std::uint32_t> waiting_notes;
+    for (std::size_t index = 0; index < waiting.size(); ++index) {
+        std::uint32_t id = 0;
+        pending.add_voice("note-w" + std::to_string(index) + ".wav", 1000, 0, &id);
+        waiting_notes.push_back(id);
+    }
+    for (std::size_t index = 0; index < NoteTranscriptions::kMaxPending; ++index) {
+        jobs.start(waiting_notes[index], waiting[index].get_future(), pending);
+    }
+    expect(!jobs.start(waiting_notes.back(), waiting.back().get_future(), pending) &&
+           pending.find(waiting_notes.back())->transcript == NoteTranscript::Failed,
+           "too many at once: the extra note is marked, not left waiting");
+    expect(jobs.release().size() == NoteTranscriptions::kMaxPending && jobs.empty(),
+           "unfinished jobs can be handed over at shutdown");
 }
 
 void assistant_tests() {
@@ -235,6 +310,21 @@ void assistant_tests() {
     parsed = parse_assistant_answer("plain answer");
     expect(!parsed.action && !parsed.action_rejected && parsed.text == "plain answer", "plain answers pass through");
 
+    // A refused action says so: the owner never believes something was done.
+    parsed = parse_assistant_answer("Βάζω υπενθύμιση.\nACTION: {\"type\":\"reminder\",\"time\":\"25:00\",\"text\":\"x\"}");
+    const auto refused = answer_display_text(parsed, "Να το κάνω;", "Δεν έγινε τίποτα.");
+    expect(refused.rfind("Βάζω υπενθύμιση.", 0) == 0 && refused.find("Δεν έγινε τίποτα.") != std::string::npos,
+           "a refused action is reported under the answer");
+    parsed = parse_assistant_answer("ACTION: {\"type\":\"volume\",\"value\":40}");
+    expect(answer_display_text(parsed, "Να το κάνω;", "Δεν έγινε τίποτα.") == "Δεν έγινε τίποτα.",
+           "the raw ACTION line is never shown");
+    parsed = parse_assistant_answer("ACTION: {\"type\":\"timer\",\"seconds\":60}");
+    expect(answer_display_text(parsed, "Να το κάνω;", "Δεν έγινε τίποτα.") == "Να το κάνω;",
+           "an action alone asks for confirmation");
+    parsed = parse_assistant_answer("Μόνο κείμενο");
+    expect(answer_display_text(parsed, "Να το κάνω;", "Δεν έγινε τίποτα.") == "Μόνο κείμενο",
+           "an ordinary answer is shown as it is");
+
     DeviceStatusModel status;
     status.set_clock(14, 5, StatusOrigin::Live);
     status.set_date(2026, 10, 22, 4, StatusOrigin::Live);
@@ -252,6 +342,56 @@ void assistant_tests() {
     expect(context.find("14:05, Thursday 2026-10-22") != std::string::npos && context.find("78% (simulated)") !=
            std::string::npos && context.find("10:00 left") != std::string::npos, "device facts are summarised");
     expect(context.find("4321") == std::string::npos, "notes are not shared with unrelated questions");
+
+    // The facts a question asks for come first: a crowded context loses
+    // general facts, never the notes the owner asked about.
+    ClockServicesModel crowded;
+    crowded.set_clock(at(2026, 10, 22, 14, 5));
+    for (int index = 0; index < 8; ++index) {
+        crowded.add_alarm(6 + index, 15, index % 2 == 0, "Ξυπνητήρι με αρκετά μεγάλη ετικέτα " + std::to_string(index));
+    }
+    for (int index = 0; index < 5; ++index) {
+        crowded.add_reminder_in(30 + index, std::to_string(index) + " υπενθύμιση με πολύ μεγάλο κείμενο για να "
+                                "γεμίσει εντελώς το πλαίσιο της συσκευής και να μη χωράει τίποτα άλλο εδώ");
+    }
+    for (int index = 0; index < 4; ++index) crowded.start_timer(600 + index, "Χρονόμετρο " + std::to_string(index));
+    NotesModel many_notes;
+    many_notes.add_text("ΠΑΛΙΑ-ΣΗΜΕΙΩΣΗ: ο κωδικός της αποθήκης είναι στο συρτάρι της κουζίνας", 0);
+    for (int index = 0; index < 7; ++index) {
+        many_notes.add_text("Σημείωση " + std::to_string(index) + ": λίστα με πολλά πράγματα που πρέπει να θυμάμαι "
+                            "για το ταξίδι στη Σπάρτη και τη δουλειά της εβδομάδας", 0);
+    }
+    // A full forecast, as the device always sends one.
+    WeatherSnapshot forecast;
+    forecast.has_data = true;
+    forecast.data.location.name = "Σπάρτη";
+    forecast.data.observed_at = "2026-10-22T14:00";
+    forecast.data.hourly_count = std::min<std::size_t>(8, forecast.data.hourly.size());
+    for (std::size_t index = 0; index < forecast.data.hourly_count; ++index) {
+        forecast.data.hourly[index].time = "2026-10-22T" + std::to_string(10 + index) + ":00";
+    }
+    forecast.data.daily_count = std::min<std::size_t>(5, forecast.data.daily.size());
+    for (std::size_t index = 0; index < forecast.data.daily_count; ++index) {
+        forecast.data.daily[index].date = "2026-10-2" + std::to_string(2 + index);
+    }
+    FuelPriceSnapshot fuel;
+    fuel.state = FuelPriceState::Ready;
+    fuel.data.period_date = "2026-10-19";
+    fuel.data.source = "European Commission Weekly Oil Bulletin";
+    fuel.data.unleaded95_millieur_per_litre = 1912;
+    fuel.data.diesel_millieur_per_litre = 1634;
+    DeviceContextInput crowded_input;
+    crowded_input.status = &status.snapshot();
+    crowded_input.weather = &forecast;
+    crowded_input.fuel = &fuel;
+    crowded_input.unread_messages = 3;
+    crowded_input.clock = &crowded;
+    crowded_input.notes = &many_notes;
+    crowded_input.question = "Τι έχω στις σημειώσεις μου;";
+    const auto crowded_context = build_device_context(crowded_input);
+    expect(crowded_context.size() <= 3000 && crowded_context.find("ΠΑΛΙΑ-ΣΗΜΕΙΩΣΗ") != std::string::npos,
+           "the asked-for notes survive a crowded context");
+    expect(crowded_context.find("local time: 14:05") != std::string::npos, "the time still leads the facts");
 
     TurnRequest request;
     request.prompt = "Βάλε χρονόμετρο";
@@ -304,6 +444,18 @@ void briefing_tests() {
            "the briefing opens once a morning");
     status.set_clock(13, 0, StatusOrigin::Live);
     expect(!should_auto_show_briefing(status.snapshot(), today - 1), "not in the afternoon");
+
+    // With several timers, "Today" names the one that ends first.
+    ClockServicesModel kitchen;
+    kitchen.start_timer(60, "Αυγά");
+    kitchen.start_timer(900, "Φούρνος");
+    BriefingInput timer_input;
+    timer_input.clock = &kitchen.snapshot();
+    const auto timer_briefing = build_briefing(timer_input);
+    const auto timers = std::find_if(timer_briefing.items.begin(), timer_briefing.items.end(),
+                                     [](const BriefingItem& value) { return value.kind == BriefingItemKind::Timers; });
+    expect(timers != timer_briefing.items.end() && timers->count == 2 && timers->value == 60 && timers->text == "Αυγά",
+           "the briefing names the timer that ends first");
 }
 
 void translation_tests() {
@@ -628,6 +780,22 @@ void voice_tests() {
     recorder.start();
     for (int index = 0; index < 61; ++index) recorder.append(quiet.data(), quiet.size());
     expect(recorder.no_speech() && recorder.should_stop(), "no speech at all stops after six seconds");
+
+    // A dictated note may pause to think and may last half a minute.
+    VoiceRecorder dictation;
+    dictation.start(VoiceRecorder::Mode::Dictation);
+    for (int index = 0; index < 10; ++index) dictation.append(voice.data(), voice.size());
+    for (int index = 0; index < 20; ++index) dictation.append(quiet.data(), quiet.size());
+    expect(!dictation.should_stop(), "a two-second pause does not end a dictated note");
+    for (int index = 0; index < 16; ++index) dictation.append(quiet.data(), quiet.size());
+    expect(dictation.should_stop(), "a long pause ends it");
+    dictation.start(VoiceRecorder::Mode::Dictation);
+    for (int index = 0; index < 320; ++index) dictation.append(voice.data(), voice.size());
+    expect(dictation.should_stop() && dictation.elapsed_ms() == VoiceRecorder::kDictationMaxMs &&
+           VoiceRecorder::kDictationMaxMs == 30000U, "a dictated note lasts up to 30 seconds");
+    recorder.start();
+    for (int index = 0; index < 200; ++index) recorder.append(voice.data(), voice.size());
+    expect(recorder.elapsed_ms() == VoiceRecorder::kMaxMs, "a spoken question still stops at 15 seconds");
     const std::uint8_t garbage[48]{};
     expect(!parse_wav(garbage, sizeof(garbage), clip), "garbage is not a WAV");
 
@@ -704,6 +872,44 @@ void sound_tests() {
            "alarm loudness is clamped");
     expect(alarm_loudness(0) < alarm_loudness(15000) && alarm_loudness(15000) < alarm_loudness(30000) &&
            alarm_loudness(30000) == 1.0F && alarm_loudness(600000) == 1.0F, "alarm loudness rises to full in 30 s");
+
+    // One ringer for both platforms. The melody is synthesised once; each pass
+    // only scales it, so ringing does not stall the UI thread every cycle.
+    const auto same_samples = [](const PcmClip& left, const PcmClip& right) {
+        if (left.samples.size() != right.samples.size()) return false;
+        for (std::size_t index = 0; index < left.samples.size(); ++index) {
+            if (std::abs(left.samples[index] - right.samples[index]) > 1) return false;
+        }
+        return true;
+    };
+    AlarmRinger ringer;
+    expect(ringer.next(false, false, false, 1000) == nullptr, "nothing rings without an alert");
+    const auto* first_pass = ringer.next(true, false, false, 5000);
+    expect(first_pass && same_samples(*first_pass, make_alarm_melody(alarm_loudness(0))),
+           "an alert rings at once, at 30 %");
+    expect(ringer.next(true, false, false, 6000) == nullptr, "the next pass waits for its cycle");
+    expect(ringer.next(true, false, true, 7100) == nullptr, "never over another clip");
+    const auto* louder_pass = ringer.next(true, false, false, 7200);
+    expect(louder_pass && same_samples(*louder_pass, make_alarm_melody(alarm_loudness(2200))),
+           "each pass is a little louder");
+    expect(ringer.next(true, true, false, 20000) == nullptr, "face down silences the alert");
+    expect(ringer.next(false, false, false, 21000) == nullptr, "the alert ends");
+    const auto* next_alert = ringer.next(true, false, false, 22000);
+    expect(next_alert && same_samples(*next_alert, make_alarm_melody(alarm_loudness(0))),
+           "the next alert starts quietly again");
+
+    // The slider and the mute switch change only the audio service: what is
+    // stored follows it.
+    SoundSettings owner;
+    owner.message_chime = false;
+    AudioDiagnostics heard;
+    heard.volume = 0.2F;
+    heard.muted = true;
+    const auto stored = current_sound_settings(owner, heard);
+    expect(std::fabs(stored.volume - 0.2F) < 0.001F && stored.muted && !stored.message_chime,
+           "volume and mute are stored as the audio service holds them");
+    expect(SoundSettings{} == SoundSettings{} && !(stored == owner) && stored != owner,
+           "settings compare as values, so an unchanged choice is not written again");
 
     MessageChimeGate gate;
     expect(!gate.observe({"a1"}, 1000, false), "notifications already there at start-up do not chime");

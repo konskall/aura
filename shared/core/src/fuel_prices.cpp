@@ -2,6 +2,8 @@
 
 #include "aura/text_util.hpp"
 
+#include <cstdio>
+#include <string>
 #include <utility>
 
 namespace aura {
@@ -89,6 +91,14 @@ bool fuel_prices_stale(const FuelPriceData& data, int current_year, int current_
     const int day = std::stoi(data.period_date.substr(8, 2));
     const auto age = days_from_civil(current_year, current_month, current_day) - days_from_civil(year, month, day);
     return age < 0 || age > maximum_age_days;
+}
+
+std::string fuel_price_text(int millieur_per_litre, const char* decimal_separator) {
+    if (millieur_per_litre < 0) return "\u2014";
+    char value[24];
+    std::snprintf(value, sizeof(value), "%d%s%03d", millieur_per_litre / 1000,
+                  decimal_separator ? decimal_separator : ",", millieur_per_litre % 1000);
+    return value;
 }
 
 const char* fuel_price_state_name(FuelPriceState state) noexcept {

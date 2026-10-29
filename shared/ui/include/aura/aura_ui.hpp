@@ -37,7 +37,6 @@ enum class UiView {
     Launcher,
     Assistant,
     ConversationHistory,
-    Cards,
     Notifications,
     Settings,
     LanguageSettings,
@@ -48,13 +47,11 @@ enum class UiView {
     AoratonConversation,
     AoratonCompose,
     AoratonConfirm,
-    Navigation,
     Weather,
     WeatherSettings,
     WeatherLocation,
     Calendar,
     OrganizerNew,
-    Camera,
     Battery,
     VoiceSettings,
     TypographyProof,
@@ -104,6 +101,8 @@ struct CompanionCapabilities {
     bool imu{false};            // motion sensor (raise to wake, turn over)
     bool phone_link{false};     // a phone notification transport
     bool wake_word{false};      // a trained wake-word model
+    bool panel_brightness{false};  // the panel dims its own backlight (no veil)
+    bool power_button{false};      // power off ends with the side button, not a touch
 };
 
 // Assistant state that lives outside AssistantSnapshot.

@@ -88,6 +88,13 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.action_alarm_format = "Ξυπνητήρι %02d:%02d";
         s.action_reminder_title = "Υπενθύμιση";
         s.action_in_minutes_format = "Σε %d λεπτά";
+        s.action_in_one_minute = "Σε 1 λεπτό";
+        s.compose_left_format = "Ακόμη %u χαρακτήρες";
+        s.compose_one_left = "Ακόμη 1 χαρακτήρας";
+        s.compose_over_limit = "Πολύ μεγάλο μήνυμα";
+        s.aoraton_timeout_hint = "Ολοκλήρωσε τη σύνδεση στον browser του υπολογιστή και δοκίμασε ξανά.";
+        s.voice_note_header = "Ηχογράφηση";
+        s.decimal_separator = ",";
         s.action_at_format = "%s %02d:%02d";
         s.action_note_title = "Νέα σημείωση";
         s.action_task_title = "Νέα εργασία";
@@ -98,6 +105,8 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.action_unmute_title = "Ενεργοποίηση ήχου";
         s.action_done = "Έγινε";
         s.action_failed = "Δεν έγινε";
+        s.action_refused = "Δεν το έκανα: η ενέργεια δεν ήταν έγκυρη. Πες το αλλιώς και θα ξαναδοκιμάσω.";
+        s.empty_answer = "Δεν ήρθε απάντηση. Δοκίμασε ξανά.";
         s.voice_error_title = "Δεν σε άκουσα";
         s.no_speech_detail = "Δεν ακούστηκε ομιλία. Μίλα λίγο πιο κοντά και ξαναδοκίμασε.";
         s.stt_unavailable_detail = "Η αναγνώριση ομιλίας δεν είναι εγκατεστημένη σε αυτή τη συσκευή.";
@@ -153,7 +162,7 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.transcript_pending = "Μεταγραφή…";
         s.transcript_failed = "Χωρίς κείμενο";
         s.recording_title = "Ηχογράφηση";
-        s.recording_detail = "Μίλα · σταματά μόνο του στη σιωπή";
+        s.recording_detail = "Έως 30 δευτ. · σταματά σε μεγάλη παύση";
         s.play = "Αναπαραγωγή";
         s.note_placeholder = "Γράψε τη σημείωση";
         s.notes_full = "Γέμισαν οι σημειώσεις";
@@ -363,6 +372,7 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.system_restart_detail = "Η συσκευή θα ξεκινήσει ξανά σε λίγα δευτερόλεπτα.";
         s.system_power_off_question = "Απενεργοποίηση;";
         s.system_power_off_detail = "Για να ανοίξει ξανά, κράτα πατημένη την οθόνη.";
+        s.system_power_off_detail_button = "Για να ανοίξει ξανά, πάτα το πλαϊνό κουμπί.";
         s.system_reset_question = "Επαναφορά εργοστασιακών;";
         s.system_reset_detail = "Διαγράφονται όλα τα δεδομένα και οι συνδέσεις. Δεν αναιρείται.";
         s.system_reset_confirm = "Επαναφορά";
@@ -374,6 +384,7 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.system_powering_on = "Καλώς ήρθες ξανά";
         s.system_powering_on_detail = "Το AURA προετοιμάζεται.";
         s.system_power_off_hint = "Κράτησε πατημένη την οθόνη για ενεργοποίηση";
+        s.system_power_off_hint_button = "Πάτα το πλαϊνό κουμπί για ενεργοποίηση";
         s.language_settings_title = "Γλώσσα";
         s.language_greek = "Ελληνικά";
         s.language_english = "English";
@@ -451,6 +462,13 @@ const CompanionStrings& companion_en_us() noexcept {
         s.action_alarm_format = "Alarm %02d:%02d";
         s.action_reminder_title = "Reminder";
         s.action_in_minutes_format = "In %d minutes";
+        s.action_in_one_minute = "In 1 minute";
+        s.compose_left_format = "%u characters left";
+        s.compose_one_left = "1 character left";
+        s.compose_over_limit = "Message too long";
+        s.aoraton_timeout_hint = "Finish signing in in the computer's browser, then try again.";
+        s.voice_note_header = "Voice note";
+        s.decimal_separator = ".";
         s.action_at_format = "%s %02d:%02d";
         s.action_note_title = "New note";
         s.action_task_title = "New task";
@@ -461,6 +479,8 @@ const CompanionStrings& companion_en_us() noexcept {
         s.action_unmute_title = "Unmute audio";
         s.action_done = "Done";
         s.action_failed = "Couldn't do that";
+        s.action_refused = "I didn't do that: the action wasn't valid. Say it another way and I'll try again.";
+        s.empty_answer = "No answer came back. Try again.";
         s.voice_error_title = "I couldn't hear you";
         s.no_speech_detail = "No speech was heard. Speak a little closer and try again.";
         s.stt_unavailable_detail = "Speech recognition is not installed on this device.";
@@ -516,7 +536,7 @@ const CompanionStrings& companion_en_us() noexcept {
         s.transcript_pending = "Transcribing…";
         s.transcript_failed = "No text";
         s.recording_title = "Recording";
-        s.recording_detail = "Speak · stops after a pause";
+        s.recording_detail = "Up to 30 s · stops after a long pause";
         s.play = "Play";
         s.note_placeholder = "Write your note";
         s.notes_full = "Notes are full";
@@ -725,6 +745,7 @@ const CompanionStrings& companion_en_us() noexcept {
         s.system_restart_detail = "The device starts again in a few seconds.";
         s.system_power_off_question = "Power off?";
         s.system_power_off_detail = "To turn it on again, press and hold the screen.";
+        s.system_power_off_detail_button = "To turn it on again, press the side button.";
         s.system_reset_question = "Factory reset?";
         s.system_reset_detail = "All data and connections are erased. This cannot be undone.";
         s.system_reset_confirm = "Reset";
@@ -736,6 +757,7 @@ const CompanionStrings& companion_en_us() noexcept {
         s.system_powering_on = "Welcome back";
         s.system_powering_on_detail = "AURA is getting ready.";
         s.system_power_off_hint = "Press and hold the screen to power on";
+        s.system_power_off_hint_button = "Press the side button to power on";
         s.language_settings_title = "Language";
         s.language_greek = "Ελληνικά";
         s.language_english = "English";

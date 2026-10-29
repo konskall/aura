@@ -113,9 +113,9 @@ std::size_t icy_metaint(HINTERNET request) {
     return static_cast<std::size_t>(parsed);
 }
 
-RadioSearchResult fetch_search(const std::string& query) {
+// One directory request (`path`), tried on each radio-browser server in turn.
+RadioSearchResult fetch_search_path(const std::string& path) {
     RadioSearchResult result;
-    const auto path = radio_browser_search_path(query);
     for (const auto& host : radio_browser_hosts()) {
         const std::string url = "https://" + host + path;
         UrlParts parts;
@@ -156,6 +156,10 @@ RadioSearchResult fetch_search(const std::string& query) {
     }
     result.error_code = "RADIO_DIRECTORY_UNAVAILABLE";
     return result;
+}
+
+RadioSearchResult fetch_search(const std::string& query) {
+    return search_radio_directory(query, fetch_search_path);
 }
 
 bool start_winsock() {

@@ -86,5 +86,30 @@ int main() {
            "an English shopping item");
     expect(parse_offline_command("Show me the shower settings").kind == OfflineCommandKind::None,
            "'shower' is not a show command target");
+
+    // Greek past tense is written like a command; a question is never one.
+    expect(!parse_offline_command("Σημείωσε γκολ ο Ολυμπιακός;").has_action, "a football question is not a note");
+    expect(!parse_offline_command("Αγόρασε η Μαρία τα εισιτήρια;").has_action,
+           "a question about Maria is not a shopping item");
+    expect(!parse_offline_command("Buy milk?").has_action, "an English question is not an item either");
+    const auto dictated = parse_offline_command("Σημείωσε να πάρω γάλα");
+    expect(dictated.has_action && dictated.action.type == AssistantActionType::Note &&
+           dictated.action.text == "να πάρω γάλα", "a dictated note still works");
+
+    // Louder and quieter without a number change the volume by a step.
+    const auto relative_volume = [](const char* text) {
+        const auto command = parse_offline_command(text);
+        return command.has_action && command.action.type == AssistantActionType::Volume && command.action.relative ?
+            command.action.value : 0;
+    };
+    expect(relative_volume("Δυνάμωσε την ένταση") == 10, "turn it up");
+    expect(relative_volume("Χαμήλωσε λίγο τον ήχο") == -10, "turn it down");
+    expect(relative_volume("πιο δυνατά") == 10 && relative_volume("Πιο σιγά παρακαλώ") == -10, "louder, quieter");
+    expect(relative_volume("Turn the volume up") == 10 && relative_volume("lower the volume") == -10 &&
+           relative_volume("louder") == 10, "English steps");
+    expect(!parse_offline_command("Χαμήλωσε τη θερμοκρασία").has_action, "the heating is not the volume");
+    const auto absolute = parse_offline_command("Χαμήλωσε την ένταση στο 20");
+    expect(absolute.has_action && absolute.action.type == AssistantActionType::Volume && !absolute.action.relative &&
+           absolute.action.value == 20, "a number still sets the volume");
     std::cout << "offline command tests passed\n";
 }

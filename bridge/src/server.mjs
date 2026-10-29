@@ -52,6 +52,8 @@ async function readJson(request, maxBytes = 16384) {
 }
 
 const failureStatus = (code) => (code === 'CANCELLED' ? 499 : 503);
+// Queued plus running speech jobs; a further one is BUSY.
+const MAX_SPEECH_JOBS = 4;
 const clientAudioErrors = new Set(['INVALID_AUDIO', 'UNSUPPORTED_AUDIO', 'AUDIO_TOO_SHORT', 'INVALID_LANGUAGE']);
 const clientTextErrors = new Set(['INVALID_LANGUAGE', 'INVALID_REQUEST', 'TEXT_TOO_LARGE', 'INVALID_VOICE']);
 
@@ -62,24 +64,37 @@ export function createBridgeServer(options = {}) {
   const serviceToken = options.token ?? token;
   const fuelFile = options.fuelFile ?? fileURLToPath(new URL('../runtime/fuel-prices.json', import.meta.url));
   const fuelReader = options.fuelReader ?? (() => readFuelSnapshot(fuelFile));
+  // Running turns by id: { controller, lane }. The lane is the turn's mode.
   const active = new Map();
-  let speechJob = null;
+  const speechJobs = new Set();
+  let speechTail = Promise.resolve();
   let healthCache = { value: null, at: 0 };
 
-  // One speech job at a time. A client that disconnects before the reply
-  // aborts its job; the request's own 'close' (body fully read) must not.
+  // Speech jobs run one at a time, in arrival order: a spoken question waits
+  // for a note's transcription (or a reply's synthesis) instead of failing
+  // BUSY. A client that disconnects aborts its job, queued or running; the
+  // request's own 'close' (body fully read) must not.
   async function withSpeechJob(response, work) {
-    if (speechJob) {
+    if (speechJobs.size >= MAX_SPEECH_JOBS) {
       send(response, 409, { ok: false, code: 'BUSY' });
       return;
     }
     const job = new AbortController();
-    speechJob = job;
+    speechJobs.add(job);
     response.once('close', () => { if (!response.writableEnded) job.abort(); });
+    const previous = speechTail;
+    let finished;
+    speechTail = new Promise((resolve) => { finished = resolve; });
     try {
+      await previous;
+      if (job.signal.aborted) {
+        if (!response.writableEnded && !response.destroyed) send(response, 499, { ok: false, code: 'CANCELLED' });
+        return;
+      }
       await work(job.signal);
     } finally {
-      speechJob = null;
+      speechJobs.delete(job);
+      finished();
     }
   }
 
@@ -126,12 +141,21 @@ export function createBridgeServer(options = {}) {
           send(response, turn.code === 'PROMPT_TOO_LARGE' ? 413 : 400, { ok: false, code: turn.code });
           return;
         }
-        if (active.size > 0 || active.has(body.id)) {
+        if (active.has(body.id)) {
           send(response, 409, { ok: false, code: 'BUSY' });
           return;
         }
+        // One turn per lane: a new question replaces the one still running
+        // (the client's cancel for it may not have arrived yet), and a
+        // translation runs beside a chat question.
+        const lane = turn.value.mode;
+        for (const [id, running] of active) {
+          if (running.lane !== lane) continue;
+          running.controller.abort();
+          active.delete(id);
+        }
         const controller = new AbortController();
-        active.set(body.id, controller);
+        active.set(body.id, { controller, lane });
         const started = Date.now();
         // Sizes and counts only: no prompt, history or device facts are logged.
         console.log(JSON.stringify({ event: 'turn_started', id: body.id, mode: turn.value.mode,
@@ -170,8 +194,8 @@ export function createBridgeServer(options = {}) {
           console.log(JSON.stringify({ event: 'turn_error', id: body.id, error: error?.name ?? 'Error' }));
           result = { ok: false, code: 'PROVIDER_ERROR' };
         } finally {
-          // Always free the slot, or every later question would be BUSY.
-          active.delete(body.id);
+          // Always free the slot (unless a newer turn already took it).
+          if (active.get(body.id)?.controller === controller) active.delete(body.id);
         }
         console.log(JSON.stringify({ event: 'turn_finished', id: body.id, ok: result.ok, code: result.code ?? null,
           durationMs: Date.now() - started }));
@@ -187,12 +211,12 @@ export function createBridgeServer(options = {}) {
       }
       if (request.method === 'POST' && url.pathname === '/v1/assistant/cancel') {
         const body = await readJson(request, 1024);
-        const controller = body && typeof body.id === 'string' ? active.get(body.id) : null;
-        if (!controller) {
+        const running = body && typeof body.id === 'string' ? active.get(body.id) : null;
+        if (!running) {
           send(response, 404, { ok: false, code: 'TURN_NOT_FOUND' });
           return;
         }
-        controller.abort();
+        running.controller.abort();
         active.delete(body.id);
         send(response, 200, { ok: true, code: 'CANCELLED' });
         return;
@@ -250,9 +274,9 @@ export function createBridgeServer(options = {}) {
     }
   });
   server.cancelAll = () => {
-    for (const controller of active.values()) controller.abort();
+    for (const running of active.values()) running.controller.abort();
     active.clear();
-    speechJob?.abort();
+    for (const job of speechJobs) job.abort();
   };
   return server;
 }

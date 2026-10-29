@@ -17,7 +17,7 @@ export const SPEECH_LANGUAGES = Object.freeze({
   el: 'el-GR', en: 'en-US', de: 'de-DE', fr: 'fr-FR', it: 'it-IT', es: 'es-ES',
 });
 export const speechLimits = Object.freeze({
-  MAX_WAV_BYTES: 1_100_000,         // 15 s of 16 kHz mono PCM plus header
+  MAX_WAV_BYTES: 1_100_000,         // 34 s of 16 kHz mono PCM plus header: a 30 s note fits
   MIN_WAV_SAMPLES: 4800,            // 0.3 s
   MAX_TTS_TEXT_BYTES: 2000,
   MAX_TTS_WAV_BYTES: 8 * 1024 * 1024,
@@ -101,11 +101,12 @@ async function boundedAudio(response) {
 // whisper's encoder cost grows with its audio context (1500 = 30 s). A
 // context sized to the clip plus a few seconds of margin keeps the full
 // accuracy at a fraction of the time; under ~9 s of context turbo starts to
-// mishear, so that is the floor, and 768 (15.4 s) covers the longest recording.
+// mishear, so that is the floor, and the whole window (1500) covers the
+// longest recording, a 30 s dictated note.
 export function audioContextFor(sampleCount) {
   const seconds = Math.max(0, sampleCount) / 16000;
   const needed = Math.ceil(((seconds + 3.5) * 50) / 64) * 64;
-  return Math.min(768, Math.max(448, needed));
+  return Math.min(1500, Math.max(448, needed));
 }
 
 function boundedEnvironment(source = process.env) {

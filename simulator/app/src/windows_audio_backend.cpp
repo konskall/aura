@@ -81,7 +81,8 @@ void WindowsAudioBackend::shutdown() {
     }
 }
 
-bool WindowsAudioBackend::play_converted(const Uint8* bytes, std::size_t length, const SDL_AudioSpec& source) {
+bool WindowsAudioBackend::play_converted(const Uint8* bytes, std::size_t length, const SDL_AudioSpec& source,
+                                         bool alert) {
     if (!device_ || !bytes || length == 0 || length > kMaxSourceBytes || source.format != AUDIO_S16SYS ||
         source.channels == 0 || source.channels > 2 || source.freq < 8000 || source.freq > 48000) {
         fail("INVALID_PCM");
@@ -115,6 +116,7 @@ bool WindowsAudioBackend::play_converted(const Uint8* bytes, std::size_t length,
         const auto* begin = reinterpret_cast<const std::int16_t*>(converted.data());
         samples_.assign(begin, begin + converter.len_cvt / static_cast<int>(sizeof(std::int16_t)));
         cursor_ = 0;
+        alert_ = alert;
     }
     SDL_UnlockAudioDevice(device_);
     completed_ = false;
@@ -134,6 +136,15 @@ bool WindowsAudioBackend::play_pcm(const PcmClip& clip) {
     source.channels = clip.format.channels;
     return play_converted(reinterpret_cast<const Uint8*>(clip.samples.data()),
                           clip.samples.size() * sizeof(std::int16_t), source);
+}
+
+bool WindowsAudioBackend::play_alert(const PcmClip& clip) {
+    SDL_AudioSpec source{};
+    source.freq = static_cast<int>(clip.format.sample_rate);
+    source.format = clip.format.bits_per_sample == 16 ? AUDIO_S16SYS : 0;
+    source.channels = clip.format.channels;
+    return play_converted(reinterpret_cast<const Uint8*>(clip.samples.data()),
+                          clip.samples.size() * sizeof(std::int16_t), source, true);
 }
 
 bool WindowsAudioBackend::play_wav(const std::string& path) {
@@ -253,6 +264,7 @@ void WindowsAudioBackend::stop() {
             std::lock_guard<std::mutex> lock(mutex_);
             samples_.clear();
             cursor_ = 0;
+            alert_ = false;
         }
         SDL_UnlockAudioDevice(device_);
         machine_.dispatch(AudioCommand::Complete);
@@ -303,6 +315,8 @@ void WindowsAudioBackend::render(Uint8* stream, int length) {
     auto* output = reinterpret_cast<std::int16_t*>(stream);
     const std::size_t wanted = static_cast<std::size_t>(length) / sizeof(std::int16_t);
     const float volume = muted_.load() ? 0.0F : volume_.load();
+    // A clock alert is heard through mute and never below the alert minimum.
+    const float clip_gain = playback_gain(volume_.load(), muted_.load(), alert_.load());
     const bool clip_playing = !paused_.load() && active_.load();
     // The music bed first; a clip on top turns it down smoothly.
     {
@@ -330,7 +344,7 @@ void WindowsAudioBackend::render(Uint8* stream, int length) {
         const std::size_t available = samples_.size() > cursor_ ? samples_.size() - cursor_ : 0;
         const std::size_t count = std::min(wanted, available);
         for (std::size_t i = 0; i < count; ++i) {
-            const float scaled = static_cast<float>(samples_[cursor_ + i]) * volume;
+            const float scaled = static_cast<float>(samples_[cursor_ + i]) * clip_gain;
             const float mixed = static_cast<float>(output[i]) + scaled;
             output[i] = static_cast<std::int16_t>(std::clamp(mixed, -32768.0F, 32767.0F));
             peak = std::max(peak, std::abs(scaled) / 32768.0F);

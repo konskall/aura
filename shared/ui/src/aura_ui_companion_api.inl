@@ -225,8 +225,11 @@ void AuraUi::set_capabilities(const CompanionCapabilities& capabilities) {
         capabilities.speech_recognition != self.capabilities.speech_recognition ||
         capabilities.speech_output != self.capabilities.speech_output || capabilities.imu != self.capabilities.imu ||
         capabilities.phone_link != self.capabilities.phone_link ||
-        capabilities.wake_word != self.capabilities.wake_word;
+        capabilities.wake_word != self.capabilities.wake_word ||
+        capabilities.power_button != self.capabilities.power_button;
+    const bool panel_changed = capabilities.panel_brightness != self.capabilities.panel_brightness;
     self.capabilities = capabilities;
+    if (panel_changed) self.update_dim_overlay();
     if (changed && self.current_view != UiView::AlwaysOn) self.render(self.current_view);
 }
 

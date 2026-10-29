@@ -578,10 +578,13 @@ struct AuraUi::Impl {
     void update_compose_status() {
         if (!compose_status_label || !compose_area) return;
         const char* text_value = lv_textarea_get_text(compose_area);
-        const std::size_t bytes = text_value ? std::char_traits<char>::length(text_value) : 0;
-        char counter[48];
-        std::snprintf(counter, sizeof(counter), t().compose_bytes_format,
-                      static_cast<unsigned>(bytes), static_cast<unsigned>(aoraton.max_message_bytes));
+        const std::string_view text = text_value ? text_value : "";
+        const std::size_t bytes = text.size();
+        const auto left = aoraton_characters_left(text, aoraton.max_message_bytes);
+        char counter[64];
+        if (bytes > aoraton.max_message_bytes) std::snprintf(counter, sizeof(counter), "%s", c().compose_over_limit);
+        else if (left == 1) std::snprintf(counter, sizeof(counter), "%s", c().compose_one_left);
+        else std::snprintf(counter, sizeof(counter), c().compose_left_format, static_cast<unsigned>(left));
         lv_label_set_text(compose_status_label, counter);
         lv_obj_set_style_text_color(compose_status_label,
             ui::color(bytes > aoraton.max_message_bytes ? ui::tokens::coral : ui::tokens::text_tertiary), 0);
@@ -841,10 +844,15 @@ struct AuraUi::Impl {
             return;
         }
         if (direction != LV_DIR_RIGHT) return;
+        // While a radio search is typed, the keyboard keeps the swipe.
+        if (self->current_view == UiView::RadioSearch && self->radio_typing) return;
         // Swipe right is "back" wherever the view has no horizontal control
         // of its own (strips, sliders, keyboards).
         switch (self->current_view) {
             case UiView::Launcher:
+            case UiView::Radio:
+            case UiView::RadioSearch:
+            case UiView::ConversationHistory:
             case UiView::Settings:
             case UiView::LanguageSettings:
             case UiView::Notifications:
@@ -855,11 +863,8 @@ struct AuraUi::Impl {
             case UiView::AoratonConversation:
             case UiView::Wifi:
             case UiView::WifiDetails:
-            case UiView::Cards:
-            case UiView::Navigation:
             case UiView::WeatherSettings:
             case UiView::Calendar:
-            case UiView::Camera:
             case UiView::VoiceSettings:
             case UiView::Clock:
             case UiView::ClockNew:
@@ -966,8 +971,9 @@ struct AuraUi::Impl {
         if (daily) {
             if (index >= weather.data.daily_count || index >= weather_day_cards.size()) return;
             const auto& item = weather.data.daily[index];
-            std::snprintf(detail, sizeof(detail), "%s  ·  %.0f/%.0f°C  ·  %s %d%%",
-                          weather_day_label(item.date, index).c_str(), item.minimum_c, item.maximum_c,
+            std::snprintf(detail, sizeof(detail), "%s  ·  %d/%d°C  ·  %s %d%%",
+                          weather_day_label(item.date, index).c_str(), whole_degrees(item.minimum_c),
+                          whole_degrees(item.maximum_c),
                           v().weather_rain, item.rain_probability_max_percent);
             lv_obj_set_style_border_width(weather_day_cards[index], 2, 0);
             lv_obj_set_style_border_color(weather_day_cards[index],
@@ -975,8 +981,8 @@ struct AuraUi::Impl {
         } else {
             if (index >= weather.data.hourly_count || index >= weather_hour_cards.size()) return;
             const auto& item = weather.data.hourly[index];
-            std::snprintf(detail, sizeof(detail), "%s  ·  %.0f°C  ·  %s  ·  %s %d%%",
-                          weather_time_label(item.time).c_str(), item.temperature_c,
+            std::snprintf(detail, sizeof(detail), "%s  ·  %d°C  ·  %s  ·  %s %d%%",
+                          weather_time_label(item.time).c_str(), whole_degrees(item.temperature_c),
                           weather_condition_text(item.condition), v().weather_rain,
                           item.rain_probability_percent);
             lv_obj_set_style_border_width(weather_hour_cards[index], 2, 0);
@@ -1464,7 +1470,7 @@ struct AuraUi::Impl {
         std::uint32_t accent = ui::tokens::amber;
         char temperature[16];
         if (weather.has_data) {
-            std::snprintf(temperature, sizeof(temperature), "%.0f°", weather.data.temperature_c);
+            std::snprintf(temperature, sizeof(temperature), "%d°", whole_degrees(weather.data.temperature_c));
             title = temperature;
             detail = weather.data.location.name;
             if (weather.data.origin == WeatherDataOrigin::Demo) detail += std::string(" · ") + v().demo_badge;
@@ -1935,7 +1941,8 @@ struct AuraUi::Impl {
             auto* column = state_text(timed_out ? 188 : 212,
                                       backend_missing ? t().aoraton_pair_failed : sign_in_error_title(),
                                       backend_missing ? t().aoraton_pair_backend_missing :
-                                      (timed_out ? c().aoraton_timeout_detail : nullptr));
+                                      (timed_out ? (developer_mode ? c().aoraton_timeout_detail :
+                                                                     c().aoraton_timeout_hint) : nullptr));
             (void)column;
             pill(content, t().retry, ui::ButtonTone::Primary, kGutter, kActionY, kHalfWidth, pairing_start_event);
             pill(content, t().cancel, ui::ButtonTone::Danger, kGutter + kHalfWidth + 16, kActionY, kHalfWidth,
@@ -2247,11 +2254,12 @@ struct AuraUi::Impl {
         }
 
         char temperature[24];
-        std::snprintf(temperature, sizeof(temperature), "%.0f°C", data.temperature_c);
+        std::snprintf(temperature, sizeof(temperature), "%d°C", whole_degrees(data.temperature_c));
         label(weather_scroll, temperature, kGutter, 60, 240, ui::font_display(), ui::tokens::text);
         line(weather_scroll, weather_condition_text(data.condition), kGutter + 4, 134, 236, ui::font_headline(), accent);
         char range[64];
-        std::snprintf(range, sizeof(range), "↓ %.0f°   ↑ %.0f°", data.daily_minimum_c, data.daily_maximum_c);
+        std::snprintf(range, sizeof(range), "↓ %d°   ↑ %d°", whole_degrees(data.daily_minimum_c),
+                      whole_degrees(data.daily_maximum_c));
         line(weather_scroll, range, kGutter + 4, 172, 236, ui::font_body(), ui::tokens::text_secondary);
         const auto observed_time = weather_time_label(data.observed_at);
         const char* provider_name = data.provider == WeatherProvider::TlesDetector ?
@@ -2358,7 +2366,7 @@ struct AuraUi::Impl {
         add_metric(ui::IconRole::Droplet, v().humidity, ui::tokens::ice, "%d%%", data.humidity_percent);
         add_metric(ui::IconRole::Wind, v().wind, ui::tokens::mint, "%.0f km/h", data.wind_kmh);
         add_metric(ui::IconRole::Thermometer, v().feels_like, ui::tokens::amber,
-                   "%.0f°C", data.apparent_temperature_c);
+                   "%d°C", whole_degrees(data.apparent_temperature_c));
         add_metric(ui::IconRole::CloudRain, v().weather_rain, ui::tokens::blue,
                    "%d%%", data.rain_probability_percent);
         if (data.metrics.has(WeatherMetric::Pressure)) {
@@ -2381,15 +2389,22 @@ struct AuraUi::Impl {
             add_metric(ui::IconRole::Cloud, v().weather_air_quality, ui::tokens::blue,
                        "%d AQI", data.metrics.european_aqi);
         }
+        // The title has the card's whole width ("Ποιότητα αέρα" is the longest,
+        // 149 px); the icon leads the value below it. A third card still peeks
+        // in from the edge, so the strip reads as scrollable.
+        constexpr int kMetricWidth = 188;
+        constexpr int kMetricPitch = kMetricWidth + 12;
+        constexpr int kMetricInner = kMetricWidth - 28;
         for (std::size_t index = 0; index < metric_count; ++index) {
             const auto& metric = metric_cards[index];
-            auto* card = weather_card(metrics, kGutter + static_cast<int>(index) * 164, 152, 120, metric.accent, false);
+            auto* card = weather_card(metrics, kGutter + static_cast<int>(index) * kMetricPitch, kMetricWidth, 120,
+                                      metric.accent, false);
+            line(card, metric.title, 0, 0, kMetricInner, ui::font_caption(), ui::tokens::text_secondary);
             auto* metric_icon = icon_view(card, metric.icon, 28, metric.accent);
-            lv_obj_set_pos(metric_icon, 0, 0);
-            line(card, metric.title, 36, 0, 88, ui::font_caption(), ui::tokens::text_secondary);
-            line(card, metric.value.data(), 0, 52, 124, ui::font_headline(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);
+            lv_obj_set_pos(metric_icon, 0, 48);
+            line(card, metric.value.data(), 36, 42, kMetricInner - 36, ui::font_headline(), ui::tokens::text);
         }
-        strip_end(metrics, kGutter + static_cast<int>(metric_count) * 164);
+        strip_end(metrics, kGutter + static_cast<int>(metric_count) * kMetricPitch);
 
         const bool show_hazards = data.provider == WeatherProvider::TlesDetector;
         const int offset = show_hazards ? 188 : 0;
@@ -2407,9 +2422,13 @@ struct AuraUi::Impl {
             char alert_line[96];
             if (!data.hazards.alerts_available) {
                 std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_alerts_unavailable);
+            } else if (data.hazards.nearby_alert_count == 1) {
+                std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_nearby_alert_one);
             } else if (data.hazards.nearby_alert_count > 0) {
                 std::snprintf(alert_line, sizeof(alert_line), v().weather_nearby_alerts_format,
                               data.hazards.nearby_alert_count);
+            } else if (data.hazards.active_alert_count == 1) {
+                std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_active_alert_one);
             } else if (data.hazards.active_alert_count > 0) {
                 std::snprintf(alert_line, sizeof(alert_line), v().weather_active_alerts_format,
                               data.hazards.active_alert_count);
@@ -2428,6 +2447,9 @@ struct AuraUi::Impl {
             } else if (data.hazards.xweather_available && data.hazards.max_positive_ka > 0) {
                 std::snprintf(lightning_line, sizeof(lightning_line), v().weather_nearby_lightning_cg_format,
                               data.hazards.nearest_lightning_km, data.hazards.max_positive_ka);
+            } else if (data.hazards.lightning_age_minutes == 1) {
+                std::snprintf(lightning_line, sizeof(lightning_line), v().weather_nearby_lightning_one_minute_format,
+                              data.hazards.nearest_lightning_km);
             } else {
                 std::snprintf(lightning_line, sizeof(lightning_line), v().weather_nearby_lightning_format,
                               data.hazards.nearest_lightning_km, data.hazards.lightning_age_minutes);
@@ -2448,7 +2470,7 @@ struct AuraUi::Impl {
             auto* hour_icon = icon_view(card, weather_condition_icon(hour.condition, hour.is_day), 40, hour_accent);
             lv_obj_set_pos(hour_icon, 26, 32);
             char value[16];
-            std::snprintf(value, sizeof(value), "%.0f°", hour.temperature_c);
+            std::snprintf(value, sizeof(value), "%d°", whole_degrees(hour.temperature_c));
             line(card, value, 0, 74, 92, ui::font_headline(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);
             char chance[16];
             std::snprintf(chance, sizeof(chance), "%d%%", hour.rain_probability_percent);
@@ -2481,7 +2503,8 @@ struct AuraUi::Impl {
             auto* day_icon = icon_view(card, weather_condition_icon(day_item.condition), 40, day_accent);
             lv_obj_set_pos(day_icon, 42, 32);
             char value[28];
-            std::snprintf(value, sizeof(value), "%.0f / %.0f°", day_item.minimum_c, day_item.maximum_c);
+            std::snprintf(value, sizeof(value), "%d / %d°", whole_degrees(day_item.minimum_c),
+                          whole_degrees(day_item.maximum_c));
             line(card, value, 0, 74, 124, ui::font_headline(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);
             char chance[16];
             std::snprintf(chance, sizeof(chance), "%d%%", day_item.rain_probability_max_percent);
@@ -3155,12 +3178,6 @@ struct AuraUi::Impl {
         update_volume_label();
     }
 
-    void render_unavailable(const char* title) {
-        make_header(title);
-        state_symbol(120, 120, ui::IconRole::Close, ui::tokens::lilac);
-        state_text(264, v().not_available_title, v().not_available_detail);
-    }
-
     void render_typography_proof() {
         make_header(v().typography_proof);
         const auto role = [&](int index, int y) {
@@ -3374,7 +3391,6 @@ struct AuraUi::Impl {
             case UiView::Launcher: render_launcher(); break;
             case UiView::Assistant: render_assistant(); break;
             case UiView::ConversationHistory: render_companion(view); break;
-            case UiView::Cards: render_unavailable(v().search); break;
             case UiView::Notifications: render_notifications(); break;
             case UiView::Settings: render_settings(); break;
             case UiView::LanguageSettings: render_language_settings(); break;
@@ -3386,13 +3402,11 @@ struct AuraUi::Impl {
             case UiView::AoratonConversation: render_aoraton_conversation(); break;
             case UiView::AoratonCompose: render_aoraton_compose(); break;
             case UiView::AoratonConfirm: render_aoraton_confirm(); break;
-            case UiView::Navigation: render_unavailable(v().navigation); break;
             case UiView::Weather: render_weather(); break;
             case UiView::WeatherSettings: render_weather_settings(); break;
             case UiView::WeatherLocation: render_weather_location(); break;
             case UiView::Calendar:
             case UiView::OrganizerNew: render_companion(view); break;
-            case UiView::Camera: render_unavailable(v().camera); break;
             case UiView::Battery: render_battery(); break;
             case UiView::VoiceSettings: render_voice_settings(); break;
             case UiView::TypographyProof: render_typography_proof(); break;
@@ -3529,6 +3543,10 @@ void AuraUi::apply(const AssistantSnapshot& snapshot) {
     const auto old_state = impl_->snapshot.state;
     const auto old_generation = impl_->snapshot.turn_generation;
     const bool notifications_changed = snapshot.notification_count != impl_->snapshot.notification_count;
+    const bool streamed_delta = snapshot.state == AssistantState::Responding && old_state == AssistantState::Responding &&
+                                snapshot.turn_generation == old_generation && snapshot.answer_text.empty() &&
+                                impl_->snapshot.answer_text.empty() && !snapshot.partial_text.empty() &&
+                                snapshot.partial_text != impl_->snapshot.partial_text && !notifications_changed;
     impl_->snapshot = snapshot;
     // Only a real assistant transition pulls the user to the Assistant view; an
     // unrelated update (battery, notification) must not undo a Back navigation.
@@ -3547,6 +3565,8 @@ void AuraUi::apply(const AssistantSnapshot& snapshot) {
                 (is_turn_active(snapshot.state) && snapshot.state != AssistantState::ActionConfirmation))) {
         if (impl_->current_view != UiView::Assistant) impl_->navigation.navigate(UiView::Assistant);
         impl_->render(UiView::Assistant, true);
+    } else if (streamed_delta && impl_->current_view == UiView::Assistant) {
+        impl_->update_streamed_answer();
     } else if (impl_->current_view == UiView::Home || impl_->current_view == UiView::Assistant ||
                impl_->current_view == UiView::Launcher || impl_->current_view == UiView::Settings ||
                impl_->current_view == UiView::Notifications ||
@@ -3690,7 +3710,7 @@ void AuraUi::apply_weather(const WeatherSnapshot& snapshot) {
     impl_->weather = snapshot;
     if (impl_->current_view == UiView::WeatherLocation && old_state != snapshot.state &&
         (snapshot.state == WeatherState::Offline || snapshot.state == WeatherState::Error)) {
-        const auto& v = l10n::visual_el_gr();
+        const auto& v = impl_->v();
         impl_->show_toast(snapshot.state == WeatherState::Offline ? v.weather_offline_title :
                               (snapshot.error_code == "CITY_NOT_FOUND" ? v.weather_not_found : v.weather_error_title),
                           snapshot.state == WeatherState::Offline ? ui::tokens::magenta : ui::tokens::coral);

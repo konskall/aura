@@ -147,7 +147,6 @@ struct Strings {
     const char* delivery_acknowledged;
     const char* delivery_failed;
     const char* delivery_uncertain;
-    const char* compose_bytes_format;
     const char* compose_empty;
     const char* compose_too_long;
     const char* compose_rejected;

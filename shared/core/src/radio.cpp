@@ -188,10 +188,20 @@ std::uint32_t radio_retry_delay_ms(int attempt) noexcept {
     return attempt >= 0 && attempt < 4 ? 1000U << attempt : 0U;
 }
 
-std::string radio_browser_search_path(std::string_view query, std::size_t limit) {
+RadioSearchResult search_radio_directory(std::string_view query,
+                                         const std::function<RadioSearchResult(const std::string&)>& fetch) {
+    auto result = fetch(radio_browser_search_path(query));
+    if (result.ok && result.stations.empty()) {
+        result = fetch(radio_browser_search_path(query, RadioModel::kMaxResults, true));
+    }
+    return result;
+}
+
+std::string radio_browser_search_path(std::string_view query, std::size_t limit, bool worldwide) {
     const auto clean = utf8_truncate(sanitize_text(query, kMaxQueryBytes * 2), kMaxQueryBytes);
-    char tail[96];
-    std::snprintf(tail, sizeof(tail), "&countrycode=GR&codec=MP3&hidebroken=true&order=clickcount&reverse=true&limit=%u",
+    char tail[112];
+    std::snprintf(tail, sizeof(tail), "%s&codec=MP3&hidebroken=true&order=clickcount&reverse=true&limit=%u",
+                  worldwide ? "" : "&countrycode=GR",
                   static_cast<unsigned>(std::min<std::size_t>(limit, RadioModel::kMaxResults)));
     return "/json/stations/search?name=" + url_encode(clean) + tail;
 }
@@ -327,6 +337,11 @@ const RadioStation* RadioModel::find_spoken(std::string_view spoken) const {
         }
     }
     return best;
+}
+
+const RadioStation* RadioModel::station_to_resume() const {
+    if (!snapshot_.station.id.empty() && stream_url(snapshot_.station.url)) return &snapshot_.station;
+    return snapshot_.favorites.empty() ? nullptr : &snapshot_.favorites.front();
 }
 
 std::string RadioModel::serialize_favorites() const {

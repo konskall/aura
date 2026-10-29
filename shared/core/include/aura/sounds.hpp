@@ -30,6 +30,24 @@ PcmClip make_alarm_melody(float loudness);
 // The alarm starts at 30 % and reaches full loudness after 30 s of ringing.
 float alarm_loudness(std::uint64_t ringing_ms) noexcept;
 
+// Rings a clock alert on every platform: one melody pass every kAlarmCycleMs,
+// louder each pass (alarm_loudness), never while the device lies face down or
+// another clip plays. The melody is synthesised once; a pass only scales it,
+// so ringing never stalls the UI thread.
+class AlarmRinger {
+public:
+    // The pass to play now (with IAudioService::play_alert), or nullptr. It
+    // stays valid until the next call.
+    const PcmClip* next(bool alert, bool face_down, bool audio_busy, std::uint64_t now_ms);
+
+private:
+    PcmClip melody_;  // full loudness, rendered on first use
+    PcmClip pass_;
+    bool ringing_{false};
+    std::uint64_t since_ms_{0};
+    std::uint64_t next_ms_{0};
+};
+
 // Decides when a new notification deserves the chime: only for one that was
 // not there at the previous look, never at the first look (start-up), never
 // while `quiet`, and at most once every few seconds. What arrives while quiet
@@ -58,6 +76,13 @@ struct SoundSettings {
 
 // One "key=value" line each; unknown keys and bad values keep the defaults.
 std::string serialize_sound_settings(const SoundSettings& settings);
+
+// What to store: the owner's choices with the volume and mute the audio
+// service holds now (the slider and the mute switch change only those).
+SoundSettings current_sound_settings(SoundSettings settings, const AudioDiagnostics& audio) noexcept;
+// Value comparison: the stores serialize only a changed choice.
+bool operator==(const SoundSettings& left, const SoundSettings& right) noexcept;
+inline bool operator!=(const SoundSettings& left, const SoundSettings& right) noexcept { return !(left == right); }
 
 // A setting that changes quickly (a dragged volume slider) is written once it
 // has rested for `settle_ms`, not on every step. `text` is the serialized

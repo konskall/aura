@@ -277,6 +277,11 @@ WeatherCondition weather_condition_from_wmo(int code) noexcept {
     return WeatherCondition::Unknown;
 }
 
+int whole_degrees(float celsius) noexcept {
+    if (!std::isfinite(celsius)) return 0;
+    return static_cast<int>(std::lround(celsius));
+}
+
 WeatherIntent analyze_weather_intent(std::string_view text) {
     const auto words = folded_words(fold_text(text));
     const bool change = folded_has_word(words, {"αλλαξε", "αλλαγη", "change"});

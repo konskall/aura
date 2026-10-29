@@ -59,8 +59,10 @@ test('the audio context follows the clip length within safe bounds', () => {
   assert.equal(audioContextFor(4800), 448);
   assert.equal(audioContextFor(16000 * 5), 448);
   assert.equal(audioContextFor(16000 * 8), 576);
-  assert.equal(audioContextFor(16000 * 15), 768);
-  assert.equal(audioContextFor(16000 * 60), 768);
+  assert.equal(audioContextFor(16000 * 15), 960);
+  // A dictated note runs to 30 s: whisper's whole window.
+  assert.equal(audioContextFor(16000 * 30), 1500);
+  assert.equal(audioContextFor(16000 * 60), 1500);
 });
 
 test('the turbo model is preferred and small is the fallback', async () => {

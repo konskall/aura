@@ -243,6 +243,14 @@ void MockAoratonService::localize_mock_copy() {
     }
 }
 
+std::size_t aoraton_characters_left(std::string_view text, std::size_t max_bytes) noexcept {
+    if (text.size() >= max_bytes) return 0;
+    const bool wide = std::any_of(text.begin(), text.end(), [](char ch) {
+        return static_cast<unsigned char>(ch) >= 0x80;
+    });
+    return (max_bytes - text.size()) / (wide ? 2 : 1);
+}
+
 const char* aoraton_connection_name(AoratonConnectionState state) noexcept {
     switch (state) {
         case AoratonConnectionState::Disconnected: return "DISCONNECTED";

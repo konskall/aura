@@ -104,6 +104,29 @@ float alarm_loudness(std::uint64_t ringing_ms) noexcept {
     return 0.3F + 0.7F * static_cast<float>(clamped) / static_cast<float>(kAlarmRampMs);
 }
 
+const PcmClip* AlarmRinger::next(bool alert, bool face_down, bool audio_busy, std::uint64_t now_ms) {
+    if (!alert) {
+        ringing_ = false;
+        return nullptr;
+    }
+    if (!ringing_) {
+        ringing_ = true;
+        since_ms_ = now_ms;
+        next_ms_ = now_ms;
+    }
+    if (face_down || audio_busy || now_ms < next_ms_) return nullptr;
+    if (melody_.samples.empty()) melody_ = make_alarm_melody(1.0F);
+    const float loudness = alarm_loudness(now_ms - since_ms_);
+    pass_.format = melody_.format;
+    pass_.samples.resize(melody_.samples.size());
+    for (std::size_t index = 0; index < melody_.samples.size(); ++index) {
+        pass_.samples[index] =
+            static_cast<std::int16_t>(std::lround(static_cast<float>(melody_.samples[index]) * loudness));
+    }
+    next_ms_ = now_ms + kAlarmCycleMs;
+    return &pass_;
+}
+
 bool MessageChimeGate::observe(std::vector<std::string> ids, std::uint64_t now_ms, bool quiet) {
     const bool fresh = std::any_of(ids.begin(), ids.end(), [&](const std::string& id) {
         return std::find(seen_.begin(), seen_.end(), id) == seen_.end();
@@ -132,6 +155,19 @@ std::string serialize_sound_settings(const SoundSettings& settings) {
     text += std::string("barge_in=") + (settings.barge_in ? "1" : "0") + "\n";
     text += std::string("voice=") + assistant_voice_id(settings.assistant_voice) + "\n";
     return text;
+}
+
+bool operator==(const SoundSettings& left, const SoundSettings& right) noexcept {
+    return left.volume == right.volume && left.muted == right.muted && left.message_chime == right.message_chime &&
+           left.spoken_replies == right.spoken_replies &&
+           left.continuous_conversation == right.continuous_conversation && left.barge_in == right.barge_in &&
+           left.assistant_voice == right.assistant_voice;
+}
+
+SoundSettings current_sound_settings(SoundSettings settings, const AudioDiagnostics& audio) noexcept {
+    settings.volume = std::clamp(audio.volume, 0.0F, 1.0F);
+    settings.muted = audio.muted;
+    return settings;
 }
 
 SoundSettings parse_sound_settings(const std::string& data) {

@@ -41,7 +41,7 @@ The supplied seed and v8 directives were reviewed as history. No v9 or v9.1 dire
 
 ## Additional enum routes
 
-`Cards`, `Navigation` and `Camera` still route to explicit unavailable/setup screens and are **DISABLED**, not feature claims; the unreachable legacy `Tools` placeholder was removed on 2026-10-28, and `Calendar` is the working Organizer. Weather is backed by its validated provider model. `VoiceSettings` is now a working localized screen with persisted Athina/Nestoras profiles and a capability-gated preview callback; the optional host neural adapter and the offline Windows path both reuse the real PCM audio service.
+The unreachable `Tools` placeholder was removed on 2026-10-28 and the `Cards` (search), `Navigation` and `Camera` placeholders, which only showed "not available", on 2026-10-29 (enum, rendering, captures and control-panel routes), and `Calendar` is the working Organizer. Weather is backed by its validated provider model. `VoiceSettings` is now a working localized screen with persisted Athina/Nestoras profiles and a capability-gated preview callback; the optional host neural adapter and the offline Windows path both reuse the real PCM audio service.
 
 ## Event ownership invariants
 

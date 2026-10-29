@@ -26,6 +26,8 @@ Verified from the current official Waveshare documentation on 2026-10-17:
 | RTC interrupt | 13 |
 | User / boot buttons | 18 / 0 |
 
+Power off is deep sleep woken by the user key (GPIO18) only: the touch interrupt no longer wakes the board, so a touch in a pocket cannot switch it on, and the screen says to press the side button. The panel dims through `bsp_display_brightness_set` alone (the shared UI draws no dimming veil on the device).
+
 The code consumes these through `firmware/components/aura_board/include/aura_board_profile.h`; pins must not be scattered through application code. Safe PMIC/display/audio initialization order still needs BSP source inspection and physical verification.
 
 Board documentation: https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-2.16 (pinout, chips, ESP-IDF examples). Checked there and in the BSP 2.0.1 header for v13: GPIO18 is the user key (10 k pull-up, low when pressed), the QMI8658 sits on the shared I2C bus with INT1/INT2 on GPIO17/21 (address 0x6B or 0x6A by SA0), two microphones feed the ES7210, and the BSP provides `bsp_i2c_get_handle`, `bsp_audio_codec_microphone_init`, `bsp_sdcard_mount` and `bsp_display_brightness_set` (CO5300 command 0x51). The docs do not describe a speaker connector.

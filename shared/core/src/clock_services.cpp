@@ -346,6 +346,22 @@ std::string ClockServicesModel::serialize() const {
     for (const auto& reminder : snapshot_.reminders) {
         output << "R\t" << reminder.id << '\t' << reminder.due_minute << '\t' << reminder.text << '\n';
     }
+    // An alert nobody answered and a snoozed one ring again after a restart:
+    // a reminder has already left its list when it rings.
+    const auto alert_fields = [&output](const ClockAlert& alert) {
+        output << static_cast<int>(alert.kind) << '\t' << alert.id << '\t' << alert.hour << '\t' << alert.minute << '\t'
+               << alert.duration_s << '\t' << alert.label;
+    };
+    for (const auto& alert : queue_) {
+        output << "Q\t";
+        alert_fields(alert);
+        output << '\n';
+    }
+    for (const auto& snooze : snoozes_) {
+        output << "Z\t" << snooze.due_minute << '\t';
+        alert_fields(snooze.alert);
+        output << '\n';
+    }
     return output.str();
 }
 
@@ -355,11 +371,37 @@ bool ClockServicesModel::restore(const std::string& data) {
     if (!std::getline(input, line) || line != "aura-clock 1") return false;
     std::vector<AlarmItem> alarms;
     std::vector<ReminderItem> reminders;
+    std::vector<ClockAlert> queue;
+    std::vector<Snooze> snoozes;
     std::uint32_t next_id = 1;
+    // kind, id, hour, minute, duration and label from `fields[first]` on.
+    const auto parse_alert = [](const std::vector<std::string>& fields, std::size_t first, ClockAlert& alert) {
+        std::int64_t values[5]{};
+        for (std::size_t index = 0; index < 5; ++index) {
+            if (!parse_int(fields[first + index], values[index])) return false;
+        }
+        if (values[0] < 0 || values[0] > 2 || values[1] <= 0 || values[1] >= 0x7FFFFFFF || values[2] < 0 ||
+            values[2] > 23 || values[3] < 0 || values[3] > 59 || values[4] < 0 || values[4] > kMaxTimerSeconds) {
+            return false;
+        }
+        alert.kind = static_cast<ClockAlertKind>(values[0]);
+        alert.id = static_cast<std::uint32_t>(values[1]);
+        alert.hour = static_cast<int>(values[2]);
+        alert.minute = static_cast<int>(values[3]);
+        alert.duration_s = static_cast<std::uint32_t>(values[4]);
+        alert.label = sanitize_text(fields[first + 5], kMaxReminderBytes);
+        return true;
+    };
     while (std::getline(input, line)) {
         const auto fields = split_tabs(line);
         std::int64_t values[5]{};
-        if (fields.size() == 2 && fields[0] == "N" && parse_int(fields[1], values[0]) && values[0] > 0 &&
+        ClockAlert alert;
+        if (fields.size() == 7 && fields[0] == "Q" && queue.size() < kMaxReminders && parse_alert(fields, 1, alert)) {
+            queue.push_back(std::move(alert));
+        } else if (fields.size() == 8 && fields[0] == "Z" && snoozes.size() < kMaxReminders &&
+                   parse_int(fields[1], values[0]) && parse_alert(fields, 2, alert)) {
+            snoozes.push_back({std::move(alert), values[0]});
+        } else if (fields.size() == 2 && fields[0] == "N" && parse_int(fields[1], values[0]) && values[0] > 0 &&
             values[0] < 0x7FFFFFFF) {
             next_id = std::max(next_id, static_cast<std::uint32_t>(values[0]));
         } else if (fields.size() == 7 && fields[0] == "A" && alarms.size() < kMaxAlarms) {
@@ -394,6 +436,11 @@ bool ClockServicesModel::restore(const std::string& data) {
     }
     snapshot_.alarms = std::move(alarms);
     snapshot_.reminders = std::move(reminders);
+    queue_ = std::move(queue);
+    snoozes_ = std::move(snoozes);
+    if (queue_.empty()) snapshot_.alert.reset();
+    else snapshot_.alert = queue_.front();
+    snapshot_.queued_alerts = queue_.size();
     next_id_ = std::max(next_id_, next_id);
     sort_lists();
     changed();

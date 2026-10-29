@@ -187,7 +187,8 @@ bool AcousticEchoCanceller::process(const std::int16_t* microphone, const std::i
     return reference_active_;
 }
 
-void VoiceRecorder::start() {
+void VoiceRecorder::start(Mode mode) {
+    mode_ = mode;
     pcm_.clear();
     pcm_.reserve(kSampleRate * 4);
     frame_.clear();
@@ -201,7 +202,7 @@ void VoiceRecorder::start() {
 
 void VoiceRecorder::append(const std::int16_t* samples, std::size_t count) {
     if (!recording_ || !samples || count == 0) return;
-    const std::size_t limit = static_cast<std::size_t>(kSampleRate) * kMaxMs / 1000U;
+    const std::size_t limit = static_cast<std::size_t>(kSampleRate) * max_ms() / 1000U;
     const std::size_t buffered = pcm_.size() + frame_.size();
     const std::size_t room = limit > buffered ? limit - buffered : 0;
     const std::size_t take = std::min(count, room);
@@ -257,10 +258,13 @@ std::vector<std::uint8_t> VoiceRecorder::finish_wav() {
     return wav;
 }
 
-bool VoiceRecorder::no_speech() const noexcept { return !speech_detected_ && elapsed_ms() >= kNoSpeechMs; }
+bool VoiceRecorder::no_speech() const noexcept {
+    return !speech_detected_ && elapsed_ms() >= (mode_ == Mode::Dictation ? kDictationNoSpeechMs : kNoSpeechMs);
+}
 
 bool VoiceRecorder::should_stop() const noexcept {
-    return elapsed_ms() >= kMaxMs || (speech_detected_ && silence_ms_ >= kSilenceEndMs) || no_speech();
+    const auto silence_end = mode_ == Mode::Dictation ? kDictationSilenceEndMs : kSilenceEndMs;
+    return elapsed_ms() >= max_ms() || (speech_detected_ && silence_ms_ >= silence_end) || no_speech();
 }
 
 std::uint32_t VoiceRecorder::elapsed_ms() const noexcept {

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace aura {
@@ -169,5 +170,9 @@ private:
 };
 
 const char* aoraton_connection_name(AoratonConnectionState state) noexcept;
+
+// Characters the owner can still type: the limit is in bytes, and once the
+// message holds a non-ASCII letter (Greek takes two bytes) each one counts two.
+std::size_t aoraton_characters_left(std::string_view text, std::size_t max_bytes) noexcept;
 
 }  // namespace aura

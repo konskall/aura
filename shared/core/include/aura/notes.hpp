@@ -1,6 +1,9 @@
 #pragma once
 
+#include "aura/voice.hpp"
+
 #include <cstdint>
+#include <future>
 #include <string>
 #include <vector>
 
@@ -59,5 +62,34 @@ private:
 
 // "σημείωσ…", "note" and friends, after Greek/ASCII folding.
 bool question_mentions_notes(const std::string& question);
+
+// A voice note's audio file name. The random `nonce` keeps it unique when the
+// clock is still unknown (minute 0) or the counter restarted with the device,
+// so a new note never overwrites an older note's audio.
+std::string voice_note_file_name(std::int64_t minute, std::uint32_t counter, std::uint32_t nonce);
+
+// Voice-note transcriptions run beside the assistant's own recognition. Each
+// remembers its note, so a spoken question or a cancelled listen in the
+// meantime never drops one. At most kMaxPending run at once; a further note
+// is marked failed at once instead of waiting forever.
+class NoteTranscriptions {
+public:
+    static constexpr std::size_t kMaxPending = 4;
+
+    bool start(std::uint32_t note, std::future<TranscriptResult> job, NotesModel& notes);
+    // Applies the finished transcriptions to their notes.
+    void poll(NotesModel& notes);
+    bool empty() const noexcept { return jobs_.empty(); }
+    // Hands the unfinished jobs over: a std::future blocks in its destructor,
+    // so shutdown must not destroy them on the UI thread.
+    std::vector<std::future<TranscriptResult>> release();
+
+private:
+    struct Job {
+        std::uint32_t note{0};
+        std::future<TranscriptResult> result;
+    };
+    std::vector<Job> jobs_;
+};
 
 }  // namespace aura
