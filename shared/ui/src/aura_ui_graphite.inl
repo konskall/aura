@@ -22,6 +22,10 @@
             case LauncherApp::Weather:
                 if (weather.has_data) {
                     live.status = weather_glance().title + " · " + weather.data.location.name;
+                    // DEMO data says so first.
+                    if (weather.data.origin == WeatherDataOrigin::Demo) {
+                        live.status = std::string(v().demo_badge) + " · " + live.status;
+                    }
                     live.active = true;
                 }
                 break;

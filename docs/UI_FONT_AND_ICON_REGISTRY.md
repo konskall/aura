@@ -42,3 +42,29 @@ Key corrected mappings:
 | Wind / droplet / thermometer / clock | Lucide metric assets | Weather metrics and forecast context. |
 
 The source audit finds no plain `"BLE"` label or legacy custom microphone renderer in `shared/`, `simulator/`, or `tests/`.
+
+## Appearances (Settings → Εμφάνιση)
+
+Άλως is the set above. The three new looks bring their own text and numeral fonts, generated from the variable
+sources pinned to google/fonts commit `b68b528a75da7d9b73f3928899c07a23083a6633` (fontTools 4.65.0 instances,
+`lv_font_conv` 1.5.3 at 4 bpp, see `tools/fonts/build-fonts.ps1`). Each face keeps only the code points it has and
+falls back to the Plex font of the same role; numeral fonts fall back to their look's title font.
+
+| Role | Μάρμαρο | Σέλας | Γραφίτης |
+|---|---|---|---|
+| Caption 22 | Commissioner Regular | Manrope Medium | Roboto Flex Medium |
+| Body 26 | Commissioner Regular | Manrope Medium | Roboto Flex Regular |
+| Headline 28 | Commissioner Medium | Manrope SemiBold | Roboto Flex SemiBold, condensed |
+| Title 32 | Noto Serif Display Regular | Manrope Bold | Roboto Flex SemiBold |
+| Display | Noto Serif Display Light 72 | Manrope Light 72 | Roboto Flex Light condensed 64 |
+| Clock | Noto Serif Display ExtraLight 96 | Manrope ExtraLight 96 | Roboto Flex Light condensed 96 |
+| Numerals small / large | Noto Serif Display Light 84 / ExtraLight 128 | Manrope Light 80 / ExtraLight 116 | Roboto Flex Light condensed 64 / 116 |
+| Hero clock | — | — | Roboto Flex Light condensed 204 |
+
+Icons: every `IconRole` resolves to a 64 px A8 asset in each look's family (`icon_asset(role)` follows the active
+look): Lucide (Άλως), Phosphor Light (Μάρμαρο), Solar Bold Duotone (Σέλας) and Material Symbols Rounded
+(Γραφίτης). Sources, versions and licences are in `docs/ui/ICON_REGISTRY_AND_LICENSES.md` and
+`shared/assets/THIRD_PARTY.md`.
+
+Measured flash (firmware map, phase 2): Μάρμαρο fonts 272,839 B and Phosphor icons 412,400 B; Σέλας fonts
+235,716 B and Solar icons 408,276 B; Γραφίτης fonts 224,162 B and Material icons 416,524 B.

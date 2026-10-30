@@ -1,6 +1,6 @@
 # AURA appearances ("Εμφανίσεις"): design
 
-Status: **PROPOSED, awaiting the owner's approval** · branch `aura-themes` (from `a902f24`) · nothing implemented yet.
+Status: **APPROVED (2026-10-29) · IMPLEMENTED in phases 1–5** · branch `aura-themes` (from `a902f24`; commits `8775e57`, `372c895`, `256d8d9`) · not merged; nothing has run on the device yet (results in `docs/VERIFICATION.md`, decisions taken during the build in the plan's ledger).
 References: 1:1 mockups in `docs/design/themes/*.png` (480 × 480) and the motion reference `docs/design/themes/presence-reference.js`.
 
 ## Intent

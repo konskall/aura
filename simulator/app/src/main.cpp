@@ -4669,8 +4669,18 @@ int main(int argc, char** argv) {
                         lv_area_t clock_area{};
                         if (clock_cell) lv_obj_get_coords(clock_cell, &clock_area);
                         const bool columns = clock_cell && lv_obj_get_width(clock_cell) >= 200;
-                        const std::string status = std::string("22° · ") + (english ? "Athens" : "Αθήνα");
-                        const bool live = find_text(view_content(), status.c_str()) != nullptr;
+                        // The weather tile's live line; DEMO weather says so first (AGENTS.md rule 4).
+                        const auto& visual = english ? aura::l10n::visual_en_us() : aura::l10n::visual_el_gr();
+                        auto* weather_name = find_text(view_content(), visual.weather);
+                        auto* weather_cell = weather_name ? lv_obj_get_parent(weather_name) : nullptr;
+                        const std::string demo_first = std::string(visual.demo_badge) + " · 22°";
+                        bool live = false;
+                        for (std::uint32_t index = 0; weather_cell && index < lv_obj_get_child_count(weather_cell);
+                             ++index) {
+                            auto* child = lv_obj_get_child(weather_cell, static_cast<std::int32_t>(index));
+                            live = live || (lv_obj_check_type(child, &lv_label_class) &&
+                                            std::string(lv_label_get_text(child)).rfind(demo_first, 0) == 0);
+                        }
                         auto* settings_well = settings_cell ? lv_obj_get_child(settings_cell, 0) : nullptr;
                         const bool quiet = settings_well &&
                             lv_color_to_u32(lv_obj_get_style_bg_color(settings_well, LV_PART_MAIN)) % 0x1000000U ==

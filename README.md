@@ -12,7 +12,7 @@ All names, rooms, messages and data in the screenshots are fictional `DEMO` cont
 
 ## Σύντομα στα ελληνικά
 
-Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, μετάφραση πρόσωπο με πρόσωπο, μηνύματα Aoraton με κρυπτογράφηση και ειδοποιήσεις από το iPhone. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Ο προσομοιωτής δουλεύει σήμερα· το firmware χτίζεται, αλλά δεν έχει δοκιμαστεί ακόμα σε πραγματική πλακέτα.
+Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, μετάφραση πρόσωπο με πρόσωπο, μηνύματα Aoraton με κρυπτογράφηση και ειδοποιήσεις από το iPhone. Έχει τέσσερις εμφανίσεις (Άλως, Μάρμαρο, Σέλας, Γραφίτης) που επιλέγεις από τις Ρυθμίσεις → Εμφάνιση. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Ο προσομοιωτής δουλεύει σήμερα· το firmware χτίζεται, αλλά δεν έχει δοκιμαστεί ακόμα σε πραγματική πλακέτα.
 
 ## Contents
 
@@ -58,7 +58,7 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 | Radio | Greek stations, a station directory search (worldwide when no Greek station matches), favourites with your own order, now-playing titles, automatic reconnection; "βάλε ραδιόφωνο" plays the last station again |
 | Notifications | AURA and phone notifications in one place |
 | Organizer | Agenda, tasks and shopping list |
-| Settings | Wi-Fi, language, AI provider, reduced motion, sound, display, voice, weather and system |
+| Settings | Wi-Fi, language, appearance, AI provider, reduced motion, sound, display, voice, weather and system |
 
 ### Device
 
@@ -67,6 +67,19 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 - **Sound settings.** Volume, mute, message chime, spoken answers and continuous conversation.
 - **System.** Updates (OTA with rollback), diagnostics, restart, power off, and a factory reset that erases everything.
 - **Phone link.** Notifications and calls from a paired iPhone over Bluetooth LE (ANCS). In the simulator this uses the PC's Bluetooth adapter and is experimental.
+
+### Appearances
+
+Settings → Εμφάνιση offers four looks. A look sets the colours, typefaces, icons and components everywhere, gives six screens their own layout (Home, the answer, Apps, Weather, a running timer and Today) and brings its own animated presence for listening, thinking and speaking. The choice is stored on the device and applied before the first frame.
+
+| Look | Character | Type | Icons | Presence |
+|---|---|---|---|---|
+| Άλως (Halo) | The original look | IBM Plex Sans | Lucide | Mercury, a liquid-metal orb |
+| Μάρμαρο (Marble) | Quiet luxury: ivory and champagne on black, hairlines | Noto Serif Display, Commissioner | Phosphor Light | Μαργαριτάρι, a pearl |
+| Σέλας (Aurora) | Living light: glass surfaces and soft light fields | Manrope | Solar Bold Duotone | Σέλας, three ribbons of light |
+| Γραφίτης (Graphite) | A precision instrument: live tiles and gauges | Roboto Flex | Material Symbols Rounded | Αστερισμός, a sphere of points |
+
+![The four appearances, left to right Άλως, Μάρμαρο, Σέλας and Γραφίτης: Home above, listening below](docs/images/aura-appearances.png)
 
 ## How it is built
 
@@ -96,7 +109,7 @@ The device itself never holds an AI provider key. Production AI will go through 
 | `shared/core` | Assistant state machine, streaming, offline commands, organizer, clock, notes, radio, weather, Greek calendar, fuel, Aoraton, voice front end and echo cancellation, display power |
 | `shared/ui` | Every screen, the keyboard, motion and the design tokens |
 | `shared/localization` | All Greek and English text |
-| `shared/assets` | Fonts (IBM Plex, Space Grotesk), icons and images, with their licenses |
+| `shared/assets` | Fonts (IBM Plex, Space Grotesk, Noto Serif Display, Commissioner, Manrope, Roboto Flex), icons (Lucide, Phosphor, Solar, Material Symbols) and images, with their licenses |
 | `simulator/app` | The Windows simulator and its platform services |
 | `simulator/controls` | A loopback control page for simulated events |
 | `bridge` | The loopback bridge: Codex CLI and Groq runners, speech (Groq Whisper, Azure, Windows voices), fuel prices |
@@ -261,4 +274,5 @@ No license file has been added yet. Until one is, the AURA source code is not li
 Third-party components keep their own licenses:
 
 - fonts, icons and images: [shared/assets/THIRD_PARTY.md](shared/assets/THIRD_PARTY.md);
+- the Σέλας icons are the Solar icon set by 480 Design, under [CC BY 4.0](shared/assets/licenses/SOLAR_CC_BY_4.0.txt);
 - the minimp3 decoder: [shared/third_party/minimp3/LICENSE](shared/third_party/minimp3/LICENSE).
