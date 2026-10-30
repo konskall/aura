@@ -7,6 +7,10 @@ on:
 jobs:
   windows-simulator:
     runs-on: windows-latest
+    env:
+      # The runner has no sound card: SDL's dummy driver plays silence, so the
+      # speaking screens and their checks run as on a PC with speakers.
+      SDL_AUDIODRIVER: dummy
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
