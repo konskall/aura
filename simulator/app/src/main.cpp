@@ -5000,6 +5000,42 @@ int main(int argc, char** argv) {
                     pump(2);
                     record("graphite.briefing", "timeline", today_ok_graphite, today_detail_graphite);
                 }
+
+                // System in every look and language: no row title is cut (LVGL ends a
+                // cut label's text in dots); the factory reset title was cut in all four.
+                {
+                    std::function<std::string(lv_obj_t*, const lv_font_t*)> cut_titles =
+                        [&](lv_obj_t* object, const lv_font_t* font) {
+                            std::string cut;
+                            if (lv_obj_check_type(object, &lv_label_class) &&
+                                lv_obj_get_style_text_font(object, LV_PART_MAIN) == font) {
+                                const std::string shown = lv_label_get_text(object);
+                                if (shown.size() >= 3 && shown.compare(shown.size() - 3, 3, "...") == 0) {
+                                    cut += "[" + shown + "]";
+                                }
+                            }
+                            for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                                cut += cut_titles(lv_obj_get_child(object, static_cast<std::int32_t>(index)), font);
+                            }
+                            return cut;
+                        };
+                    bool titles_ok = true;
+                    std::string titles_detail;
+                    for (const auto look : {aura::Appearance::Halo, aura::Appearance::Marble,
+                                            aura::Appearance::Aurora, aura::Appearance::Graphite}) {
+                        ui.set_appearance(look);
+                        for (const auto language : languages) {
+                            ui.set_language(language);
+                            reset_to(aura::UiView::System);
+                            pump(2);
+                            const std::string cut = cut_titles(view_content(), aura::ui::fonts_for(look).headline);
+                            titles_ok = titles_ok && cut.empty();
+                            if (!cut.empty()) titles_detail += std::string(aura::appearance_id(look)) + ":" + cut + " ";
+                        }
+                    }
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    record("system.titles_whole", "four-looks-two-languages", titles_ok, titles_detail);
+                }
                 ui.set_appearance(aura::Appearance::Halo);
             }
 

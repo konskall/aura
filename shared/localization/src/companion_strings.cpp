@@ -376,14 +376,14 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.system_power = "Λειτουργία";
         s.system_restart = "Επανεκκίνηση";
         s.system_power_off = "Απενεργοποίηση";
-        s.system_factory_reset = "Επαναφορά εργοστασιακών";
+        s.system_factory_reset = "Πλήρης επαναφορά";
         s.system_factory_reset_detail = "Σβήνει όλα τα δεδομένα";
         s.system_restart_question = "Επανεκκίνηση;";
         s.system_restart_detail = "Η συσκευή θα ξεκινήσει ξανά σε λίγα δευτερόλεπτα.";
         s.system_power_off_question = "Απενεργοποίηση;";
         s.system_power_off_detail = "Για να ανοίξει ξανά, κράτα πατημένη την οθόνη.";
         s.system_power_off_detail_button = "Για να ανοίξει ξανά, πάτα το πλαϊνό κουμπί.";
-        s.system_reset_question = "Επαναφορά εργοστασιακών;";
+        s.system_reset_question = "Πλήρης επαναφορά;";
         s.system_reset_detail = "Διαγράφονται όλα τα δεδομένα και οι συνδέσεις. Δεν αναιρείται.";
         s.system_reset_confirm = "Επαναφορά";
         s.system_starting = "Εκκίνηση…";
