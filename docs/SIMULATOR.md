@@ -9,7 +9,7 @@ Windows 10/11, PowerShell 5.1+, Git and network access are needed for first setu
 .\scripts\dev-simulator.ps1
 ```
 
-For everyday testing, `run.bat` in the repository root runs `build-simulator.ps1` (incremental) and then `dev-simulator.ps1 -Provider codex`; `run.bat mock` selects Demo Mode. It refuses to start a second copy while a simulator window is open, and it pauses on failure so a double-clicked window does not vanish.
+For everyday testing, `run.bat` in the repository root runs `build-simulator.ps1` (incremental) and then `dev-simulator.ps1 -Provider codex -SpeechProvider groq -TtsProvider azure`: Codex answers, Groq speech recognition and Azure voices, so the ignored `.env` needs `GROQ_API_KEY`, `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. `run.bat mock` selects Demo Mode and needs no keys. `run.bat` refuses to start a second copy while a simulator window is open, and it pauses on failure so a double-clicked window does not vanish.
 
 Demo Mode is the default of `dev-simulator.ps1`. To use the locally authenticated Codex CLI for Assistant turns:
 

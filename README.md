@@ -140,7 +140,7 @@ cd aura
 .\run.bat mock        # DEMO answers, no account needed
 ```
 
-`run.bat` builds whatever changed and opens the 480 × 480 simulator together with its control page. Without an argument it uses the locally signed-in Codex CLI.
+`run.bat` builds whatever changed and opens the 480 × 480 simulator together with its control page. Without an argument it answers with the locally signed-in Codex CLI, recognizes speech with Groq and speaks with Azure, using the keys in `.env` (below). `run.bat mock` needs no account or keys.
 
 ### Choosing the assistant and voices
 
