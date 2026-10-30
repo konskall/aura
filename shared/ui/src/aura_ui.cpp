@@ -1119,12 +1119,12 @@ struct AuraUi::Impl {
             lv_obj_set_style_bg_opa(button, LV_OPA_COVER, LV_STATE_PRESSED);
         } else if (kit.rows == ui::RowStyle::Glass && neutral) {
             // Aurora: neutral buttons are glass like its rows.
-            lv_obj_set_style_bg_color(button, ui::color(ui::tokens::surface_high), 0);
-            lv_obj_set_style_bg_grad_color(button, ui::color(ui::tokens::surface), 0);
+            lv_obj_set_style_bg_color(button, ui::color(ui::kGlassTop), 0);
+            lv_obj_set_style_bg_grad_color(button, ui::color(ui::kGlassBottom), 0);
             lv_obj_set_style_bg_grad_dir(button, LV_GRAD_DIR_VER, 0);
             lv_obj_set_style_border_width(button, 1, 0);
-            lv_obj_set_style_border_color(button, ui::color(0xAAB4FF), 0);
-            lv_obj_set_style_border_opa(button, 28, 0);
+            lv_obj_set_style_border_color(button, ui::color(ui::kGlassEdge), 0);
+            lv_obj_set_style_border_opa(button, ui::kGlassEdgeOpacity, 0);
         }
         if (role != ui::IconRole::Count) {
             auto* icon = icon_view(button, role, size >= 88 ? 40 : 30, neutral ? ui::tokens::text : accent);
@@ -1168,7 +1168,8 @@ struct AuraUi::Impl {
         const int detail_height = subtitle ? lv_font_get_line_height(ui::font_caption()) : 0;
         const int text_x = has_icon ? 68 : 4;
         if (has_icon) {
-            auto* well = icon_well(row, 52, role, accent, 30);
+            const int well_size = ui::active_metrics().wells == ui::WellStyle::Chip ? 48 : 52;
+            auto* well = icon_well(row, well_size, role, accent, 30);
             lv_obj_align(well, LV_ALIGN_LEFT_MID, 0, 0);
         }
         const int width = text_width > 0 ? text_width : kWidth - 36 - text_x - 36;
@@ -1570,6 +1571,10 @@ struct AuraUi::Impl {
             render_home_marble();
             return;
         }
+        if (appearance == Appearance::Aurora) {
+            render_home_aurora();
+            return;
+        }
         // The clock, or the wordmark until the clock is known.
         if (status.clock_valid) {
             home_clock = label(content, "", 0, 42, ui::tokens::display_width, ui::font_clock(), ui::tokens::text,
@@ -1664,6 +1669,7 @@ struct AuraUi::Impl {
 
     void render_answer_reader() {
         if (appearance == Appearance::Marble) render_answer_marble();
+        else if (appearance == Appearance::Aurora) render_answer_aurora();
         else render_answer_companion();
     }
 
@@ -2298,6 +2304,30 @@ struct AuraUi::Impl {
         primary_scroller = weather_scroll;
     }
 
+    // The city as the header's title, with a pencil: a tap opens the city picker.
+    void weather_city_title() {
+        const auto& data = weather.data;
+        auto* city = lv_button_create(content);
+        ui::reset(city);
+        lv_obj_set_clickable(city, true);
+        lv_obj_set_size(city, LV_SIZE_CONTENT, ui::tokens::HEADER_BUTTON);
+        lv_obj_set_pos(city, 84, 16);
+        lv_obj_set_style_pad_hor(city, 12, 0);
+        lv_obj_set_style_radius(city, ui::tokens::HEADER_BUTTON / 2, 0);
+        lv_obj_set_style_bg_color(city, ui::color(ui::tokens::surface_high), LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(city, LV_OPA_COVER, LV_STATE_PRESSED);
+        lv_obj_set_layout(city, LV_LAYOUT_FLEX);
+        lv_obj_set_flex_flow(city, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(city, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(city, 10, 0);
+        auto* name = ui::make_label(city, data.location.name.c_str(), ui::tokens::text, ui::font_title());
+        lv_obj_set_style_max_width(name, 246, 0);
+        lv_obj_set_height(name, lv_font_get_line_height(ui::font_title()));
+        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+        icon_view(city, ui::IconRole::Edit, 22, ui::tokens::text_tertiary);
+        lv_obj_add_event_cb(city, weather_change_city_event, LV_EVENT_CLICKED, this);
+    }
+
     // "<source> · Ενημέρωση 18:24"; DEMO data names no source.
     std::string weather_updated_text() const {
         const auto& data = weather.data;
@@ -2410,6 +2440,10 @@ struct AuraUi::Impl {
     void render_weather_ready(bool refreshing) {
         if (appearance == Appearance::Marble) {
             render_weather_ready_marble(refreshing);
+            return;
+        }
+        if (appearance == Appearance::Aurora) {
+            render_weather_ready_aurora(refreshing);
             return;
         }
         make_header(v().weather, ui::IconRole::Refresh, weather_refresh_event, ui::tokens::ice,
@@ -3614,6 +3648,7 @@ struct AuraUi::Impl {
 #include "aura_ui_system.inl"
 #include "aura_ui_appearance.inl"
 #include "aura_ui_marble.inl"
+#include "aura_ui_aurora.inl"
 };
 
 AuraUi::AuraUi() : impl_(std::make_unique<Impl>()) {}

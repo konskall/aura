@@ -65,25 +65,7 @@
         const auto& data = weather.data;
         make_header("", ui::IconRole::Refresh, weather_refresh_event, ui::tokens::ice,
                     static_cast<bool>(callbacks.on_weather_refresh));
-        auto* city = lv_button_create(content);
-        ui::reset(city);
-        lv_obj_set_clickable(city, true);
-        lv_obj_set_size(city, LV_SIZE_CONTENT, ui::tokens::HEADER_BUTTON);
-        lv_obj_set_pos(city, 84, 16);
-        lv_obj_set_style_pad_hor(city, 12, 0);
-        lv_obj_set_style_radius(city, ui::tokens::HEADER_BUTTON / 2, 0);
-        lv_obj_set_style_bg_color(city, ui::color(ui::tokens::surface_high), LV_STATE_PRESSED);
-        lv_obj_set_style_bg_opa(city, LV_OPA_COVER, LV_STATE_PRESSED);
-        lv_obj_set_layout(city, LV_LAYOUT_FLEX);
-        lv_obj_set_flex_flow(city, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(city, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(city, 10, 0);
-        auto* name = ui::make_label(city, data.location.name.c_str(), ui::tokens::text, ui::font_title());
-        lv_obj_set_style_max_width(name, 246, 0);
-        lv_obj_set_height(name, lv_font_get_line_height(ui::font_title()));
-        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-        icon_view(city, ui::IconRole::Edit, 22, ui::tokens::text_tertiary);
-        lv_obj_add_event_cb(city, weather_change_city_event, LV_EVENT_CLICKED, this);
+        weather_city_title();
         make_weather_scroll();
 
         // Two digits sit beside the condition; a minus or a third digit takes
@@ -217,7 +199,6 @@
     // ---- Timer: a watch dial ----------------------------------------------
 
     static constexpr int kTimerDialY = 232;
-    static constexpr int kTimerDigitsY = 196;
 
     // The arc's share of the timer still to run, in thousandths.
     static std::int32_t timer_permille(const TimerItem& timer) {
@@ -225,18 +206,18 @@
         return static_cast<std::int32_t>(std::min<std::uint64_t>(1000U, timer.remaining_ms / timer.duration_s));
     }
 
-    // Μάρμαρο's serif digits; an hour or more ("1:05:00") takes the smaller
-    // display numerals to stay inside the dial.
+    // A dial's digits: the look's small numerals; an hour or more ("1:05:00")
+    // takes the display numerals to stay inside the dial.
     const lv_font_t* timer_digits_font(const std::string& text) const {
         return text.size() <= 5 ? ui::font_numerals_small() : ui::font_display();
     }
 
-    // Keeps the digits centred in the dial when their length changes the font.
+    // Keeps the digits centred on `timer_digits_y` when their length changes the font.
     void place_timer_digits(const std::string& text) {
         const auto* font = timer_digits_font(text);
         if (lv_obj_get_style_text_font(clock_item_label, LV_PART_MAIN) == font) return;
         lv_obj_set_style_text_font(clock_item_label, font, 0);
-        lv_obj_set_y(clock_item_label, kTimerDigitsY - lv_font_get_line_height(font) / 2);
+        lv_obj_set_y(clock_item_label, timer_digits_y - lv_font_get_line_height(font) / 2);
     }
 
     // "Λήγει 18:32" while running on a known clock (to the nearest minute),
@@ -257,6 +238,7 @@
     void render_timer_marble(const TimerItem& timer) {
         constexpr int kDial = 288;
         constexpr int kTicks = 264;
+        timer_digits_y = 196;
         auto* ticks = lv_scale_create(content);
         ui::reset(ticks);
         lv_obj_set_size(ticks, kTicks, kTicks);
@@ -294,7 +276,7 @@
 
         const auto text = countdown_text(timer.remaining_ms);
         const auto* font = timer_digits_font(text);
-        clock_item_label = label(content, text.c_str(), 0, kTimerDigitsY - lv_font_get_line_height(font) / 2,
+        clock_item_label = label(content, text.c_str(), 0, timer_digits_y - lv_font_get_line_height(font) / 2,
                                  ui::tokens::display_width, font,
                                  timer.paused ? ui::tokens::text_secondary : ui::tokens::text, LV_TEXT_ALIGN_CENTER);
         const std::string name = timer.label.empty() ? duration_words(timer.duration_s) : timer.label;

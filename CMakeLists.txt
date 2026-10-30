@@ -92,6 +92,7 @@ add_library(aura_ui STATIC
     shared/ui/src/aura_theme.cpp
     shared/ui/src/aura_icons.cpp
     shared/ui/src/aura_keyboard.cpp
+    shared/ui/src/aura_aurora_view.cpp
     shared/ui/src/aura_mercury_view.cpp
     shared/ui/src/aura_pearl_view.cpp
     shared/ui/src/aura_presence.cpp

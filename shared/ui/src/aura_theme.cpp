@@ -1,5 +1,7 @@
 #include "aura/aura_theme.hpp"
 
+#include <array>
+#include <cmath>
 #include <cstdint>
 
 #include "aura/aura_appearance.hpp"
@@ -17,6 +19,36 @@ std::uint32_t shade(std::uint32_t rgb, int percent) {
         return ((static_cast<int>((rgb >> shift) & 0xFFU) * percent / 100) & 0xFF) << shift;
     };
     return static_cast<std::uint32_t>(channel(16) | channel(8) | channel(0));
+}
+
+// The light fields' disc: brightest at the centre, fading smoothly to nothing
+// at the edge. 1 KB, shared by every field.
+const lv_image_dsc_t* light_disc() {
+    constexpr int kSize = 32;
+    static std::array<std::uint8_t, kSize * kSize> pixels{};
+    static lv_image_dsc_t descriptor{};
+    static const bool ready = [] {
+        const float half = static_cast<float>(kSize) / 2.0F;
+        for (int y = 0; y < kSize; ++y) {
+            for (int x = 0; x < kSize; ++x) {
+                const float dx = (static_cast<float>(x) + 0.5F - half) / half;
+                const float dy = (static_cast<float>(y) + 0.5F - half) / half;
+                const float falloff = std::max(0.0F, 1.0F - (dx * dx + dy * dy));
+                pixels[static_cast<std::size_t>(y * kSize + x)] =
+                    static_cast<std::uint8_t>(falloff * falloff * 255.0F + 0.5F);
+            }
+        }
+        descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
+        descriptor.header.cf = LV_COLOR_FORMAT_A8;
+        descriptor.header.w = kSize;
+        descriptor.header.h = kSize;
+        descriptor.header.stride = kSize;
+        descriptor.data_size = pixels.size();
+        descriptor.data = pixels.data();
+        return true;
+    }();
+    (void)ready;
+    return &descriptor;
 }
 }  // namespace
 
@@ -41,6 +73,32 @@ void reset(lv_obj_t* object) {
     lv_obj_set_style_pad_all(object, 0, 0);
 }
 
+void style_glass(lv_obj_t* object, int radius) {
+    lv_obj_set_style_bg_color(object, color(kGlassTop), 0);
+    lv_obj_set_style_bg_grad_color(object, color(kGlassBottom), 0);
+    lv_obj_set_style_bg_grad_dir(object, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(object, 1, 0);
+    lv_obj_set_style_border_color(object, color(kGlassEdge), 0);
+    lv_obj_set_style_border_opa(object, kGlassEdgeOpacity, 0);
+    lv_obj_set_style_radius(object, radius, 0);
+}
+
+lv_obj_t* light_field(lv_obj_t* parent, int center_x, int center_y, int radius, std::uint32_t tint,
+                      lv_opa_t opacity) {
+    auto* field = lv_image_create(parent);
+    lv_image_set_src(field, light_disc());
+    lv_image_set_scale(field, static_cast<std::uint32_t>(2 * radius * LV_SCALE_NONE / 32));
+    lv_obj_set_size(field, 2 * radius, 2 * radius);
+    lv_obj_set_pos(field, center_x - radius, center_y - radius);
+    lv_obj_set_style_image_recolor(field, color(tint), 0);
+    lv_obj_set_style_image_recolor_opa(field, LV_OPA_COVER, 0);
+    lv_obj_set_style_image_opa(field, opacity, 0);
+    lv_obj_set_clickable(field, false);
+    lv_obj_set_scrollable(field, false);
+    return field;
+}
+
 // No shadows anywhere: they are the most expensive LVGL primitive on the
 // ESP32-S3 and read as dated on true black.
 void style_platter(lv_obj_t* object, std::uint32_t accent, int radius, bool selected) {
@@ -59,12 +117,13 @@ void style_platter(lv_obj_t* object, std::uint32_t accent, int radius, bool sele
         lv_obj_set_style_bg_opa(object, LV_OPA_COVER, LV_STATE_PRESSED);
     } else if (rows == RowStyle::Glass) {
         // Aurora: dark glass, lighter at the top, with a faint light edge.
-        lv_obj_set_style_bg_color(object, color(selected ? tokens::surface_glass : tokens::surface_high), 0);
-        lv_obj_set_style_bg_grad_color(object, color(tokens::surface), 0);
-        lv_obj_set_style_bg_grad_dir(object, LV_GRAD_DIR_VER, 0);
-        lv_obj_set_style_border_width(object, selected ? 2 : 1, 0);
-        lv_obj_set_style_border_color(object, color(selected ? accent : 0xAAB4FF), 0);
-        lv_obj_set_style_border_opa(object, selected ? LV_OPA_70 : 28, 0);
+        style_glass(object, radius);
+        if (selected) {
+            lv_obj_set_style_bg_color(object, color(tokens::surface_glass), 0);
+            lv_obj_set_style_border_width(object, 2, 0);
+            lv_obj_set_style_border_color(object, color(accent), 0);
+            lv_obj_set_style_border_opa(object, LV_OPA_70, 0);
+        }
     }
     lv_obj_set_style_radius(object, radius, 0);
     lv_obj_set_style_pad_all(object, 16, 0);

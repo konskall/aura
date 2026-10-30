@@ -1,5 +1,6 @@
 #include "aura/aura_appearance.hpp"
 #include "aura/aura_icons.hpp"
+#include "aura/aura_aurora_view.hpp"
 #include "aura/aura_mercury_view.hpp"
 #include "aura/aura_pearl_view.hpp"
 #include "aura/aura_presence.hpp"
@@ -327,6 +328,11 @@ void check_component_kit() {
                        lv_obj_get_style_bg_grad_dir(platter, LV_PART_MAIN) == LV_GRAD_DIR_VER &&
                        lv_obj_get_style_border_width(platter, LV_PART_MAIN) == 1,
                    "Aurora rows and platters are glass: a vertical gradient with a light edge");
+            expect(same_color(lv_obj_get_style_bg_color(row, LV_PART_MAIN), 0x1A1F34) &&
+                       same_color(lv_obj_get_style_bg_grad_color(row, LV_PART_MAIN), 0x0D1020) &&
+                       same_color(lv_obj_get_style_border_color(row, LV_PART_MAIN), 0xAAB4FF) &&
+                       lv_obj_get_style_border_opa(row, LV_PART_MAIN) == 28,
+                   "Aurora's glass runs from 0x1A1F34 to 0x0D1020 with an 11 % 0xAAB4FF edge");
         } else {
             expect(lv_obj_get_style_bg_opa(row, LV_PART_MAIN) == LV_OPA_COVER &&
                        same_color(lv_obj_get_style_bg_color(row, LV_PART_MAIN), palette.surface) &&
@@ -336,6 +342,21 @@ void check_component_kit() {
         lv_obj_clean(screen);
     }
     ui::set_active_appearance(Appearance::Halo);
+
+    // Σέλας's light fields: one small shared soft disc, scaled and tinted.
+    auto* field = ui::light_field(screen, 300, 120, 150, 0x7B5CFF, 90);
+    const auto* source = static_cast<const lv_image_dsc_t*>(lv_image_get_src(field));
+    lv_obj_update_layout(field);
+    expect(source && source->header.cf == LV_COLOR_FORMAT_A8 && source->header.w == 32 && source->header.h == 32,
+           "a light field draws one shared 32 x 32 A8 disc (1 KB of internal RAM)");
+    expect(lv_obj_get_width(field) == 300 && lv_obj_get_height(field) == 300 && lv_obj_get_x(field) == 150 &&
+               lv_obj_get_y(field) == -30 && !lv_obj_is_clickable(field) &&
+               same_color(lv_obj_get_style_image_recolor(field, LV_PART_MAIN), 0x7B5CFF) &&
+               lv_obj_get_style_image_opa(field, LV_PART_MAIN) == 90,
+           "a light field is centred, sized by its radius, tinted and never a target");
+    auto* second = ui::light_field(screen, 100, 100, 40, 0x38E1C9, 60);
+    expect(lv_image_get_src(second) == lv_image_get_src(field), "every light field shares the one disc");
+    lv_obj_clean(screen);
 }
 
 // Every appearance has an assistant presence that animates in all four states,
@@ -421,6 +442,66 @@ void check_pearl_presence() {
     for (int step = 0; step < 3; ++step) pearl.tick(66);
     expect(pearl.object() != nullptr && pearl.frame_count() > again, "the pearl attaches a second time");
     pearl.detach();
+    lv_obj_clean(screen);
+}
+
+// Σέλας's ribbons: a 432 x 200 band of additive light and a haze behind it.
+void check_aurora_presence() {
+    using aura::ui::PresenceState;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+    expect(aura::ui::make_presence(aura::Appearance::Aurora)->buffer_bytes() == 259200U,
+           "Σέλας's presence is the ribbons' 432 x 200 RGB565 + A8 band");
+
+    auto aurora = std::make_unique<aura::ui::AuraAuroraView>();
+    expect(aura::ui::AuraAuroraView::frame_interval_ms == 66, "the ribbons animate at about 15 FPS");
+    expect(aurora->attach(screen, 240, 234) == aurora->object() && aurora->object() != nullptr,
+           "the ribbons attach their band");
+    const auto* band = static_cast<const lv_image_dsc_t*>(lv_image_get_src(aurora->object()));
+    const auto lit = [&] {
+        const auto* alpha = band->data + 432 * 200 * 2;
+        int count = 0;
+        for (int index = 0; index < 432 * 200; ++index) count += alpha[index] > 24 ? 1 : 0;
+        return count;
+    };
+    for (const auto state : {PresenceState::Idle, PresenceState::Listening, PresenceState::Thinking,
+                             PresenceState::Speaking}) {
+        aurora->set_state(state);
+        aurora->set_level(0.6F);
+        const auto before = aurora->frame_count();
+        for (int step = 0; step < 3; ++step) aurora->tick(66);
+        expect(aurora->frame_count() > before && lit() > 1000, "the ribbons move and shine in every state");
+    }
+
+    // Listening: a louder voice makes the ribbons sway further.
+    aurora->set_state(PresenceState::Listening);
+    aurora->set_level(0.0F);
+    for (int step = 0; step < 10; ++step) aurora->tick(66);
+    const float quiet = aurora->amplitude();
+    aurora->set_level(1.0F);
+    for (int step = 0; step < 10; ++step) aurora->tick(66);
+    const float loud = aurora->amplitude();
+    expect(quiet > 0.0F && loud > quiet, "a louder voice makes the ribbons sway further");
+
+    // Thinking: within a second the ribbons have tied into the loop.
+    aurora->set_state(PresenceState::Thinking);
+    for (int step = 0; step < 16; ++step) aurora->tick(66);
+    expect(aurora->loop_share() >= 0.95F && lit() > 1000, "within a second the ribbons tie into the loop");
+
+    aurora->set_reduced_motion(true);
+    const auto frozen = aurora->frame_count();
+    for (int step = 0; step < 4; ++step) aurora->tick(66);
+    expect(aurora->frame_count() == frozen, "Reduced Motion freezes the ribbons");
+    aurora->set_reduced_motion(false);
+
+    aurora->detach();
+    lv_obj_clean(screen);
+    expect(aurora->object() == nullptr && !aurora->tick(66), "detached ribbons forget their objects");
+    aurora->attach(screen, 240, 234);
+    const auto again = aurora->frame_count();
+    for (int step = 0; step < 3; ++step) aurora->tick(66);
+    expect(aurora->object() != nullptr && aurora->frame_count() > again, "the ribbons attach a second time");
+    aurora->detach();
     lv_obj_clean(screen);
 }
 
@@ -525,6 +606,7 @@ int main() {
     check_component_kit();
     check_presences();
     check_pearl_presence();
+    check_aurora_presence();
 
     aura::ui::AuraMercuryView mercury;
     expect(mercury.buffer_bytes() == static_cast<std::size_t>(176 * 176 * 3),

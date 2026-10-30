@@ -73,7 +73,7 @@ const FontSet kFonts[] = {
 constexpr Metrics kMetrics[] = {
     {RowStyle::Platter, WellStyle::TintedCircle, false, false, 28, LV_RADIUS_CIRCLE, 260},
     {RowStyle::Hairline, WellStyle::HairlineCircle, false, true, 24, LV_RADIUS_CIRCLE, 272},
-    {RowStyle::Glass, WellStyle::Chip, true, false, 28, LV_RADIUS_CIRCLE, 260},
+    {RowStyle::Glass, WellStyle::Chip, true, false, 28, LV_RADIUS_CIRCLE, 234},
     {RowStyle::Platter, WellStyle::Squircle, false, false, 24, 22, 260},
 };
 

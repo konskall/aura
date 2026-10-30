@@ -89,7 +89,19 @@ const lv_font_t* font_hero();      // the largest numerals (Home clock); the lar
 const lv_font_t* font_brand();     // Space Grotesk 26: "AURA" only
 // The text roles above come from the active appearance's font set.
 
+// Σέλας's glass: a vertical gradient with a faint light edge (11 %).
+inline constexpr std::uint32_t kGlassTop = 0x1A1F34;
+inline constexpr std::uint32_t kGlassBottom = 0x0D1020;
+inline constexpr std::uint32_t kGlassEdge = 0xAAB4FF;
+inline constexpr lv_opa_t kGlassEdgeOpacity = 28;
+
 void reset(lv_obj_t* object);
+// Σέλας's glass on any surface: the gradient, its light edge and `radius`.
+void style_glass(lv_obj_t* object, int radius);
+// A soft light field (Σέλας): one shared 32 x 32 A8 disc scaled to `radius`
+// and tinted. Only for regions that do not animate; never a target.
+lv_obj_t* light_field(lv_obj_t* parent, int center_x, int center_y, int radius, std::uint32_t tint,
+                      lv_opa_t opacity);
 // A borderless graphite platter; `selected` adds an accent hairline.
 void style_platter(lv_obj_t* object, std::uint32_t accent = tokens::blue,
                    int radius = tokens::radius_large, bool selected = false);

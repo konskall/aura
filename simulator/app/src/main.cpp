@@ -3848,6 +3848,19 @@ int main(int argc, char** argv) {
                    ui.mercury_frame_count() > pearl_frames_before,
                    aura::state_name(controller.snapshot().state) + std::string("/") +
                        std::to_string(ui.mercury_frame_count() - pearl_frames_before));
+            // And into Σέλας: its ribbons take over and keep moving.
+            ui.set_appearance(aura::Appearance::Aurora);
+            const auto ribbon_frames_before = ui.mercury_frame_count();
+            for (int step = 0; step < 10; ++step) {
+                ui.tick(66);
+                pump(1);
+            }
+            record("appearance.switch_while_listening", "aurora",
+                   ui.view() == aura::UiView::Assistant &&
+                   controller.snapshot().state == aura::AssistantState::Listening &&
+                   ui.mercury_frame_count() > ribbon_frames_before,
+                   aura::state_name(controller.snapshot().state) + std::string("/") +
+                       std::to_string(ui.mercury_frame_count() - ribbon_frames_before));
             controller.dispatch({aura::EventType::Reset});
             apply();
             pump(2);
@@ -4219,6 +4232,299 @@ int main(int argc, char** argv) {
                 }
                 ui.set_language(aura::InterfaceLanguage::Greek);
                 record("marble.briefing", "greeting-rows", briefing_ok, briefing_detail);
+
+                // ---- Σέλας ---------------------------------------------------
+                ui.set_appearance(aura::Appearance::Aurora);
+                const auto& aurora_fonts = aura::ui::fonts_for(aura::Appearance::Aurora);
+                const auto glass = [](lv_obj_t* object) {
+                    for (; object; object = lv_obj_get_parent(object)) {
+                        if (lv_obj_get_style_bg_grad_dir(object, LV_PART_MAIN) == LV_GRAD_DIR_VER) return true;
+                    }
+                    return false;
+                };
+                std::function<bool(lv_obj_t*)> has_count = [&](lv_obj_t* object) {
+                    const auto count = lv_obj_get_child_count(object);
+                    for (std::uint32_t index = 0; index < count; ++index) {
+                        auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                        if (lv_obj_check_type(child, &lv_label_class)) {
+                            const std::string value = lv_label_get_text(child);
+                            if (!value.empty() && value.find_first_not_of("0123456789") == std::string::npos) return true;
+                        }
+                        if (has_count(child)) return true;
+                    }
+                    return false;
+                };
+                std::function<void(lv_obj_t*, int&, int&)> count_arcs = [&](lv_obj_t* object, int& all, int& shown) {
+                    const auto count = lv_obj_get_child_count(object);
+                    for (std::uint32_t index = 0; index < count; ++index) {
+                        auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                        if (lv_obj_check_type(child, &lv_arc_class)) {
+                            ++all;
+                            if (!lv_obj_is_hidden(child)) ++shown;
+                        }
+                        count_arcs(child, all, shown);
+                    }
+                };
+                std::function<bool(lv_obj_t*)> has_light_field = [&](lv_obj_t* object) {
+                    const auto count = lv_obj_get_child_count(object);
+                    for (std::uint32_t index = 0; index < count; ++index) {
+                        auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                        if (lv_obj_check_type(child, &lv_image_class)) {
+                            const auto* source = static_cast<const lv_image_dsc_t*>(lv_image_get_src(child));
+                            if (source && source->header.cf == LV_COLOR_FORMAT_A8 && source->header.w == 32 &&
+                                lv_obj_get_width(child) > 100) return true;
+                        }
+                        if (has_light_field(child)) return true;
+                    }
+                    return false;
+                };
+
+                // The kit on a real screen: Today's rows are glass, with 48 px tinted chips.
+                reset_to(aura::UiView::Briefing);
+                pump(2);
+                bool chips = false;
+                std::function<void(lv_obj_t*)> find_chip = [&](lv_obj_t* object) {
+                    const auto count = lv_obj_get_child_count(object);
+                    for (std::uint32_t index = 0; index < count && !chips; ++index) {
+                        auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                        if (lv_obj_get_width(child) == 48 && lv_obj_get_height(child) == 48 &&
+                            lv_obj_get_style_radius(child, LV_PART_MAIN) < 24 && glass(object)) chips = true;
+                        find_chip(child);
+                    }
+                };
+                find_chip(view_content());
+                record("aurora.kit", "glass-rows-48px-chips", chips && fits(), std::to_string(chips));
+
+                // Home: the clock at the top left, the presence on its hero centre with
+                // a light field, glass tiles for the weather and the next alarm, Apps.
+                {
+                    std::uint32_t alarm_id = 0;
+                    companion.clock().add_alarm(7, 30, true, "", &alarm_id);
+                    bool home_ok = true;
+                    std::string home_detail;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        const auto& strings = language == aura::InterfaceLanguage::English ? aura::l10n::en_us() :
+                                                                                             aura::l10n::el_gr();
+                        reset_to(aura::UiView::Home);
+                        pump(3);
+                        lv_obj_t* clock = nullptr;
+                        std::function<void(lv_obj_t*)> find_clock = [&](lv_obj_t* object) {
+                            const auto count = lv_obj_get_child_count(object);
+                            for (std::uint32_t index = 0; index < count && !clock; ++index) {
+                                auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                                if (lv_obj_check_type(child, &lv_label_class) &&
+                                    font_of(child) == aurora_fonts.display) clock = child;
+                                find_clock(child);
+                            }
+                        };
+                        find_clock(view_content());
+                        lv_area_t clock_area{};
+                        if (clock) lv_obj_get_coords(clock, &clock_area);
+                        const bool clock_left = clock && clock_area.x1 <= 40 && clock_area.y1 < 100;
+                        const bool hint = find_text(view_content(), strings.home_hint) != nullptr;
+                        auto* alarm = find_text(view_content(), "07:30");
+                        const bool tiles = alarm && glass(alarm);
+                        const bool field = has_light_field(view_content());
+                        const bool fit = fits();
+                        const int ask_before = interaction_counts.ask;
+                        tap(240, aura::ui::metrics_for(aura::Appearance::Aurora).hero_center_y);
+                        const bool talks = interaction_counts.ask == ask_before + 1;
+                        controller.dispatch({aura::EventType::Reset});
+                        apply();
+                        reset_to(aura::UiView::Home);
+                        tap_center(find_target(view_content(), aura::UiView::Launcher));
+                        const bool apps = ui.view() == aura::UiView::Launcher;
+                        home_ok = home_ok && clock_left && hint && tiles && field && fit && talks && apps;
+                        home_detail += std::to_string(clock_left) + std::to_string(hint) + std::to_string(tiles) +
+                                       std::to_string(field) + std::to_string(fit) + std::to_string(talks) +
+                                       std::to_string(apps) + " ";
+                    }
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    companion.clock().remove_alarm(alarm_id);
+                    pump(2);
+                    record("aurora.home", "clock-presence-tiles",
+                           home_ok && aura::ui::metrics_for(aura::Appearance::Aurora).hero_center_y == 234,
+                           home_detail);
+                }
+
+                // Answer: the question in a glass bubble on the right, the name
+                // in the header, then the answer and today's actions.
+                {
+                    bool aurora_answer_ok = true;
+                    std::string aurora_answer_detail;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        const bool english = language == aura::InterfaceLanguage::English;
+                        const auto& strings = english ? aura::l10n::en_us() : aura::l10n::el_gr();
+                        const auto& extra = english ? aura::l10n::companion_en_us() : aura::l10n::companion_el_gr();
+                        controller.dispatch({aura::EventType::Reset});
+                        controller.dispatch({aura::EventType::TurnStarted, strings.capture_short_prompt});
+                        controller.dispatch({aura::EventType::FinalResult, strings.capture_short_answer});
+                        apply();
+                        pump(4);
+                        auto* question = find_text(view_content(), strings.capture_short_prompt);
+                        lv_area_t bubble{};
+                        if (question) lv_obj_get_coords(lv_obj_get_parent(question), &bubble);
+                        const bool right_bubble = question && glass(question) && bubble.x2 >= 450 && bubble.x1 > 24;
+                        const bool named = find_text(view_content(), extra.conversation_aura) != nullptr &&
+                                           find_text(view_content(), strings.answer_title) == nullptr;
+                        const bool ask = find_text(view_content(), strings.ask_again) != nullptr;
+                        const bool fit = fits();
+                        aurora_answer_ok = aurora_answer_ok && right_bubble && named && ask && fit;
+                        aurora_answer_detail += std::to_string(right_bubble) + std::to_string(named) +
+                                                std::to_string(ask) + std::to_string(fit) + " ";
+                    }
+                    controller.dispatch({aura::EventType::Reset});
+                    apply();
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    record("aurora.answer", "bubble-and-actions", aurora_answer_ok, aurora_answer_detail);
+                }
+
+                // Apps: three rows of glass tiles on one screen, a count badge.
+                {
+                    const int before = controller.snapshot().notification_count;
+                    controller.dispatch({aura::EventType::NotificationReceived});
+                    apply();
+                    bool launcher_ok_aurora = true;
+                    std::string launcher_detail_aurora;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        const auto& visual = language == aura::InterfaceLanguage::English ? aura::l10n::visual_en_us() :
+                                                                                            aura::l10n::visual_el_gr();
+                        reset_to(aura::UiView::Launcher);
+                        pump(2);
+                        auto* notifications = find_target(view_content(), aura::UiView::Notifications);
+                        auto* clock_cell = find_target(view_content(), aura::UiView::Clock);
+                        const bool third_row = on_screen(notifications) && find_text(notifications, visual.notifications);
+                        const bool tiles = clock_cell && glass(clock_cell);
+                        const bool badge = notifications && has_count(notifications);
+                        const bool fit = fits();
+                        tap_center(clock_cell);
+                        const bool opens = ui.view() == aura::UiView::Clock;
+                        launcher_ok_aurora = launcher_ok_aurora && third_row && tiles && badge && fit && opens;
+                        launcher_detail_aurora += std::to_string(third_row) + std::to_string(tiles) +
+                                                  std::to_string(badge) + std::to_string(fit) + std::to_string(opens) + " ";
+                    }
+                    if (before == 0) controller.dispatch({aura::EventType::NotificationsCleared});
+                    apply();
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    record("aurora.launcher", "glass-tiles-badge", launcher_ok_aurora, launcher_detail_aurora);
+                }
+
+                // Weather: the city as the title, the temperature over a light
+                // field, a glass hourly strip and glass measurement tiles.
+                {
+                    bool aurora_weather_ok = true;
+                    std::string aurora_weather_detail;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        const bool english = language == aura::InterfaceLanguage::English;
+                        const auto& visual = english ? aura::l10n::visual_en_us() : aura::l10n::visual_el_gr();
+                        weather_model.restore_location(demo_weather_location({}, language));
+                        weather_model.fetch_succeeded(demo_weather_data(aura::WeatherCondition::PartlyCloudy, {}, language));
+                        apply_weather();
+                        reset_to(aura::UiView::Weather);
+                        pump(3);
+                        auto* city = find_text(view_content(), english ? "Athens" : "Αθήνα");
+                        const bool degrees = font_of(find_text(view_content(), "22°")) == aurora_fonts.numerals_large;
+                        auto* hour = find_text(view_content(), "21:00");
+                        auto* humidity = find_text(view_content(), visual.humidity);
+                        const bool strip = hour && glass(hour) && humidity && glass(humidity);
+                        const bool first_screen = on_screen(hour) && on_screen(humidity) &&
+                                                  on_screen(find_text(view_content(), visual.wind));
+                        const bool field = has_light_field(view_content());
+                        const bool demo = find_text(view_content(), visual.demo_badge) != nullptr;
+                        const bool fit = fits();
+                        tap_center(city);
+                        const bool picker = ui.view() == aura::UiView::WeatherLocation;
+                        aurora_weather_ok = aurora_weather_ok && degrees && strip && first_screen && field && demo &&
+                                            fit && picker;
+                        aurora_weather_detail += std::to_string(degrees) + std::to_string(strip) +
+                                                 std::to_string(first_screen) + std::to_string(field) +
+                                                 std::to_string(demo) + std::to_string(fit) + std::to_string(picker) + " ";
+                    }
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    auto long_place = demo_weather_data();
+                    long_place.location.name = "Αγιος Νικόλαος Λασιθίου";
+                    weather_model.restore_location(long_place.location);
+                    weather_model.fetch_succeeded(long_place);
+                    apply_weather();
+                    reset_to(aura::UiView::Weather);
+                    pump(3);
+                    const bool cut = find_text(view_content(), long_place.location.name.c_str()) == nullptr && fits();
+                    aurora_weather_ok = aurora_weather_ok && cut;
+                    aurora_weather_detail += "long=" + std::to_string(cut);
+                    weather_model.restore_location(demo_weather_location());
+                    weather_model.fetch_succeeded(demo_weather_data());
+                    apply_weather();
+                    record("aurora.weather", "field-strip-tiles", aurora_weather_ok, aurora_weather_detail);
+                }
+
+                // Timer: a ring of 36 segments, teal through violet to rose, that
+                // goes out as time passes; digits and label; pause and cancel.
+                {
+                    bool aurora_timer_ok = true;
+                    std::string aurora_timer_detail;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        clear_timers();
+                        clock_model.start_timer(600, "Ζυμαρικά");
+                        reset_to(aura::UiView::Clock);
+                        tap(220, 140);
+                        pump(2);
+                        const bool item = ui.view() == aura::UiView::ClockItem;
+                        int arcs = 0;
+                        int lit = 0;
+                        count_arcs(view_content(), arcs, lit);
+                        clock_model.tick(150000);
+                        pump(3);
+                        int arcs_later = 0;
+                        int lit_later = 0;
+                        count_arcs(view_content(), arcs_later, lit_later);
+                        const bool ring = arcs == 36 && lit == 36 && arcs_later == 36 && lit_later == 27;
+                        const bool digits = font_of(find_text(view_content(), "07:30")) == aurora_fonts.numerals_small;
+                        const bool label_shown = find_text(view_content(), "Ζυμαρικά") != nullptr;
+                        const bool fit = fits();
+                        aurora_timer_ok = aurora_timer_ok && item && ring && digits && label_shown && fit;
+                        aurora_timer_detail += std::to_string(item) + std::to_string(arcs) + "/" + std::to_string(lit) +
+                                               "->" + std::to_string(lit_later) + std::to_string(digits) +
+                                               std::to_string(label_shown) + std::to_string(fit) + " ";
+                    }
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    clear_timers();
+                    clock_model.start_timer(600, "Ζυμαρικά για τέσσερα άτομα με σάλτσα ντομάτας και βασιλικό");
+                    reset_to(aura::UiView::Clock);
+                    tap(220, 140);
+                    pump(2);
+                    const bool inside = fits();
+                    tap_center(find_sized_clickable(view_content(), 80, 80));
+                    const bool paused = !clock_model.snapshot().timers.empty() && clock_model.snapshot().timers.front().paused;
+                    tap_center(find_sized_clickable(view_content(), 72, 72));
+                    const bool cancelled = clock_model.snapshot().timers.empty() && ui.view() == aura::UiView::Clock;
+                    aurora_timer_ok = aurora_timer_ok && inside && paused && cancelled;
+                    aurora_timer_detail += "long=" + std::to_string(inside) + std::to_string(paused) +
+                                           std::to_string(cancelled);
+                    clear_timers();
+                    record("aurora.timer", "segments-digits-controls", aurora_timer_ok, aurora_timer_detail);
+                }
+
+                // Today: the greeting over glass rows with tinted chips.
+                {
+                    bool today_ok = true;
+                    std::string today_detail;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        reset_to(aura::UiView::Briefing);
+                        pump(2);
+                        const bool title = uses_font(view_content(), aurora_fonts.title);
+                        const bool fit = fits();
+                        today_ok = today_ok && title && fit;
+                        today_detail += std::to_string(title) + std::to_string(fit) + " ";
+                    }
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    record("aurora.briefing", "greeting-glass-rows", today_ok, today_detail);
+                }
                 ui.set_appearance(aura::Appearance::Halo);
             }
 

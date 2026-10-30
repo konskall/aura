@@ -50,6 +50,8 @@
     lv_obj_t* home_timer_label{};
     lv_obj_t* clock_item_label{};
     lv_obj_t* clock_item_arc{};
+    std::array<lv_obj_t*, 36> clock_item_segments{};
+    int timer_digits_y{196};  // a dial's digit centre, set by its look
     lv_obj_t* alert_ring{};
     lv_obj_t* record_ring{};
     lv_obj_t* record_time{};
@@ -71,6 +73,7 @@
         home_timer_label = nullptr;
         clock_item_label = nullptr;
         clock_item_arc = nullptr;
+        clock_item_segments.fill(nullptr);
         alert_ring = nullptr;
         record_ring = nullptr;
         record_time = nullptr;
@@ -742,19 +745,25 @@
                            ui::IconRole role, std::uint32_t accent, UiView view,
                            lv_event_cb_t special = nullptr) {
         // Edit mode outlines every cell; a small inset keeps the outlines from
-        // touching, so the grid reads as separate tiles.
+        // touching, so the grid reads as separate tiles (Σέλας's tiles always are).
         const int inset = launcher_reordering ? 4 : 0;
-        const int width = 144 - inset * 2;
         const auto grid = launcher_grid();
+        const int width = grid.cell_width - inset * 2;
         auto* cell = lv_button_create(parent);
         ui::reset(cell);
         lv_obj_set_clickable(cell, true);
         lv_obj_set_size(cell, width, grid.cell_height - inset * 2);
-        lv_obj_set_pos(cell, kGutter + column * 144 + inset, grid.top + row * grid.pitch + inset);
+        lv_obj_set_pos(cell, grid.left + column * grid.column_pitch + inset, grid.top + row * grid.pitch + inset);
         lv_obj_set_style_radius(cell, ui::tokens::radius_large, 0);
         lv_obj_set_style_bg_color(cell, ui::color(ui::tokens::surface), LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
-        if (appearance == Appearance::Marble) {
+        if (appearance == Appearance::Aurora) {
+            // Σέλας: a glass tile, the icon in its colour over a soft tint of it.
+            ui::style_glass(cell, ui::tokens::radius_medium);
+            ui::light_field(cell, width / 2, grid.circle_y + grid.circle / 2 - inset, grid.circle / 2 + 8, accent, 90);
+            auto* icon = icon_view(cell, role, 40, accent);
+            lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, grid.circle_y + (grid.circle - 40) / 2 - inset);
+        } else if (appearance == Appearance::Marble) {
             // Μάρμαρο: a hairline ring with an ivory icon and a quieter name.
             auto* circle = icon_well(cell, grid.circle, role, accent, 40);
             lv_obj_set_style_image_recolor(lv_obj_get_child(circle, 0), ui::color(ui::tokens::text), 0);
@@ -765,8 +774,11 @@
             auto* icon = icon_view(circle, role, 46, accent);
             lv_obj_center(icon);
         }
-        line(cell, title, 0, grid.title_y - inset, width, ui::font_caption(),
-             appearance == Appearance::Marble ? ui::tokens::text_secondary : ui::tokens::text, LV_TEXT_ALIGN_CENTER);
+        auto* name = line(cell, title, 0, grid.title_y - inset, width, ui::font_caption(),
+                          appearance == Appearance::Marble ? ui::tokens::text_secondary : ui::tokens::text,
+                          LV_TEXT_ALIGN_CENTER);
+        // Manrope runs wider: «Ειδοποιήσεις» stays whole in a Σέλας tile.
+        if (appearance == Appearance::Aurora) lv_obj_set_style_text_letter_space(name, -1, 0);
         if (launcher_reordering) {
             const bool selected = launcher_selected_app && *launcher_selected_app == app_index;
             lv_obj_set_style_border_width(cell, selected ? 3 : 1, 0);
@@ -788,6 +800,9 @@
     }
 
     struct LauncherGrid {
+        int left;
+        int column_pitch;
+        int cell_width;
         int top;
         int pitch;
         int cell_height;
@@ -797,10 +812,12 @@
     };
 
     // Halo's cells are 164 px with 104 px circles, so a third row peeks in;
-    // Μάρμαρο fits three rows of 84 px hairline circles on one screen.
+    // Μάρμαρο fits three rows of 84 px hairline circles on one screen, and
+    // Σέλας three rows of 148 px glass tiles across the whole width.
     LauncherGrid launcher_grid() const {
-        if (appearance == Appearance::Marble) return {4, 128, 124, 84, 2, 90};
-        return {8, 172, 164, 104, 8, 120};
+        if (appearance == Appearance::Marble) return {kGutter, 144, 144, 4, 128, 124, 84, 2, 90};
+        if (appearance == Appearance::Aurora) return {12, 156, 148, 4, 128, 116, 64, 8, 80};
+        return {kGutter, 144, 144, 8, 172, 164, 104, 8, 120};
     }
 
     // Unread notifications: a count in Halo, a gold dot by the circle in Μάρμαρο.
@@ -1262,10 +1279,19 @@
         answer_body(132, 236);
     }
 
+    bool answer_confirming() const {
+        return snapshot.state == AssistantState::ActionConfirmation && extras.pending_action;
+    }
+
     // The answer in a scroller at `y`, then the actions; a pending action takes
     // 100 px of the reader for its card.
     void answer_body(int y, int height) {
-        const bool confirming = snapshot.state == AssistantState::ActionConfirmation && extras.pending_action;
+        answer_reader(y, height);
+        answer_actions();
+    }
+
+    void answer_reader(int y, int height) {
+        const bool confirming = answer_confirming();
         auto* reader = lv_obj_create(content);
         ui::reset(reader);
         lv_obj_set_size(reader, kWidth, confirming ? height - 100 : height);
@@ -1280,7 +1306,12 @@
         lv_obj_set_width(answer_label, kWidth - 16);
         lv_obj_set_style_text_line_space(answer_label, 6, 0);
         lv_obj_align(answer_label, LV_ALIGN_TOP_LEFT, 0, 0);
-        if (confirming) {
+    }
+
+    // A pending action's card with Confirm and Decline, or Ask again (and the
+    // conversation when there is one).
+    void answer_actions() {
+        if (answer_confirming()) {
             const auto copy = describe_action(*extras.pending_action);
             auto* card = list_row(content, 280, copy.title.c_str(), copy.detail.empty() ? nullptr : copy.detail.c_str(),
                                   copy.role, copy.accent);
@@ -1506,6 +1537,10 @@
                 render_timer_marble(*timer);
                 return;
             }
+            if (appearance == Appearance::Aurora) {
+                render_timer_aurora(*timer);
+                return;
+            }
             const auto text = countdown_text(timer->remaining_ms);
             clock_item_label = label(content, text.c_str(), 0, 128, ui::tokens::display_width, ui::font_display(),
                                      timer->paused ? ui::tokens::text_secondary : ui::tokens::text,
@@ -1600,10 +1635,9 @@
                 if (timer.id != selected_clock_id) continue;
                 const auto text = countdown_text(timer.remaining_ms);
                 set_text_if_changed(clock_item_label, text.c_str());
-                if (clock_item_arc) {
-                    lv_arc_set_value(clock_item_arc, timer_permille(timer));
-                    place_timer_digits(text);
-                }
+                if (clock_item_arc) lv_arc_set_value(clock_item_arc, timer_permille(timer));
+                if (clock_item_segments[0]) light_timer_segments(timer);
+                if (clock_item_arc || clock_item_segments[0]) place_timer_digits(text);
             }
         }
     }
