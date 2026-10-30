@@ -3904,6 +3904,102 @@ int main(int argc, char** argv) {
                 record("appearance.kit", "settings-row-well-back", kit_ok, kit_detail);
             }
 
+            // Each look's presence keeps clear of the assistant screens' text and
+            // buttons: in listening, thinking and speaking the image drawn from the
+            // presence's own buffer overlaps no label and no control.
+            {
+                bool clear = true;
+                std::string clear_detail;
+                const auto overlap = [](const lv_area_t& a, const lv_area_t& b) {
+                    return a.x1 <= b.x2 && b.x1 <= a.x2 && a.y1 <= b.y2 && b.y1 <= a.y2;
+                };
+                std::function<lv_obj_t*(lv_obj_t*)> find_presence = [&](lv_obj_t* object) {
+                    const auto count = lv_obj_get_child_count(object);
+                    for (std::uint32_t index = 0; index < count; ++index) {
+                        auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                        if (lv_obj_check_type(child, &lv_image_class)) {
+                            const void* source = lv_image_get_src(child);
+                            if (source && lv_image_src_get_type(source) == LV_IMAGE_SRC_VARIABLE &&
+                                static_cast<const lv_image_dsc_t*>(source)->data_size ==
+                                    ui.mercury_buffer_bytes()) {
+                                return child;
+                            }
+                        }
+                        if (auto* found = find_presence(child)) return found;
+                    }
+                    return static_cast<lv_obj_t*>(nullptr);
+                };
+                // Labels and controls (clickable, with a handler) over the area; the
+                // presence's own containers are skipped, their children are not.
+                std::function<std::string(lv_obj_t*, lv_obj_t*, const lv_area_t&)> covered =
+                    [&](lv_obj_t* object, lv_obj_t* presence, const lv_area_t& area) {
+                        std::string found;
+                        const auto count = lv_obj_get_child_count(object);
+                        for (std::uint32_t index = 0; index < count; ++index) {
+                            auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                            if (lv_obj_is_hidden(child) || child == presence) continue;
+                            bool holds_presence = false;
+                            for (auto* up = lv_obj_get_parent(presence); up; up = lv_obj_get_parent(up)) {
+                                holds_presence = holds_presence || up == child;
+                            }
+                            const bool label = lv_obj_check_type(child, &lv_label_class);
+                            const bool control = lv_obj_is_clickable(child) && lv_obj_get_event_count(child) > 0;
+                            if (!holds_presence && (label || control)) {
+                                lv_area_t own{};
+                                lv_obj_get_coords(child, &own);
+                                if (overlap(own, area)) {
+                                    found += std::string(label ? "label@" : "control@") + std::to_string(own.y1) + " ";
+                                }
+                            }
+                            found += covered(child, presence, area);
+                        }
+                        return found;
+                    };
+                const char* state_names[] = {"listening", "thinking", "speaking"};
+                for (const auto look : {aura::Appearance::Halo, aura::Appearance::Marble, aura::Appearance::Aurora,
+                                        aura::Appearance::Graphite}) {
+                    ui.set_appearance(look);
+                    for (int state = 0; state < 3; ++state) {
+                        controller.dispatch({aura::EventType::Reset});
+                        if (state == 0) {
+                            controller.dispatch({aura::EventType::WakeDetected});
+                            controller.dispatch({aura::EventType::BeginRecording});
+                        } else {
+                            controller.dispatch({aura::EventType::TurnStarted, text().capture_speaking_prompt});
+                        }
+                        if (state == 2) {
+                            controller.dispatch({aura::EventType::FinalResult, text().capture_speaking_answer});
+                            audio.play_test_tone(2600);
+                        }
+                        apply();
+                        ui.apply_audio(audio.diagnostics());
+                        pump(4);
+                        lv_obj_update_layout(lv_screen_active());
+                        auto* presence = find_presence(lv_screen_active());
+                        std::string under;
+                        if (presence) {
+                            lv_area_t area{};
+                            lv_obj_get_coords(presence, &area);
+                            under = covered(lv_screen_active(), presence, area);
+                        }
+                        if (!presence || !under.empty()) {
+                            clear = false;
+                            clear_detail += std::string(aura::appearance_id(look)) + ":" + state_names[state] + ":" +
+                                            (presence ? under : std::string("no-presence "));
+                        }
+                        if (state == 2) {
+                            audio.stop();
+                            ui.apply_audio(audio.diagnostics());
+                        }
+                    }
+                }
+                controller.dispatch({aura::EventType::Reset});
+                apply();
+                pump(2);
+                ui.set_appearance(aura::Appearance::Halo);
+                record("presence.clear_of_controls", "four-looks-three-states", clear, clear_detail);
+            }
+
             // Signature screens keep every cut label inside its box and every
             // control at least 64 px (labels made tappable keep their own margin).
             std::function<bool(lv_obj_t*)> labels_inside = [&](lv_obj_t* object) {
@@ -4412,6 +4508,42 @@ int main(int argc, char** argv) {
                     record("aurora.launcher", "glass-tiles-badge", launcher_ok_aurora, launcher_detail_aurora);
                 }
 
+                // Apps while the grid scrolls: the tiles' glows (light fields scaled
+                // from the 32 px A8 disc) rest until the scroll ends, so each
+                // scrolled frame draws less; then they all come back.
+                {
+                    reset_to(aura::UiView::Launcher);
+                    pump(2);
+                    std::function<int(lv_obj_t*)> shown_glows = [&](lv_obj_t* object) {
+                        int count = 0;
+                        for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                            auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                            if (lv_obj_is_hidden(child)) continue;
+                            if (lv_obj_check_type(child, &lv_image_class)) {
+                                const void* source = lv_image_get_src(child);
+                                if (source && lv_image_src_get_type(source) == LV_IMAGE_SRC_VARIABLE) {
+                                    const auto* disc = static_cast<const lv_image_dsc_t*>(source);
+                                    count += disc->header.w == 32 && disc->header.cf == LV_COLOR_FORMAT_A8 ? 1 : 0;
+                                }
+                            }
+                            count += shown_glows(child);
+                        }
+                        return count;
+                    };
+                    auto* grid = find_scrollable(view_content());
+                    const int resting = grid ? shown_glows(grid) : 0;
+                    if (grid) lv_obj_scroll_to_y(grid, 120, LV_ANIM_ON);
+                    const int scrolling = grid ? shown_glows(grid) : -1;
+                    pump(80);
+                    const int settled = grid ? shown_glows(grid) : -1;
+                    const bool moved = grid && lv_obj_get_scroll_y(grid) > 0;
+                    if (grid) lv_obj_scroll_to_y(grid, 0, LV_ANIM_OFF);
+                    record("aurora.launcher_scroll", "glows-rest-while-scrolling",
+                           resting >= 9 && scrolling == 0 && settled == resting && moved,
+                           std::to_string(resting) + "/" + std::to_string(scrolling) + "/" +
+                               std::to_string(settled) + "/" + std::to_string(moved));
+                }
+
                 // Weather: the city as the title, the temperature over a light
                 // field, a glass hourly strip and glass measurement tiles.
                 {
@@ -4524,6 +4656,37 @@ int main(int argc, char** argv) {
                     }
                     ui.set_language(aura::InterfaceLanguage::Greek);
                     record("aurora.briefing", "greeting-glass-rows", today_ok, today_detail);
+                }
+
+                // System: no row's subtitle is cut in Manrope, which runs wider than
+                // Plex (LVGL ends a cut label's text in dots).
+                {
+                    std::function<std::string(lv_obj_t*)> cut_labels = [&](lv_obj_t* object) {
+                        std::string cut;
+                        if (lv_obj_check_type(object, &lv_label_class) &&
+                            lv_obj_get_style_text_font(object, LV_PART_MAIN) == aurora_fonts.caption) {
+                            const std::string shown = lv_label_get_text(object);
+                            if (shown.size() >= 3 && shown.compare(shown.size() - 3, 3, "...") == 0) {
+                                cut += "[" + shown + "]";
+                            }
+                        }
+                        for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                            cut += cut_labels(lv_obj_get_child(object, static_cast<std::int32_t>(index)));
+                        }
+                        return cut;
+                    };
+                    bool system_ok = true;
+                    std::string system_detail;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        reset_to(aura::UiView::System);
+                        pump(2);
+                        const std::string cut = cut_labels(view_content());
+                        system_ok = system_ok && cut.empty();
+                        system_detail += (cut.empty() ? std::string("whole") : cut) + " ";
+                    }
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    record("aurora.system", "subtitles-whole", system_ok, system_detail);
                 }
 
                 // ---- Γραφίτης ------------------------------------------------

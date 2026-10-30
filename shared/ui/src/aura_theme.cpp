@@ -99,6 +99,10 @@ lv_obj_t* light_field(lv_obj_t* parent, int center_x, int center_y, int radius, 
     return field;
 }
 
+bool is_light_field(lv_obj_t* object) {
+    return lv_obj_check_type(object, &lv_image_class) && lv_image_get_src(object) == light_disc();
+}
+
 // No shadows anywhere: they are the most expensive LVGL primitive on the
 // ESP32-S3 and read as dated on true black.
 void style_platter(lv_obj_t* object, std::uint32_t accent, int radius, bool selected) {

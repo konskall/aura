@@ -510,3 +510,56 @@ The same as Task 13. Then the **checkpoint**.
   - VERIFICATION rows for the full suite, the firmware build and the measured app size;
   - a NEEDS HARDWARE row for presence frame time, flush cost and how the AMOLED looks.
 - [ ] **Checkpoint:** ask the owner about committing, merging and pushing.
+
+---
+
+## Decisions taken during execution
+
+The plan was executed inline on 2026-10-29 and 30. Where a step met a conflict or a gap, the executor decided and
+recorded it in a ledger, which was deleted after the merge; the decisions are kept here in the order they were taken,
+each with what it costs if it was wrong. The owner saw this list when the work closed.
+
+- Task 0: the baseline captures ran before any source change; `compare-captures.py` masks five small unstable regions instead of dropping whole scenarios. Cost: a regression inside a masked 16 px box goes unseen.
+- Task 1: no commit after each task, only on the owner's word. Cost: none.
+- Task 2: Άλως's `on_primary` stays `0xF5F8FC` (today's button label) instead of the spec's `FFFFFF`, to keep Άλως pixel-identical. Cost: none visible.
+- Task 2: the constant `kIconAccents` became `icon_accent(index)`, reading the live palette. Cost: none.
+- Task 2: the Diagnostics capture masks the live host figures. Cost: a regression in those lines goes unseen.
+- Task 3: `PresenceView` gained `object()`; Mercury keeps `MercuryState` as an alias of `PresenceState`. Cost: none.
+- Task 3: `aoraton-account-unlock` joined the masked captures (a blinking cursor). Cost: a regression in that strip goes unseen.
+- Task 4: the Εμφάνιση row used a generic icon, and the cards the active family's icons, until Task 8. Cost: only in between.
+- Task 4: the card swatches are canvas, text, blue and indigo with a hairline ring (a surface swatch is invisible on its card). Cost: none.
+- Task 4: harness taps after «Γλώσσα» moved one row down; `appearance.aod_roundtrip` reads always-on before `pump()`. Cost: a mis-aimed tap fails loudly.
+- Task 5: the simulator reads the stored look in `CompanionRuntime`'s constructor, the firmware in `start()`; `appearance.factory_reset` runs last. Cost: none.
+- Task 7: each appearance font holds only the code points its face has and falls back to the Plex font of the same role (numeral fonts to the look's title font); U+2212 left the numeral checks; sources are saved as `*-VF.ttf` and instanced with fontTools 4.65.0. Cost: an arrow such as «ΕΛ → EN» draws in Plex inside a Commissioner line.
+- Task 8: Solar's Linear style draws Back, Forward, the chevrons, Close, Check, Plus, More and Menu (the Bold Duotone chevron is a filled triangle). Cost: none.
+- Task 10: the component kit was built for all three new looks at once, driven by `Metrics`; each hero centre stayed at 260 until its look's Home placed the presence; `toggle_on` joined the palette (Μάρμαρο's and Γραφίτης's primary equals their text colour); the Diagnostics mask widened to x 150–310. Cost: a regression in those columns goes unseen.
+- Task 10: the shared numeral roles keep Άλως's sizes in every look; the mockups' larger numerals are new roles (`numerals_small`, `numerals_large`, `hero`, about 120 KB) for the signature screens only. Cost: a shared screen shows a slightly smaller number than a signature one.
+- Task 11: Μάρμαρο's Today keeps the shared screen. Cost: subtitles and chevrons instead of right-hand values.
+- Task 11: the timer has two controls (pause and cancel), not three: no "+1′" exists. Cost: no +1′.
+- Task 11: the answer keeps today's actions and copy («Νέα ερώτηση», the conversation) rather than the mockup's; the question may take two lines. Cost: the buttons' wording differs from the mockup.
+- Task 11: Μάρμαρο's Apps mark only unread notifications (a gold dot). Cost: the saved-conversation count is not shown in Μάρμαρο.
+- Task 11: Μάρμαρο's weather shows the model's four hours and humidity, wind, feels-like and rain (the model has no sunset); no hour is preselected. Cost: none beyond these.
+- Task 11: the end time is now plus the time left, rounded to the minute; `AuraUi::open_clock_item(kind, id)` and a `timer` capture pinned to 18:24 were added; `marble.timer` allows real-time drift. Cost: the end time can be a minute off.
+- Task 12: the pearl's glow is a soft A8 disc, scaled (LVGL's complex gradients are off; turning them on is a config change); it reaches 1.9 R instead of 2.7 R and does not breathe. Cost: a smaller, steadier glow than the reference.
+- Task 12: the comet has 6 arcs (the reference 40), ripples reach 205 px and the lighting is simplified; glow, ripples, ring and comet sit behind the content. Cost: a coarser tail.
+- Task 12: a new presence and a still capture show the state itself, not a blend; Άλως's ring exists only in Άλως. Cost: none.
+- Task 12: harness swipes move at least 64 px per step (LVGL's gesture limit is 50 px); `home.swipe_up` at 2x had failed 3 of 3 with the old code too. Cost: harness swipes are quicker than a slow finger.
+- Task 13: on Settings > Εμφάνιση the check moved to the card's bottom right so every name has the full width (Μάρμαρο's serif name was cut). Cost: Άλως's Appearance screen moved its check.
+- Task 13: `system.power_off_copy` finds «Απενεργοποίηση» by its name; the pearl's static tables shrank from 7 KB to 1.8 KB (they live in internal RAM). Cost: none.
+- Task 14: light fields share one 32 x 32 A8 disc (1 KB) instead of the spec's 128 x 128 (16 KB); the glass values are shared constants (`ui::style_glass`) and Σέλας's chips are 48 px. Cost: none visible.
+- Task 15: Σέλας's Today keeps the shared screen. Cost: subtitles and chevrons in its rows.
+- Task 15: the answer's header shows the orb and «AURA» (localized; «Αύρα» is not), the speaker is a round glass button beside «Νέα ερώτηση» and the conversation is the header's action. Cost: the conversation sits in the header, not in a second pill.
+- Task 15: Σέλας's timer has two controls, no end time and a ring of 36 segments. Cost: none.
+- Task 15: the app tiles are 148 px with −1 letter spacing so «Ειδοποιήσεις» stays whole; each tile's glow is a light field. Cost: the glows redrew while the grid scrolled (since 2026-10-30 they rest while it scrolls).
+- Task 15: the weather tiles stack icon, name and value (112 px), the days sit in one glass panel and Home's clock starts at y 34, clear of the Wi-Fi mark. Cost: tiles taller than the reference.
+- Task 16: the ribbons' sway is scaled (listening 92 to 56 px, speaking 86 to 52 px) to stay in the 200 px band; the haze is a light field behind the content; while thinking a light travels round the loop. Cost: a smaller sway than the reference.
+- Task 16: the ribbons are drawn per column and the loop stamped with a core at every point; the light adds up in the band's own bytes, so there is no second buffer. Cost: none.
+- Task 18: Γραφίτης's kit already existed from Task 10, so `graphite.kit` passed on its first run. Cost: none.
+- Task 19: Γραφίτης's answer has no weather card: no device signal says a turn was answered from the forecast, and reading the text for it is not allowed. Cost: the card never appears until such a signal exists.
+- Task 19: «Ρώτα την Αύρα» is a new string; the hero clock starts at y 36; the messages tile counts unread Aoraton messages; without an alarm the alarm tile shows «—»; DEMO leads the weather tile. Cost: none.
+- Task 19: Apps are two columns of 218 px tiles with names in body 26 (measured: «Ειδοποιήσεις» is 144 px in a 146 px space); live lines come only from the models, in colour only when something is happening. Cost: names in regular weight rather than bold.
+- Task 19: the model has no wind direction, so the compass has no needle; the third gauge shows the air quality, or the chance of rain without it. Cost: no wind direction.
+- Task 19: Γραφίτης's timer has two squircle controls and shares the dial with Μάρμαρο (116 px digits, 64 px from an hour); a shared `two_line_label` holds the question in both looks. Cost: none.
+- Task 19: Today is a timeline whose times come from the models («Τώρα» for the weather), with the namedays in the subtitle and no greeting. Cost: no greeting in this look.
+- Task 20: the constellation's radius was 106 px (the reference 118) in a 280 px canvas; its points add light in the canvas's own bytes and its glow is a light field. Cost: a slightly smaller sphere. Since 2026-10-30 the sphere is 98 px in a 264 px canvas centred at y 240, so it clears the assistant screens' buttons.
+- Final review (a self-review by the author): Γραφίτης's Apps showed DEMO weather without saying DEMO; fixed with its test written first. Four minor points were left for the owner and fixed on 2026-10-30 (see `docs/VERIFICATION.md`).

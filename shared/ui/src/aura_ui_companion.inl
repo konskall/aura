@@ -842,6 +842,20 @@
         lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -12, 4);
     }
 
+    // Σέλας's tile glows rest while the grid scrolls: each is a scaled image
+    // that every scrolled frame would redraw.
+    static void launcher_scroll_event(lv_event_t* event) {
+        auto* grid = lv_event_get_current_target_obj(event);
+        const bool scrolling = lv_event_get_code(event) == LV_EVENT_SCROLL_BEGIN;
+        for (std::uint32_t cell = 0; cell < lv_obj_get_child_count(grid); ++cell) {
+            auto* tile = lv_obj_get_child(grid, static_cast<std::int32_t>(cell));
+            for (std::uint32_t part = 0; part < lv_obj_get_child_count(tile); ++part) {
+                auto* child = lv_obj_get_child(tile, static_cast<std::int32_t>(part));
+                if (ui::is_light_field(child)) lv_obj_set_hidden(child, scrolling);
+            }
+        }
+    }
+
     // Apps use a 3-column scrolling grid; later rows intentionally peek.
     void render_launcher_grid() {
         make_header(launcher_reordering ? c().app_layout_title : v().applications,
@@ -849,6 +863,10 @@
                     launcher_reorder_toggle_event, launcher_reordering ? ui::tokens::mint : ui::tokens::lilac,
                     static_cast<bool>(callbacks.on_launcher_app_move));
         auto* grid = make_list();
+        if (appearance == Appearance::Aurora) {
+            lv_obj_add_event_cb(grid, launcher_scroll_event, LV_EVENT_SCROLL_BEGIN, nullptr);
+            lv_obj_add_event_cb(grid, launcher_scroll_event, LV_EVENT_SCROLL_END, nullptr);
+        }
         for (std::size_t index = 0; index < launcher_layout.order.size(); ++index) {
             const auto columns = static_cast<std::size_t>(launcher_grid().columns);
             const int column = static_cast<int>(index % columns);

@@ -11,12 +11,13 @@ namespace aura::ui {
 // Γραφίτης's presence, Αστερισμός: a sphere of 300 points of light turning
 // slowly. Its surface lifts with the voice while listening, a bright band
 // sweeps it while thinking and waves run from the centre while speaking. The
-// points are stamped with additive light into a 280 x 280 canvas; the glow is
-// a light field behind the screen's content. Reference: the Stars concept in
+// points are stamped with additive light into a 264 x 264 canvas that fits
+// between the assistant screens' caption and their buttons; the glow is a
+// light field behind the screen's content. Reference: the Stars concept in
 // docs/design/themes/presence-reference.js.
 class AuraStarsView final : public PresenceView {
 public:
-    static constexpr int size = 280;
+    static constexpr int size = 264;
     static constexpr std::size_t point_count = 300;
     static constexpr std::uint32_t frame_interval_ms = 66;
 

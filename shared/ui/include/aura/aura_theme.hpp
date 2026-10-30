@@ -102,6 +102,8 @@ void style_glass(lv_obj_t* object, int radius);
 // and tinted. Only for regions that do not animate; never a target.
 lv_obj_t* light_field(lv_obj_t* parent, int center_x, int center_y, int radius, std::uint32_t tint,
                       lv_opa_t opacity);
+// Whether `object` is a light field (an image of the shared disc).
+bool is_light_field(lv_obj_t* object);
 // A borderless graphite platter; `selected` adds an accent hairline.
 void style_platter(lv_obj_t* object, std::uint32_t accent = tokens::blue,
                    int radius = tokens::radius_large, bool selected = false);

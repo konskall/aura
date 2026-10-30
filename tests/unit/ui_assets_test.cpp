@@ -357,6 +357,10 @@ void check_component_kit() {
            "a light field is centred, sized by its radius, tinted and never a target");
     auto* second = ui::light_field(screen, 100, 100, 40, 0x38E1C9, 60);
     expect(lv_image_get_src(second) == lv_image_get_src(field), "every light field shares the one disc");
+    auto* plain = lv_image_create(screen);
+    expect(ui::is_light_field(field) && ui::is_light_field(second) && !ui::is_light_field(plain) &&
+               !ui::is_light_field(screen),
+           "a light field is recognised by its disc, and nothing else is");
     lv_obj_clean(screen);
 }
 
@@ -511,18 +515,19 @@ void check_stars_presence() {
     using aura::ui::PresenceState;
     ensure_lvgl();
     auto* screen = lv_screen_active();
-    expect(aura::ui::make_presence(aura::Appearance::Graphite)->buffer_bytes() == 235200U,
-           "Γραφίτης's presence is the 280 x 280 RGB565 + A8 constellation");
+    expect(aura::ui::make_presence(aura::Appearance::Graphite)->buffer_bytes() == 209088U,
+           "Γραφίτης's presence is the 264 x 264 RGB565 + A8 constellation");
 
     auto stars = std::make_unique<aura::ui::AuraStarsView>();
     expect(aura::ui::AuraStarsView::frame_interval_ms == 66, "the constellation animates at about 15 FPS");
     expect(stars->attach(screen, 240, 260) == stars->object() && stars->object() != nullptr,
            "the constellation attaches its canvas");
     const auto* canvas = static_cast<const lv_image_dsc_t*>(lv_image_get_src(stars->object()));
+    constexpr int side = aura::ui::AuraStarsView::size;
     const auto lit = [&] {
-        const auto* alpha = canvas->data + 280 * 280 * 2;
+        const auto* alpha = canvas->data + side * side * 2;
         int count = 0;
-        for (int index = 0; index < 280 * 280; ++index) count += alpha[index] > 24 ? 1 : 0;
+        for (int index = 0; index < side * side; ++index) count += alpha[index] > 24 ? 1 : 0;
         return count;
     };
     for (const auto state : {PresenceState::Idle, PresenceState::Listening, PresenceState::Thinking,
@@ -543,6 +548,28 @@ void check_stars_presence() {
     for (int step = 0; step < 10; ++step) stars->tick(66);
     const float loud = stars->swell();
     expect(loud > quiet, "a louder voice lifts the points further");
+
+    // At full voice, listening or speaking, no point reaches the canvas's edge:
+    // the swell is never cut.
+    const auto edge_lit = [&] {
+        const auto* alpha = canvas->data + side * side * 2;
+        int count = 0;
+        for (int index = 0; index < side; ++index) {
+            count += (alpha[index] != 0) + (alpha[(side - 1) * side + index] != 0) +
+                     (alpha[index * side] != 0) + (alpha[index * side + side - 1] != 0);
+        }
+        return count;
+    };
+    int edge = 0;
+    for (const auto state : {PresenceState::Listening, PresenceState::Speaking}) {
+        stars->set_state(state);
+        stars->set_level(1.0F);
+        for (int step = 0; step < 120; ++step) {
+            stars->tick(66);
+            edge += edge_lit();
+        }
+    }
+    expect(edge == 0, "a loud voice never reaches the canvas's edge");
 
     // Thinking: a bright band sweeps the sphere.
     stars->set_state(PresenceState::Thinking);

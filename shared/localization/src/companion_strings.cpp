@@ -755,7 +755,7 @@ const CompanionStrings& companion_en_us() noexcept {
         s.system_software_format = "AURA %s";
         s.system_update = "Update";
         s.system_diagnostics = "Diagnostics";
-        s.system_diagnostics_detail = "For testing and development";
+        s.system_diagnostics_detail = "Testing and development";
         s.system_power = "Power";
         s.system_restart = "Restart";
         s.system_power_off = "Power off";

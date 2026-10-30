@@ -69,12 +69,13 @@ const FontSet kFonts[] = {
 };
 
 // The component kit of each look (spec, "Phases" 3-5). Every hero centre stays
-// at Halo's until its look's signature screens place the presence.
+// at Halo's until its look's signature screens place the presence; Γραφίτης's
+// sits higher so Αστερισμός clears the assistant screens' buttons.
 constexpr Metrics kMetrics[] = {
     {RowStyle::Platter, WellStyle::TintedCircle, false, false, 28, LV_RADIUS_CIRCLE, 260},
     {RowStyle::Hairline, WellStyle::HairlineCircle, false, true, 24, LV_RADIUS_CIRCLE, 272},
     {RowStyle::Glass, WellStyle::Chip, true, false, 28, LV_RADIUS_CIRCLE, 234},
-    {RowStyle::Platter, WellStyle::Squircle, false, false, 24, 22, 260},
+    {RowStyle::Platter, WellStyle::Squircle, false, false, 24, 22, 240},
 };
 
 Appearance g_active = Appearance::Halo;

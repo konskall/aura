@@ -81,6 +81,8 @@ Settings → Εμφάνιση offers four looks. A look sets the colours, typefa
 
 ![The four appearances, left to right Άλως, Μάρμαρο, Σέλας and Γραφίτης: Home above, listening below](docs/images/aura-appearances.png)
 
+`python scripts/compose-appearances.py` makes this picture from simulator captures; run it after changing a look's Home or presence.
+
 ## How it is built
 
 ```text

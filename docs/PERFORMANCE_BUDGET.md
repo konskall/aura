@@ -20,8 +20,8 @@
 | Appearance icon families | firmware map | Phosphor 412,400 B, Solar 408,276 B, Material Symbols 416,524 B |
 | Firmware app partition | ≥15% free | 23% free after the four appearances (app `0x501010` of `0x680000`) |
 | Static internal RAM (DIRAM) | informational | 94,965 B free after the four appearances (`idf.py size`) |
-| Presence buffers | one at a time, heap (PSRAM on the device) | Mercury and Μαργαριτάρι 92,928 B; Σέλας ribbons 259,200 B; Αστερισμός 235,200 B; a change of look holds the old one until the new screen is drawn |
+| Presence buffers | one at a time, heap (PSRAM on the device) | Mercury and Μαργαριτάρι 92,928 B; Σέλας ribbons 259,200 B; Αστερισμός 209,088 B; a change of look holds the old one until the new screen is drawn |
 | Light fields and glows | static internal RAM | two 32 × 32 A8 discs (1 KB each) and the pearl's 768 B body shades |
-| Presence frame | 66 ms per frame (about 15 fps) | device unverified: per-pixel drawing of 176², 432 × 200 or 280² pixels plus the LVGL blend |
+| Presence frame | 66 ms per frame (about 15 fps) | device unverified: per-pixel drawing of 176², 432 × 200 or 264² pixels plus the LVGL blend |
 
 Host FPS and memory are host-only values. Any ESP32 heap, PSRAM, battery, codec or frame-time result remains an estimate until measured on the board.

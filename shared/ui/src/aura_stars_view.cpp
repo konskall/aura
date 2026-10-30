@@ -12,8 +12,8 @@ namespace {
 constexpr float kTau = 6.2831853071795864769F;
 constexpr float kMiddle = AuraStarsView::size / 2.0F;
 // The reference's 118 px sphere swells to 1.28 of itself with a loud voice;
-// 106 px keeps that, and the largest dot, inside the 280 px canvas.
-constexpr float kRadius = 106.0F;
+// 98 px keeps that, and the largest dot, inside the 264 px canvas.
+constexpr float kRadius = 98.0F;
 constexpr float kTilt = 0.38F;
 
 struct Rgb {
