@@ -51,12 +51,6 @@ The unreachable `Tools` placeholder was removed on 2026-10-28 and the `Cards` (s
 - Long answer and conversation containers explicitly own scrolling and pointer drag.
 - External assistant and Aoraton text is display-only; side effects retain typed callbacks and explicit confirmation.
 
-## Baseline evidence
-
-- Before screens: `artifacts/v10/before/AURA_V10_BEFORE_SCREENS.png`
-- Before motion: `artifacts/v10/before/AURA_V10_BEFORE_MOTION.png`
-- Supplied critique/reference files: `AURA_Final_v10_Implementation_Kit/references/`
-
 ## v10 implementation result
 
 - The 18 production routes remain present and use the same controller/service callbacks audited above.
@@ -67,4 +61,4 @@ The unreachable `Tools` placeholder was removed on 2026-10-28 and the `Cards` (s
 - `TypographyProof` is a simulator-only developer capture route. It is not exposed in product navigation and does not increase the 18-screen product surface.
 - Automated SDL/LVGL pointer evidence passes 80/80 cases at 1× and 80/80 at 2×. The 180-transition stress path verifies teardown/re-entry and bounded LVGL allocation.
 
-Final evidence is indexed by `artifacts/v10/evidence-summary.json` and `docs/ui/QA_V10.md`.
+The v10 results are recorded in `docs/VERIFICATION.md`.

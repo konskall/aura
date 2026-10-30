@@ -11,5 +11,3 @@
 - Next UI step: run the shared v10 code on the physical 480×480 board and measure frame time, PSRAM/heap, partial redraw, touch edges, battery and simultaneous audio/Wi-Fi load.
 - Next messaging step: independent protocol adapter in a separate test Supabase project, known-answer E2EE vectors and reviewed key storage. No production connection before those gates pass.
 - Later: screenshot regression thresholds, gesture polish, hardware display/touch/PMIC/RTC/IMU/SD bring-up, measured microphone/VAD work and a supported production AI gateway.
-
-Detailed sequencing and exit criteria are in [development/ROADMAP.md](development/ROADMAP.md).

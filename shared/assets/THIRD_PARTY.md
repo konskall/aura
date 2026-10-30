@@ -49,7 +49,7 @@ The Mercury material and motion were studied from VoiceOrbs, commit `8b279991773
 
 ## Earlier generated visual layers
 
-The v4 orb/wave/vortex/ribbon and fictional map images in `design/generated/` were created specifically for this project with OpenAI image generation on 2026-10-18. They remain in repository history for comparison, but the four primary AI states now render the shared procedural Mercury component.
+The v4 orb/wave/vortex/ribbon and fictional map images (`design/generated/`) were created specifically for this project with OpenAI image generation on 2026-10-18. Nothing used them after the AI states moved to the procedural presences, so they were removed on 2026-10-30; they remain in repository history.
 
 ## Appearance icon families
 

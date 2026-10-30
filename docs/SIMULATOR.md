@@ -144,7 +144,7 @@ Windows simulator falls back to Open-Meteo.
 .\scripts\test.ps1
 .\scripts\capture-screenshots.ps1
 .\scripts\verify-live-simulator.ps1
-.\scripts\capture-v10_3-weather-evidence.ps1
+.\scripts\capture-v10_3_1-weather-evidence.ps1
 ```
 
 Eighteen named views are rendered to genuine 480 × 480 captures, converted losslessly to PNG and assembled into `artifacts/v8/AURA_V8_PRODUCTION_SCREENS.png`. The set includes the four animated AI states, short/long answers, quick actions, notifications, settings, Audio, Aoraton rooms/chat/compose/confirm, offline/error, battery and diagnostics. More detailed steps are in [simulator/WINDOWS_SETUP.md](simulator/WINDOWS_SETUP.md) and [simulator/INTERACTION_TESTS.md](simulator/INTERACTION_TESTS.md).
