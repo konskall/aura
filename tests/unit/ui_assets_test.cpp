@@ -3,6 +3,7 @@
 #include "aura/aura_aurora_view.hpp"
 #include "aura/aura_mercury_view.hpp"
 #include "aura/aura_pearl_view.hpp"
+#include "aura/aura_stars_view.hpp"
 #include "aura/aura_presence.hpp"
 #include "aura/aura_theme.hpp"
 #include "aura/strings.hpp"
@@ -505,6 +506,68 @@ void check_aurora_presence() {
     lv_obj_clean(screen);
 }
 
+// Γραφίτης's Αστερισμός: 300 points on a turning sphere in a 280 x 280 canvas.
+void check_stars_presence() {
+    using aura::ui::PresenceState;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+    expect(aura::ui::make_presence(aura::Appearance::Graphite)->buffer_bytes() == 235200U,
+           "Γραφίτης's presence is the 280 x 280 RGB565 + A8 constellation");
+
+    auto stars = std::make_unique<aura::ui::AuraStarsView>();
+    expect(aura::ui::AuraStarsView::frame_interval_ms == 66, "the constellation animates at about 15 FPS");
+    expect(stars->attach(screen, 240, 260) == stars->object() && stars->object() != nullptr,
+           "the constellation attaches its canvas");
+    const auto* canvas = static_cast<const lv_image_dsc_t*>(lv_image_get_src(stars->object()));
+    const auto lit = [&] {
+        const auto* alpha = canvas->data + 280 * 280 * 2;
+        int count = 0;
+        for (int index = 0; index < 280 * 280; ++index) count += alpha[index] > 24 ? 1 : 0;
+        return count;
+    };
+    for (const auto state : {PresenceState::Idle, PresenceState::Listening, PresenceState::Thinking,
+                             PresenceState::Speaking}) {
+        stars->set_state(state);
+        stars->set_level(0.6F);
+        const auto before = stars->frame_count();
+        for (int step = 0; step < 3; ++step) stars->tick(66);
+        expect(stars->frame_count() > before && lit() > 800, "the constellation turns and shines in every state");
+    }
+
+    // Listening: a louder voice lifts the points further from the sphere.
+    stars->set_state(PresenceState::Listening);
+    stars->set_level(0.0F);
+    for (int step = 0; step < 10; ++step) stars->tick(66);
+    const float quiet = stars->swell();
+    stars->set_level(1.0F);
+    for (int step = 0; step < 10; ++step) stars->tick(66);
+    const float loud = stars->swell();
+    expect(loud > quiet, "a louder voice lifts the points further");
+
+    // Thinking: a bright band sweeps the sphere.
+    stars->set_state(PresenceState::Thinking);
+    for (int step = 0; step < 6; ++step) stars->tick(66);
+    const float band = stars->band();
+    for (int step = 0; step < 6; ++step) stars->tick(66);
+    expect(stars->band() != band, "the thinking band moves");
+
+    stars->set_reduced_motion(true);
+    const auto frozen = stars->frame_count();
+    for (int step = 0; step < 4; ++step) stars->tick(66);
+    expect(stars->frame_count() == frozen, "Reduced Motion freezes the constellation");
+    stars->set_reduced_motion(false);
+
+    stars->detach();
+    lv_obj_clean(screen);
+    expect(stars->object() == nullptr && !stars->tick(66), "a detached constellation forgets its objects");
+    stars->attach(screen, 240, 260);
+    const auto again = stars->frame_count();
+    for (int step = 0; step < 3; ++step) stars->tick(66);
+    expect(stars->object() != nullptr && stars->frame_count() > again, "the constellation attaches a second time");
+    stars->detach();
+    lv_obj_clean(screen);
+}
+
 int main() {
     expect(aura::ui::tokens::HEADER_HEIGHT == 96 && aura::ui::tokens::BUTTON_HEIGHT >= 80 &&
                aura::ui::tokens::ROW_HEIGHT >= 80 && aura::ui::tokens::HEADER_BUTTON >= 64,
@@ -607,6 +670,7 @@ int main() {
     check_presences();
     check_pearl_presence();
     check_aurora_presence();
+    check_stars_presence();
 
     aura::ui::AuraMercuryView mercury;
     expect(mercury.buffer_bytes() == static_cast<std::size_t>(176 * 176 * 3),

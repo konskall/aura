@@ -263,6 +263,9 @@ struct CompanionStrings {
     const char* answer_quote_format;
     const char* timer_ends_format;
     const char* weather_range_format;
+    // Γραφίτης: Home's tile that starts listening, and «now» on Today's timeline.
+    const char* graphite_ask;
+    const char* briefing_now;
     const char* always_on;
     const char* always_on_detail;
     const char* aod_new_one;

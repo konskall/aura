@@ -757,7 +757,9 @@
         lv_obj_set_style_radius(cell, ui::tokens::radius_large, 0);
         lv_obj_set_style_bg_color(cell, ui::color(ui::tokens::surface), LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
-        if (appearance == Appearance::Aurora) {
+        if (appearance == Appearance::Graphite) {
+            graphite_app_cell(cell, width, app_index, title, role, accent, inset);
+        } else if (appearance == Appearance::Aurora) {
             // Σέλας: a glass tile, the icon in its colour over a soft tint of it.
             ui::style_glass(cell, ui::tokens::radius_medium);
             ui::light_field(cell, width / 2, grid.circle_y + grid.circle / 2 - inset, grid.circle / 2 + 8, accent, 90);
@@ -774,11 +776,13 @@
             auto* icon = icon_view(circle, role, 46, accent);
             lv_obj_center(icon);
         }
-        auto* name = line(cell, title, 0, grid.title_y - inset, width, ui::font_caption(),
-                          appearance == Appearance::Marble ? ui::tokens::text_secondary : ui::tokens::text,
-                          LV_TEXT_ALIGN_CENTER);
-        // Manrope runs wider: «Ειδοποιήσεις» stays whole in a Σέλας tile.
-        if (appearance == Appearance::Aurora) lv_obj_set_style_text_letter_space(name, -1, 0);
+        if (appearance != Appearance::Graphite) {
+            auto* name = line(cell, title, 0, grid.title_y - inset, width, ui::font_caption(),
+                              appearance == Appearance::Marble ? ui::tokens::text_secondary : ui::tokens::text,
+                              LV_TEXT_ALIGN_CENTER);
+            // Manrope runs wider: «Ειδοποιήσεις» stays whole in a Σέλας tile.
+            if (appearance == Appearance::Aurora) lv_obj_set_style_text_letter_space(name, -1, 0);
+        }
         if (launcher_reordering) {
             const bool selected = launcher_selected_app && *launcher_selected_app == app_index;
             lv_obj_set_style_border_width(cell, selected ? 3 : 1, 0);
@@ -800,6 +804,7 @@
     }
 
     struct LauncherGrid {
+        int columns;
         int left;
         int column_pitch;
         int cell_width;
@@ -813,11 +818,13 @@
 
     // Halo's cells are 164 px with 104 px circles, so a third row peeks in;
     // Μάρμαρο fits three rows of 84 px hairline circles on one screen, and
-    // Σέλας three rows of 148 px glass tiles across the whole width.
+    // Σέλας three rows of 148 px glass tiles across the whole width, and
+    // Γραφίτης two columns of live tiles.
     LauncherGrid launcher_grid() const {
-        if (appearance == Appearance::Marble) return {kGutter, 144, 144, 4, 128, 124, 84, 2, 90};
-        if (appearance == Appearance::Aurora) return {12, 156, 148, 4, 128, 116, 64, 8, 80};
-        return {kGutter, 144, 144, 8, 172, 164, 104, 8, 120};
+        if (appearance == Appearance::Marble) return {3, kGutter, 144, 144, 4, 128, 124, 84, 2, 90};
+        if (appearance == Appearance::Aurora) return {3, 12, 156, 148, 4, 128, 116, 64, 8, 80};
+        if (appearance == Appearance::Graphite) return {2, 16, 230, 218, 4, 96, 84, 44, 20, 0};
+        return {3, kGutter, 144, 144, 8, 172, 164, 104, 8, 120};
     }
 
     // Unread notifications: a count in Halo, a gold dot by the circle in Μάρμαρο.
@@ -843,8 +850,9 @@
                     static_cast<bool>(callbacks.on_launcher_app_move));
         auto* grid = make_list();
         for (std::size_t index = 0; index < launcher_layout.order.size(); ++index) {
-            const int column = static_cast<int>(index % 3);
-            const int row = static_cast<int>(index / 3);
+            const auto columns = static_cast<std::size_t>(launcher_grid().columns);
+            const int column = static_cast<int>(index % columns);
+            const int row = static_cast<int>(index / columns);
             lv_obj_t* cell = nullptr;
             switch (launcher_layout.order[index]) {
                 case LauncherApp::Conversation:
@@ -910,8 +918,9 @@
             }
             (void)cell;
         }
-        const int rows = static_cast<int>((launcher_layout.order.size() + 2U) / 3U);
         const auto layout = launcher_grid();
+        const auto columns = static_cast<std::size_t>(layout.columns);
+        const int rows = static_cast<int>((launcher_layout.order.size() + columns - 1U) / columns);
         list_end(grid, layout.top + rows * layout.pitch, 8);
     }
 
@@ -1541,6 +1550,10 @@
                 render_timer_aurora(*timer);
                 return;
             }
+            if (appearance == Appearance::Graphite) {
+                render_timer_graphite(*timer);
+                return;
+            }
             const auto text = countdown_text(timer->remaining_ms);
             clock_item_label = label(content, text.c_str(), 0, 128, ui::tokens::display_width, ui::font_display(),
                                      timer->paused ? ui::tokens::text_secondary : ui::tokens::text,
@@ -1944,6 +1957,8 @@
         std::string detail;
         UiView target;
         bool interactive{true};
+        std::string time{};        // "07:30" or «Τώρα» where the item has a time
+        std::string bare_title{};  // the title without that time, when it carries it
     };
 
     Briefing current_briefing() const {
@@ -2018,11 +2033,15 @@
                     if (item.demo) text = std::string(v().demo_badge) + " · " + text;
                     lines.push_back({weather_condition_icon(item.condition), weather_condition_accent(item.condition),
                                      title, text, UiView::Weather});
+                    lines.back().time = c().briefing_now;
                     break;
                 }
                 case BriefingItemKind::Alarm:
                     std::snprintf(title, sizeof(title), c().action_alarm_format, item.hour, item.minute);
                     lines.push_back({ui::IconRole::Reminder, ui::tokens::amber, title, item.text, UiView::Clock});
+                    std::snprintf(title, sizeof(title), "%02d:%02d", item.hour, item.minute);
+                    lines.back().time = title;
+                    lines.back().bare_title = c().alarm;
                     break;
                 case BriefingItemKind::Reminders:
                     if (item.count == 1) std::snprintf(title, sizeof(title), "%s", c().briefing_reminders_one);
@@ -2030,6 +2049,8 @@
                     std::snprintf(detail, sizeof(detail), c().briefing_next_format, item.hour, item.minute,
                                   item.text.c_str());
                     lines.push_back({ui::IconRole::BellRing, ui::tokens::magenta, title, detail, UiView::Clock});
+                    std::snprintf(title, sizeof(title), "%02d:%02d", item.hour, item.minute);
+                    lines.back().time = title;
                     break;
                 case BriefingItemKind::Timers:
                     if (item.count == 1) std::snprintf(title, sizeof(title), "%s", c().briefing_timers_one);
@@ -2097,6 +2118,10 @@
     }
 
     void render_briefing() {
+        if (appearance == Appearance::Graphite) {
+            render_briefing_graphite();
+            return;
+        }
         const auto briefing = current_briefing();
         if (capabilities.speech_output && callbacks.on_speak) {
             make_header(greeting(briefing.period), ui::IconRole::VolumeUp, briefing_speak_event, ui::tokens::mint);

@@ -1575,6 +1575,10 @@ struct AuraUi::Impl {
             render_home_aurora();
             return;
         }
+        if (appearance == Appearance::Graphite) {
+            render_home_graphite();
+            return;
+        }
         // The clock, or the wordmark until the clock is known.
         if (status.clock_valid) {
             home_clock = label(content, "", 0, 42, ui::tokens::display_width, ui::font_clock(), ui::tokens::text,
@@ -1670,6 +1674,7 @@ struct AuraUi::Impl {
     void render_answer_reader() {
         if (appearance == Appearance::Marble) render_answer_marble();
         else if (appearance == Appearance::Aurora) render_answer_aurora();
+        else if (appearance == Appearance::Graphite) render_answer_graphite();
         else render_answer_companion();
     }
 
@@ -2444,6 +2449,10 @@ struct AuraUi::Impl {
         }
         if (appearance == Appearance::Aurora) {
             render_weather_ready_aurora(refreshing);
+            return;
+        }
+        if (appearance == Appearance::Graphite) {
+            render_weather_ready_graphite(refreshing);
             return;
         }
         make_header(v().weather, ui::IconRole::Refresh, weather_refresh_event, ui::tokens::ice,
@@ -3649,6 +3658,7 @@ struct AuraUi::Impl {
 #include "aura_ui_appearance.inl"
 #include "aura_ui_marble.inl"
 #include "aura_ui_aurora.inl"
+#include "aura_ui_graphite.inl"
 };
 
 AuraUi::AuraUi() : impl_(std::make_unique<Impl>()) {}

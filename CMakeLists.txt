@@ -96,6 +96,7 @@ add_library(aura_ui STATIC
     shared/ui/src/aura_mercury_view.cpp
     shared/ui/src/aura_pearl_view.cpp
     shared/ui/src/aura_presence.cpp
+    shared/ui/src/aura_stars_view.cpp
     shared/assets/icons/aura_icon_assets.cpp
     shared/assets/icons/aura_icon_assets_material.cpp
     shared/assets/icons/aura_icon_assets_phosphor.cpp

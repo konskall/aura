@@ -26,6 +26,21 @@
         return pearl;
     }
 
+    // A label of up to two lines, ending in an ellipsis beyond them; returns
+    // its height.
+    int two_line_label(lv_obj_t* parent, const char* text, int x, int y, int width, const lv_font_t* font,
+                       std::uint32_t color) {
+        auto* value = label(parent, text, x, y, width, font, color);
+        const int two_lines = 2 * lv_font_get_line_height(font) +
+                              lv_obj_get_style_text_line_space(value, LV_PART_MAIN);
+        lv_obj_update_layout(value);
+        if (lv_obj_get_height(value) > two_lines) {
+            lv_label_set_long_mode(value, LV_LABEL_LONG_DOT);
+            lv_obj_set_height(value, two_lines);
+        }
+        return std::min(static_cast<int>(lv_obj_get_height(value)), two_lines);
+    }
+
     // «…» in Greek, “…” in English.
     std::string quoted(const char* text) const {
         const int size = std::snprintf(nullptr, 0, c().answer_quote_format, text);
@@ -43,17 +58,8 @@
         marble_pearl(content, kHaloCenterX, 48, 40);
         constexpr int kQuoteY = 104;
         const auto text = quoted(snapshot.user_text.empty() ? t().ask_example : snapshot.user_text.c_str());
-        auto* question = label(content, text.c_str(), kGutter, kQuoteY, kWidth, ui::font_title(),
-                               ui::tokens::text_secondary);
-        const int line_height = lv_font_get_line_height(ui::font_title());
-        const int two_line_height = 2 * line_height + lv_obj_get_style_text_line_space(question, LV_PART_MAIN);
-        lv_obj_update_layout(question);
-        const bool two_lines = lv_obj_get_height(question) > line_height;
-        if (lv_obj_get_height(question) > two_line_height) {
-            lv_label_set_long_mode(question, LV_LABEL_LONG_DOT);
-            lv_obj_set_height(question, two_line_height);
-        }
-        const int reader_y = kQuoteY + (two_lines ? two_line_height : line_height) + 16;
+        const int reader_y = kQuoteY + two_line_label(content, text.c_str(), kGutter, kQuoteY, kWidth,
+                                                      ui::font_title(), ui::tokens::text_secondary) + 16;
         answer_body(reader_y, kActionY - 12 - reader_y);
     }
 
@@ -206,9 +212,12 @@
         return static_cast<std::int32_t>(std::min<std::uint64_t>(1000U, timer.remaining_ms / timer.duration_s));
     }
 
-    // A dial's digits: the look's small numerals; an hour or more ("1:05:00")
-    // takes the display numerals to stay inside the dial.
+    // A dial's digits: the look's small numerals (Γραφίτης: its large condensed
+    // ones); an hour or more ("1:05:00") takes a smaller size to stay inside.
     const lv_font_t* timer_digits_font(const std::string& text) const {
+        if (appearance == Appearance::Graphite) {
+            return text.size() <= 5 ? ui::font_numerals_large() : ui::font_numerals_small();
+        }
         return text.size() <= 5 ? ui::font_numerals_small() : ui::font_display();
     }
 
@@ -232,17 +241,28 @@
         return text;
     }
 
-    // Sixty ticks, a hairline track and a champagne arc that shrinks with the
-    // time left; the serif digits, the label and the end time inside; pause
-    // (ivory) and cancel below as round controls.
-    void render_timer_marble(const TimerItem& timer) {
-        constexpr int kDial = 288;
-        constexpr int kTicks = 264;
-        timer_digits_y = 196;
+    struct DialStyle {
+        int center_y;
+        int dial;   // the arc's box
+        int ticks;  // the tick ring's box (ticks are drawn inward from its edge)
+        int track_width;
+        int arc_width;
+        std::uint32_t track_color;
+        std::uint32_t arc_color;
+        int minor_length;
+        int major_length;
+        int major_width;
+        std::uint32_t minor_color;
+        std::uint32_t major_color;
+    };
+
+    // A watch dial: sixty ticks (a longer one every five) and an arc over its
+    // track that shrinks with the time left, from the top clockwise.
+    void make_timer_dial(const TimerItem& timer, const DialStyle& style) {
         auto* ticks = lv_scale_create(content);
         ui::reset(ticks);
-        lv_obj_set_size(ticks, kTicks, kTicks);
-        lv_obj_set_pos(ticks, kHaloCenterX - kTicks / 2, kTimerDialY - kTicks / 2);
+        lv_obj_set_size(ticks, style.ticks, style.ticks);
+        lv_obj_set_pos(ticks, kHaloCenterX - style.ticks / 2, style.center_y - style.ticks / 2);
         lv_scale_set_mode(ticks, LV_SCALE_MODE_ROUND_INNER);
         lv_scale_set_total_tick_count(ticks, 60);
         lv_scale_set_major_tick_every(ticks, 5);
@@ -250,29 +270,38 @@
         lv_scale_set_angle_range(ticks, 354);
         lv_scale_set_rotation(ticks, 270);
         lv_obj_set_style_arc_opa(ticks, LV_OPA_TRANSP, LV_PART_MAIN);
-        lv_obj_set_style_length(ticks, 7, LV_PART_ITEMS);
+        lv_obj_set_style_length(ticks, style.minor_length, LV_PART_ITEMS);
         lv_obj_set_style_line_width(ticks, 1, LV_PART_ITEMS);
-        lv_obj_set_style_line_color(ticks, ui::color(ui::tokens::text_tertiary), LV_PART_ITEMS);
-        lv_obj_set_style_length(ticks, 13, LV_PART_INDICATOR);
-        lv_obj_set_style_line_width(ticks, 2, LV_PART_INDICATOR);
-        lv_obj_set_style_line_color(ticks, ui::color(ui::tokens::text_secondary), LV_PART_INDICATOR);
+        lv_obj_set_style_line_color(ticks, ui::color(style.minor_color), LV_PART_ITEMS);
+        lv_obj_set_style_length(ticks, style.major_length, LV_PART_INDICATOR);
+        lv_obj_set_style_line_width(ticks, style.major_width, LV_PART_INDICATOR);
+        lv_obj_set_style_line_color(ticks, ui::color(style.major_color), LV_PART_INDICATOR);
 
         clock_item_arc = lv_arc_create(content);
-        lv_obj_set_size(clock_item_arc, kDial, kDial);
-        lv_obj_set_pos(clock_item_arc, kHaloCenterX - kDial / 2, kTimerDialY - kDial / 2);
+        lv_obj_set_size(clock_item_arc, style.dial, style.dial);
+        lv_obj_set_pos(clock_item_arc, kHaloCenterX - style.dial / 2, style.center_y - style.dial / 2);
         lv_obj_set_style_pad_all(clock_item_arc, 0, 0);
         lv_obj_set_style_bg_opa(clock_item_arc, LV_OPA_TRANSP, 0);
         lv_arc_set_rotation(clock_item_arc, 270);
         lv_arc_set_bg_angles(clock_item_arc, 0, 360);
         lv_arc_set_range(clock_item_arc, 0, 1000);
         lv_arc_set_value(clock_item_arc, timer_permille(timer));
-        lv_obj_set_style_arc_color(clock_item_arc, ui::color(ui::tokens::separator), LV_PART_MAIN);
-        lv_obj_set_style_arc_width(clock_item_arc, 2, LV_PART_MAIN);
-        lv_obj_set_style_arc_color(clock_item_arc, ui::color(ui::tokens::indigo), LV_PART_INDICATOR);
-        lv_obj_set_style_arc_width(clock_item_arc, 4, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(clock_item_arc, ui::color(style.track_color), LV_PART_MAIN);
+        lv_obj_set_style_arc_width(clock_item_arc, style.track_width, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(clock_item_arc, ui::color(style.arc_color), LV_PART_INDICATOR);
+        lv_obj_set_style_arc_width(clock_item_arc, style.arc_width, LV_PART_INDICATOR);
         lv_obj_set_style_arc_rounded(clock_item_arc, true, LV_PART_INDICATOR);
         lv_obj_set_style_opa(clock_item_arc, LV_OPA_TRANSP, LV_PART_KNOB);
         lv_obj_set_clickable(clock_item_arc, false);
+    }
+
+    // Sixty ticks, a hairline track and a champagne arc that shrinks with the
+    // time left; the serif digits, the label and the end time inside; pause
+    // (ivory) and cancel below as round controls.
+    void render_timer_marble(const TimerItem& timer) {
+        timer_digits_y = 196;
+        make_timer_dial(timer, {kTimerDialY, 288, 264, 2, 4, ui::tokens::separator, ui::tokens::indigo, 7, 13, 2,
+                                ui::tokens::text_tertiary, ui::tokens::text_secondary});
 
         const auto text = countdown_text(timer.remaining_ms);
         const auto* font = timer_digits_font(text);

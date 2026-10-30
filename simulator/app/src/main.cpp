@@ -4525,6 +4525,308 @@ int main(int argc, char** argv) {
                     ui.set_language(aura::InterfaceLanguage::Greek);
                     record("aurora.briefing", "greeting-glass-rows", today_ok, today_detail);
                 }
+
+                // ---- Γραφίτης ------------------------------------------------
+                ui.set_appearance(aura::Appearance::Graphite);
+                const auto& graphite_fonts = aura::ui::fonts_for(aura::Appearance::Graphite);
+                const auto& graphite_palette = aura::ui::palette_for(aura::Appearance::Graphite);
+                std::function<int(lv_obj_t*, const lv_obj_class_t*)> count_type =
+                    [&](lv_obj_t* object, const lv_obj_class_t* type) {
+                    int found = 0;
+                    const auto count = lv_obj_get_child_count(object);
+                    for (std::uint32_t index = 0; index < count; ++index) {
+                        auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                        if (lv_obj_check_type(child, type)) ++found;
+                        found += count_type(child, type);
+                    }
+                    return found;
+                };
+                std::function<lv_obj_t*(lv_obj_t*, const lv_font_t*)> label_in_font =
+                    [&](lv_obj_t* object, const lv_font_t* font) -> lv_obj_t* {
+                    const auto count = lv_obj_get_child_count(object);
+                    for (std::uint32_t index = 0; index < count; ++index) {
+                        auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                        if (lv_obj_check_type(child, &lv_label_class) && font_of(child) == font) return child;
+                        if (auto* found = label_in_font(child, font)) return found;
+                    }
+                    return nullptr;
+                };
+
+                // The kit on real screens: 52 px squircle wells at 15 %, a white
+                // Primary with black text.
+                {
+                    reset_to(aura::UiView::Settings);
+                    auto* wifi_label = find_text(view_content(), aura::l10n::el_gr().wifi_title);
+                    auto* row = wifi_label ? lv_obj_get_parent(wifi_label) : nullptr;
+                    auto* well = row ? lv_obj_get_child(row, 0) : nullptr;
+                    const bool squircle = well && lv_obj_get_width(well) == 52 &&
+                                          lv_obj_get_style_radius(well, LV_PART_MAIN) == 15 &&
+                                          lv_obj_get_style_bg_opa(well, LV_PART_MAIN) == 38;
+                    controller.dispatch({aura::EventType::Reset});
+                    controller.dispatch({aura::EventType::TurnStarted, aura::l10n::el_gr().capture_short_prompt});
+                    controller.dispatch({aura::EventType::FinalResult, aura::l10n::el_gr().capture_short_answer});
+                    apply();
+                    pump(3);
+                    auto* ask_label = find_text(view_content(), aura::l10n::el_gr().ask_again);
+                    auto* ask_button = ask_label ? lv_obj_get_parent(ask_label) : nullptr;
+                    const bool white = ask_button &&
+                        lv_color_to_u32(lv_obj_get_style_bg_color(ask_button, LV_PART_MAIN)) % 0x1000000U == 0xFFFFFFU &&
+                        lv_color_to_u32(lv_obj_get_style_text_color(ask_label, LV_PART_MAIN)) % 0x1000000U == 0x000000U;
+                    controller.dispatch({aura::EventType::Reset});
+                    apply();
+                    record("graphite.kit", "squircles-white-primary", squircle && white,
+                           std::to_string(squircle) + std::to_string(white));
+                }
+
+                // Home: the hero clock, the day and date, four live tiles; «Ρώτα
+                // την Αύρα» starts listening (no large presence on this Home).
+                {
+                    std::uint32_t alarm_id = 0;
+                    companion.clock().add_alarm(7, 30, true, "", &alarm_id);
+                    bool home_ok = true;
+                    std::string home_detail;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        const bool english = language == aura::InterfaceLanguage::English;
+                        const auto& visual = english ? aura::l10n::visual_en_us() : aura::l10n::visual_el_gr();
+                        const auto& extra = english ? aura::l10n::companion_en_us() : aura::l10n::companion_el_gr();
+                        reset_to(aura::UiView::Home);
+                        pump(3);
+                        auto* hero = label_in_font(view_content(), graphite_fonts.hero);
+                        lv_area_t hero_area{};
+                        if (hero) lv_obj_get_coords(hero, &hero_area);
+                        const bool clock = hero && hero_area.x1 <= 40;
+                        const bool tiles = find_text(view_content(), "07:30") != nullptr &&
+                                           find_text(view_content(), visual.apps_messages) != nullptr &&
+                                           find_text(view_content(), extra.graphite_ask) != nullptr;
+                        const bool fit = fits();
+                        const int ask_before = interaction_counts.ask;
+                        auto* ask = find_text(view_content(), extra.graphite_ask);
+                        tap_center(ask ? lv_obj_get_parent(ask) : nullptr);
+                        const bool talks = interaction_counts.ask == ask_before + 1;
+                        controller.dispatch({aura::EventType::Reset});
+                        apply();
+                        reset_to(aura::UiView::Home);
+                        tap_center(find_target(view_content(), aura::UiView::Launcher));
+                        const bool apps = ui.view() == aura::UiView::Launcher;
+                        home_ok = home_ok && clock && tiles && fit && talks && apps;
+                        home_detail += std::to_string(clock) + std::to_string(tiles) + std::to_string(fit) +
+                                       std::to_string(talks) + std::to_string(apps) + " ";
+                    }
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    companion.clock().remove_alarm(alarm_id);
+                    pump(2);
+                    record("graphite.home", "hero-clock-live-tiles", home_ok, home_detail);
+                }
+
+                // Answer: the question as a quote, the name in the header, the
+                // answer as text and today's actions.
+                {
+                    bool graphite_answer_ok = true;
+                    std::string graphite_answer_detail;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        const bool english = language == aura::InterfaceLanguage::English;
+                        const auto& strings = english ? aura::l10n::en_us() : aura::l10n::el_gr();
+                        const auto& extra = english ? aura::l10n::companion_en_us() : aura::l10n::companion_el_gr();
+                        controller.dispatch({aura::EventType::Reset});
+                        controller.dispatch({aura::EventType::TurnStarted, strings.capture_short_prompt});
+                        controller.dispatch({aura::EventType::FinalResult, strings.capture_short_answer});
+                        apply();
+                        pump(4);
+                        char quoted[256];
+                        std::snprintf(quoted, sizeof(quoted), extra.answer_quote_format, strings.capture_short_prompt);
+                        const bool quote = find_text(view_content(), quoted) != nullptr;
+                        const bool named = find_text(view_content(), extra.conversation_aura) != nullptr &&
+                                           find_text(view_content(), strings.answer_title) == nullptr;
+                        const bool ask = find_text(view_content(), strings.ask_again) != nullptr;
+                        const bool fit = fits();
+                        graphite_answer_ok = graphite_answer_ok && quote && named && ask && fit;
+                        graphite_answer_detail += std::to_string(quote) + std::to_string(named) + std::to_string(ask) +
+                                                  std::to_string(fit) + " ";
+                    }
+                    controller.dispatch({aura::EventType::Reset});
+                    apply();
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    record("graphite.answer", "quote-text-actions", graphite_answer_ok, graphite_answer_detail);
+                }
+
+                // Apps: live tiles in two columns, each with its live status;
+                // colour only where something is happening.
+                {
+                    bool launcher_ok_graphite = true;
+                    std::string launcher_detail_graphite;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        const bool english = language == aura::InterfaceLanguage::English;
+                        weather_model.restore_location(demo_weather_location({}, language));
+                        weather_model.fetch_succeeded(demo_weather_data(aura::WeatherCondition::PartlyCloudy, {}, language));
+                        apply_weather();
+                        reset_to(aura::UiView::Launcher);
+                        pump(2);
+                        auto* clock_cell = find_target(view_content(), aura::UiView::Clock);
+                        auto* settings_cell = find_target(view_content(), aura::UiView::Settings);
+                        lv_area_t clock_area{};
+                        if (clock_cell) lv_obj_get_coords(clock_cell, &clock_area);
+                        const bool columns = clock_cell && lv_obj_get_width(clock_cell) >= 200;
+                        const std::string status = std::string("22° · ") + (english ? "Athens" : "Αθήνα");
+                        const bool live = find_text(view_content(), status.c_str()) != nullptr;
+                        auto* settings_well = settings_cell ? lv_obj_get_child(settings_cell, 0) : nullptr;
+                        const bool quiet = settings_well &&
+                            lv_color_to_u32(lv_obj_get_style_bg_color(settings_well, LV_PART_MAIN)) % 0x1000000U ==
+                                graphite_palette.surface_high;
+                        const bool fit = fits();
+                        tap_center(clock_cell);
+                        const bool opens = ui.view() == aura::UiView::Clock;
+                        launcher_ok_graphite = launcher_ok_graphite && columns && live && quiet && fit && opens;
+                        launcher_detail_graphite += std::to_string(columns) + std::to_string(live) + std::to_string(quiet) +
+                                                    std::to_string(fit) + std::to_string(opens) + " ";
+                    }
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    weather_model.restore_location(demo_weather_location());
+                    weather_model.fetch_succeeded(demo_weather_data());
+                    apply_weather();
+                    record("graphite.launcher", "two-column-live-tiles", launcher_ok_graphite, launcher_detail_graphite);
+                }
+
+                // Weather: condensed numerals, the day's range as a bar, the hours
+                // as bars, and gauges: a humidity ring and a compass of lines.
+                {
+                    bool graphite_weather_ok = true;
+                    std::string graphite_weather_detail;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        const bool english = language == aura::InterfaceLanguage::English;
+                        const auto& visual = english ? aura::l10n::visual_en_us() : aura::l10n::visual_el_gr();
+                        weather_model.restore_location(demo_weather_location({}, language));
+                        weather_model.fetch_succeeded(demo_weather_data(aura::WeatherCondition::PartlyCloudy, {}, language));
+                        apply_weather();
+                        reset_to(aura::UiView::Weather);
+                        pump(3);
+                        auto* city = find_text(view_content(), english ? "Athens" : "Αθήνα");
+                        const bool degrees = font_of(find_text(view_content(), "22°")) == graphite_fonts.numerals_large;
+                        auto* ring = find_type(view_content(), &lv_arc_class);
+                        const bool humidity_ring = ring && lv_arc_get_value(ring) == 45 &&
+                                                   on_screen(find_text(view_content(), visual.humidity));
+                        const bool compass = count_type(view_content(), &lv_line_class) >= 8 &&
+                                             on_screen(find_text(view_content(), visual.wind));
+                        const bool hours = on_screen(find_text(view_content(), "21:00"));
+                        const bool demo = find_text(view_content(), visual.demo_badge) != nullptr;
+                        const bool fit = fits();
+                        tap_center(city);
+                        const bool picker = ui.view() == aura::UiView::WeatherLocation;
+                        graphite_weather_ok = graphite_weather_ok && degrees && humidity_ring && compass && hours &&
+                                              demo && fit && picker;
+                        graphite_weather_detail += std::to_string(degrees) + std::to_string(humidity_ring) +
+                                                   std::to_string(compass) + std::to_string(hours) + std::to_string(demo) +
+                                                   std::to_string(fit) + std::to_string(picker) + " ";
+                    }
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    auto long_place = demo_weather_data();
+                    long_place.location.name = "Αγιος Νικόλαος Λασιθίου";
+                    weather_model.restore_location(long_place.location);
+                    weather_model.fetch_succeeded(long_place);
+                    apply_weather();
+                    reset_to(aura::UiView::Weather);
+                    pump(3);
+                    const bool cut = find_text(view_content(), long_place.location.name.c_str()) == nullptr && fits();
+                    graphite_weather_ok = graphite_weather_ok && cut;
+                    graphite_weather_detail += "long=" + std::to_string(cut);
+                    weather_model.restore_location(demo_weather_location());
+                    weather_model.fetch_succeeded(demo_weather_data());
+                    apply_weather();
+                    record("graphite.weather", "numerals-bars-gauges", graphite_weather_ok, graphite_weather_detail);
+                }
+
+                // Timer: the instrument dial (ticks, an amber arc), condensed digits,
+                // the label and the end time; squircle pause and cancel.
+                {
+                    bool graphite_timer_ok = true;
+                    std::string graphite_timer_detail;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        const auto& extra = language == aura::InterfaceLanguage::English ?
+                            aura::l10n::companion_en_us() : aura::l10n::companion_el_gr();
+                        clear_timers();
+                        clock_model.start_timer(600, "Ζυμαρικά");
+                        reset_to(aura::UiView::Clock);
+                        tap(220, 140);
+                        pump(2);
+                        const bool item = ui.view() == aura::UiView::ClockItem;
+                        auto* scale = find_type(view_content(), &lv_scale_class);
+                        const bool ticks = scale && lv_scale_get_total_tick_count(scale) == 60;
+                        const auto& clock_now = clock_model.snapshot();
+                        const auto end = aura::from_minute_index(clock_now.now_minute + (600 + 30) / 60);
+                        char ends[48];
+                        std::snprintf(ends, sizeof(ends), extra.timer_ends_format, end.hour, end.minute);
+                        const bool end_shown = !clock_now.clock_valid || find_text(view_content(), ends) != nullptr;
+                        auto* arc = find_type(view_content(), &lv_arc_class);
+                        const bool amber = arc && lv_color_to_u32(lv_obj_get_style_arc_color(arc, LV_PART_INDICATOR)) %
+                                                      0x1000000U == graphite_palette.amber;
+                        const int full = arc ? lv_arc_get_value(arc) : -1;
+                        clock_model.tick(150000);
+                        pump(3);
+                        auto* arc_later = find_type(view_content(), &lv_arc_class);
+                        const int later = arc_later ? lv_arc_get_value(arc_later) : -1;
+                        const bool shrinks = full >= 990 && later <= full - 250 && later >= full - 260;
+                        const bool digits = font_of(find_text(view_content(), "07:30")) == graphite_fonts.numerals_large;
+                        const bool label_shown = find_text(view_content(), "Ζυμαρικά") != nullptr;
+                        const bool fit = fits();
+                        graphite_timer_ok = graphite_timer_ok && item && ticks && end_shown && amber && shrinks && digits &&
+                                            label_shown && fit;
+                        graphite_timer_detail += std::to_string(item) + std::to_string(ticks) + std::to_string(end_shown) +
+                                                 std::to_string(amber) + std::to_string(full) + "/" + std::to_string(later) +
+                                                 std::to_string(digits) + std::to_string(label_shown) + std::to_string(fit) +
+                                                 " ";
+                    }
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    clear_timers();
+                    clock_model.start_timer(600, "Ζυμαρικά για τέσσερα άτομα με σάλτσα ντομάτας και βασιλικό");
+                    reset_to(aura::UiView::Clock);
+                    tap(220, 140);
+                    pump(2);
+                    const bool inside = fits();
+                    tap_center(find_sized_clickable(view_content(), 80, 80));
+                    const bool paused = !clock_model.snapshot().timers.empty() && clock_model.snapshot().timers.front().paused;
+                    tap_center(find_sized_clickable(view_content(), 72, 72));
+                    const bool cancelled = clock_model.snapshot().timers.empty() && ui.view() == aura::UiView::Clock;
+                    graphite_timer_ok = graphite_timer_ok && inside && paused && cancelled;
+                    graphite_timer_detail += "long=" + std::to_string(inside) + std::to_string(paused) +
+                                             std::to_string(cancelled);
+                    clear_timers();
+                    record("graphite.timer", "instrument-dial-controls", graphite_timer_ok, graphite_timer_detail);
+                }
+
+                // Today: a timeline, times from the models on the left and tiles on
+                // the right; the weather is «now».
+                {
+                    std::uint32_t alarm_id = 0;
+                    companion.clock().add_alarm(7, 30, true, "", &alarm_id);
+                    bool today_ok_graphite = true;
+                    std::string today_detail_graphite;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        const auto& extra = language == aura::InterfaceLanguage::English ?
+                            aura::l10n::companion_en_us() : aura::l10n::companion_el_gr();
+                        reset_to(aura::UiView::Briefing);
+                        pump(2);
+                        auto* time = find_text(view_content(), "07:30");
+                        auto* alarm = find_text(view_content(), extra.alarm);
+                        lv_area_t time_area{};
+                        lv_area_t alarm_area{};
+                        if (time) lv_obj_get_coords(time, &time_area);
+                        if (alarm) lv_obj_get_coords(alarm, &alarm_area);
+                        const bool timeline = time && alarm && time_area.x2 < alarm_area.x1;
+                        const bool now = find_text(view_content(), extra.briefing_now) != nullptr;
+                        const bool fit = fits();
+                        today_ok_graphite = today_ok_graphite && timeline && now && fit;
+                        today_detail_graphite += std::to_string(timeline) + std::to_string(now) + std::to_string(fit) + " ";
+                    }
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    companion.clock().remove_alarm(alarm_id);
+                    pump(2);
+                    record("graphite.briefing", "timeline", today_ok_graphite, today_detail_graphite);
+                }
                 ui.set_appearance(aura::Appearance::Halo);
             }
 

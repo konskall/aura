@@ -264,6 +264,8 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.answer_quote_format = "«%s»";
         s.timer_ends_format = "Λήγει %02d:%02d";
         s.weather_range_format = "Από %d° έως %d°";
+        s.graphite_ask = "Ρώτα την Αύρα";
+        s.briefing_now = "Τώρα";
         s.always_on = "Πάντα αναμμένη";
         s.always_on_detail = "Αχνό ρολόι όταν δεν τη χρησιμοποιείς";
         s.aod_new_one = "1 νέο";
@@ -645,6 +647,8 @@ const CompanionStrings& companion_en_us() noexcept {
         s.answer_quote_format = "“%s”";
         s.timer_ends_format = "Ends %02d:%02d";
         s.weather_range_format = "From %d° to %d°";
+        s.graphite_ask = "Ask Aura";
+        s.briefing_now = "Now";
         s.always_on = "Always on";
         s.always_on_detail = "A dim clock when idle";
         s.aod_new_one = "1 new";

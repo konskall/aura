@@ -48,6 +48,7 @@ idf_component_register(
         "${AURA_ROOT}/shared/ui/src/aura_mercury_view.cpp"
         "${AURA_ROOT}/shared/ui/src/aura_pearl_view.cpp"
         "${AURA_ROOT}/shared/ui/src/aura_presence.cpp"
+        "${AURA_ROOT}/shared/ui/src/aura_stars_view.cpp"
         "${AURA_ROOT}/shared/assets/icons/aura_icon_assets.cpp"
         "${AURA_ROOT}/shared/assets/icons/aura_icon_assets_material.cpp"
         "${AURA_ROOT}/shared/assets/icons/aura_icon_assets_phosphor.cpp"
