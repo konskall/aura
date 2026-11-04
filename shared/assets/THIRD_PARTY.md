@@ -12,11 +12,21 @@ AURA UI text uses IBM Plex Sans Regular, Medium and SemiBold; the clock and larg
 
 ## Space Grotesk
 
-The AURA wordmark uses Space Grotesk Medium, pinned to commit `03507d024a01282884232081fc6011c09ff4e849`, under the SIL Open Font License 1.1.
+The legacy typography proof retains Space Grotesk Medium, pinned to commit `03507d024a01282884232081fc6011c09ff4e849`, under the SIL Open Font License 1.1. Production wordmark placements use the approved owner-provided artwork below.
 
 - Source: <https://github.com/floriankarsten/space-grotesk>
 - Notice: `licenses/SPACE_GROTESK_OFL.txt`
 - Generated asset: `fonts/aura_font_space_medium_26.c`
+
+## Owner-provided Aura identity
+
+The approved Aura wordmark was supplied by the project owner in `Aura_Selas_Logo.zip`. It is project identity artwork, not a third-party icon or font. The vector is authoritative; the large transparent PNG is retained only as a reference and is never compiled or decoded on the device.
+
+- Sources: `branding/source/Aura_Selas.svg`, `branding/source/Aura_Selas_Transparent.png`.
+- Source SHA-256: SVG `54052b36775a5010b91d6aada545da15e7a95a651e24e403e99b9cd980efc1da`; PNG `4b7d26de269503eba24203b7859efbda526058d5c83c044ecbe3ca0e98f4296b`.
+- Generated assets: `aura_brand_aura_compact` (144×53) and `aura_brand_aura_hero` (176×65), static ARGB8888, 76,288 bytes total.
+- Generator and manifest: `tools/icons/generate-brand-assets.mjs`, `branding/manifest.json`.
+- Placement and regeneration: `docs/BRANDING.md`.
 
 ## Appearance fonts (Μάρμαρο, Σέλας, Γραφίτης)
 
@@ -58,3 +68,11 @@ Each appearance draws its own icon family, converted like Lucide to 64×64 A8 LV
 - Phosphor Light (Marble), `@iconify-json/ph` 1.2.2, MIT, by Phosphor Icons. Notice: `licenses/PHOSPHOR_MIT.txt`. Assets: `icons/aura_icon_assets_phosphor.cpp`, `icons/manifest-phosphor.json`.
 - Solar Bold Duotone (Aurora), `@iconify-json/solar` 1.2.13, Creative Commons Attribution 4.0, by 480 Design. Attribution: "Solar icon set by 480 Design". Notice: `licenses/SOLAR_CC_BY_4.0.txt`. Assets: `icons/aura_icon_assets_solar.cpp`, `icons/manifest-solar.json`.
 - Material Symbols Rounded (Graphite), `@iconify-json/material-symbols` 1.2.97, Apache 2.0, by Google. Notice: `licenses/MATERIAL_SYMBOLS_APACHE_2.0.txt`. Assets: `icons/aura_icon_assets_material.cpp`, `icons/manifest-material.json`.
+
+## Aoraton and Google sign-in branding
+
+The owner requested the current Aoraton logo and Google sign-in mark on AURA's account connection screens. These are brand artwork, kept separate from the theme-dependent semantic icon families and never recolored.
+
+- Aoraton: `branding/aoraton-logo.png`, from <https://aoraton.com/favicon-96x96.png>. Its SHA-256 matches the owner's read-only `incognitochat/public/favicon-96x96.png`. No application implementation was copied from that repository.
+- Google: `branding/google-g.png`, the official full-color gradient G from <https://developers.google.com/static/identity/images/g-logo.png>. It identifies the existing Google sign-in action. Google branding guidance: <https://developers.google.com/identity/branding-guidelines>. The mark's colors and aspect ratio are preserved on a white button; no ownership or general-purpose license to Google's trademarks is claimed.
+- `tools/icons/generate-brand-assets.mjs` converts the originals into two static ARGB8888 LVGL assets shared by the simulator and firmware (40,960 bytes total). Regenerate with `node tools/icons/generate-brand-assets.mjs` after installing the existing pinned icon-build dependencies. Source hashes are in `branding/manifest.json`.

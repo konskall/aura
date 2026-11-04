@@ -44,6 +44,10 @@ target_link_libraries(lvgl PRIVATE SDL2::SDL2-static)
 
 add_library(aura_core STATIC
     shared/core/src/app_layout.cpp
+    shared/core/src/photos.cpp
+    shared/core/src/file_transfer.cpp
+    shared/core/src/photo_decoder.cpp
+    shared/third_party/tjpgd/tjpgd.c
     shared/core/src/appearance.cpp
     shared/core/src/aoraton.cpp
     shared/core/src/assistant_companion.cpp
@@ -68,6 +72,7 @@ add_library(aura_core STATIC
     shared/core/src/json_reader.cpp
     shared/core/src/aoraton_account.cpp
     shared/core/src/aoraton_account_worker.cpp
+    shared/core/src/aoraton_realtime.cpp
     shared/core/src/aoraton_inco.cpp
     shared/core/src/audio_service.cpp
     shared/core/src/assistant_state.cpp
@@ -78,6 +83,9 @@ add_library(aura_core STATIC
     shared/core/src/weather.cpp
     shared/core/src/wifi.cpp
     shared/localization/src/companion_strings.cpp
+    shared/localization/src/photo_strings.cpp
+    shared/localization/src/transfer_strings.cpp
+    shared/localization/src/transfer_page.cpp
     shared/localization/src/strings.cpp
     shared/localization/src/visual_strings.cpp
 )
@@ -87,6 +95,7 @@ target_include_directories(aura_core PUBLIC
 )
 
 add_library(aura_ui STATIC
+    shared/third_party/qrcodegen/qrcodegen.c
     shared/ui/src/aura_ui.cpp
     shared/ui/src/aura_appearance.cpp
     shared/ui/src/aura_theme.cpp
@@ -101,6 +110,7 @@ add_library(aura_ui STATIC
     shared/assets/icons/aura_icon_assets_material.cpp
     shared/assets/icons/aura_icon_assets_phosphor.cpp
     shared/assets/icons/aura_icon_assets_solar.cpp
+    shared/assets/branding/aura_brand_assets.cpp
     shared/assets/fonts/aura_font_plex_regular_22.c
     shared/assets/fonts/aura_font_plex_regular_26.c
     shared/assets/fonts/aura_font_plex_medium_28.c
@@ -139,6 +149,7 @@ target_include_directories(aura_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/shared/localization/include
     ${CMAKE_CURRENT_SOURCE_DIR}/shared/assets/fonts
     ${CMAKE_CURRENT_SOURCE_DIR}/shared/assets/icons
+    ${CMAKE_CURRENT_SOURCE_DIR}/shared/assets/branding
 )
 target_compile_definitions(aura_ui PUBLIC LV_CONF_INCLUDE_SIMPLE LV_LVGL_H_INCLUDE_SIMPLE AURA_SIMULATOR=1)
 target_link_libraries(aura_ui PUBLIC aura_core lvgl)
@@ -150,6 +161,8 @@ add_executable(aura_simulator
     simulator/app/src/bridge_http.cpp
     simulator/app/src/bridge_speech_service.cpp
     simulator/app/src/companion_runtime.cpp
+    simulator/app/src/photo_runtime.cpp
+    simulator/app/src/file_transfer_runtime.cpp
     simulator/app/src/screenshot.cpp
     simulator/app/src/open_meteo_weather_service.cpp
     simulator/app/src/weather_store.cpp
@@ -164,16 +177,41 @@ add_executable(aura_simulator
     simulator/app/src/winhttp_client.cpp
     simulator/app/src/loopback_sign_in.cpp
     simulator/app/src/aoraton_account_transport.cpp
+    simulator/app/src/windows_aoraton_realtime.cpp
 )
 target_include_directories(aura_simulator PRIVATE simulator/app/include)
 target_compile_definitions(aura_simulator PRIVATE LV_CONF_INCLUDE_SIMPLE LV_LVGL_H_INCLUDE_SIMPLE SDL_MAIN_HANDLED)
 target_link_libraries(aura_simulator PRIVATE aura_ui lvgl SDL2::SDL2-static)
 if(WIN32)
-    target_link_libraries(aura_simulator PRIVATE winhttp ws2_32 shell32 bcrypt crypt32 wlanapi bluetoothapis setupapi)
+    target_link_libraries(aura_simulator PRIVATE winhttp ws2_32 shell32 bcrypt crypt32 wlanapi bluetoothapis setupapi iphlpapi)
     target_link_options(aura_simulator PRIVATE -mconsole)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(aura_file_transfer_tests tests/unit/file_transfer_test.cpp)
+    target_compile_definitions(aura_file_transfer_tests PRIVATE AURA_PHOTO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/photos")
+    target_link_libraries(aura_file_transfer_tests PRIVATE aura_core)
+    add_test(NAME aura_file_transfer_tests COMMAND aura_file_transfer_tests)
+    if(WIN32)
+        add_executable(aura_file_transfer_runtime_tests tests/unit/file_transfer_runtime_test.cpp simulator/app/src/file_transfer_runtime.cpp simulator/app/src/photo_runtime.cpp)
+        target_include_directories(aura_file_transfer_runtime_tests PRIVATE simulator/app/include)
+        target_compile_definitions(aura_file_transfer_runtime_tests PRIVATE AURA_PHOTO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/photos")
+        target_link_libraries(aura_file_transfer_runtime_tests PRIVATE aura_core ws2_32 iphlpapi bcrypt shell32)
+        add_test(NAME aura_file_transfer_runtime_tests COMMAND aura_file_transfer_runtime_tests)
+        set_tests_properties(aura_file_transfer_runtime_tests PROPERTIES TIMEOUT 25)
+    endif()
+    add_executable(aura_photos_tests tests/unit/photos_test.cpp)
+    target_compile_definitions(aura_photos_tests PRIVATE AURA_PHOTO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/photos")
+    target_link_libraries(aura_photos_tests PRIVATE aura_core)
+    add_test(NAME aura_photos_tests COMMAND aura_photos_tests)
+    if(WIN32)
+        add_executable(aura_photo_storage_tests tests/unit/photo_storage_test.cpp simulator/app/src/photo_runtime.cpp)
+        target_include_directories(aura_photo_storage_tests PRIVATE simulator/app/include)
+        target_compile_definitions(aura_photo_storage_tests PRIVATE AURA_PHOTO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/photos")
+        target_link_libraries(aura_photo_storage_tests PRIVATE aura_core)
+        add_test(NAME aura_photo_storage_tests COMMAND aura_photo_storage_tests)
+        set_tests_properties(aura_photo_storage_tests PROPERTIES TIMEOUT 15)
+    endif()
     find_program(AURA_NODE_EXECUTABLE node)
     if(AURA_NODE_EXECUTABLE)
         add_test(NAME aura_aoraton_webcrypto_oracle
@@ -264,6 +302,20 @@ if(BUILD_TESTING)
         target_compile_definitions(aura_windows_audio_alert_tests PRIVATE SDL_MAIN_HANDLED)
         target_link_libraries(aura_windows_audio_alert_tests PRIVATE aura_core SDL2::SDL2-static)
         add_test(NAME aura_windows_audio_alert_tests COMMAND aura_windows_audio_alert_tests)
+        add_executable(aura_companion_speech_tests
+            tests/unit/companion_speech_test.cpp
+            simulator/app/src/photo_runtime.cpp
+            simulator/app/src/file_transfer_runtime.cpp
+            simulator/app/src/companion_runtime.cpp
+            simulator/app/src/bridge_speech_service.cpp
+            simulator/app/src/bridge_http.cpp
+            simulator/app/src/windows_audio_backend.cpp
+        )
+        target_include_directories(aura_companion_speech_tests PRIVATE simulator/app/include)
+        target_compile_definitions(aura_companion_speech_tests PRIVATE SDL_MAIN_HANDLED)
+        target_link_libraries(aura_companion_speech_tests PRIVATE aura_ui SDL2::SDL2-static winhttp ws2_32 iphlpapi bcrypt shell32)
+        add_test(NAME aura_companion_speech_tests COMMAND aura_companion_speech_tests)
+        set_tests_properties(aura_companion_speech_tests PROPERTIES TIMEOUT 30)
         add_executable(aura_bridge_stream_tests
             tests/unit/bridge_stream_test.cpp
             simulator/app/src/local_codex_provider.cpp
@@ -274,6 +326,12 @@ if(BUILD_TESTING)
         add_test(NAME aura_bridge_stream_tests COMMAND aura_bridge_stream_tests)
     endif()
     add_executable(aura_appearance_tests tests/unit/appearance_test.cpp)
+    add_executable(aura_keyboard_tests tests/unit/keyboard_test.cpp)
+    add_executable(aura_aoraton_realtime_tests tests/unit/aoraton_realtime_test.cpp)
+    target_link_libraries(aura_aoraton_realtime_tests PRIVATE aura_core)
+    add_test(NAME aura_aoraton_realtime_tests COMMAND aura_aoraton_realtime_tests)
+    target_link_libraries(aura_keyboard_tests PRIVATE aura_ui)
+    add_test(NAME aura_keyboard_tests COMMAND aura_keyboard_tests)
     target_link_libraries(aura_appearance_tests PRIVATE aura_core)
     add_test(NAME aura_appearance_tests COMMAND aura_appearance_tests)
     add_executable(aura_companion_models_tests tests/unit/companion_models_test.cpp)
@@ -331,11 +389,25 @@ if(BUILD_TESTING)
             AURA_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         target_link_libraries(aura_aoraton_account_worker_tests PRIVATE aura_core bcrypt)
         add_test(NAME aura_aoraton_account_worker_tests COMMAND aura_aoraton_account_worker_tests)
+        add_executable(aura_windows_aoraton_realtime_tests
+            tests/integration/windows_aoraton_realtime_test.cpp
+            simulator/app/src/windows_aoraton_realtime.cpp
+            simulator/app/src/winhttp_client.cpp
+        )
+        target_include_directories(aura_windows_aoraton_realtime_tests PRIVATE simulator/app/include)
+        target_link_libraries(aura_windows_aoraton_realtime_tests PRIVATE aura_core winhttp)
+        if(AURA_NODE_EXECUTABLE)
+            add_test(NAME aura_windows_aoraton_realtime_tests
+                COMMAND ${AURA_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/interop/run_aoraton_realtime_test.mjs
+                        $<TARGET_FILE:aura_windows_aoraton_realtime_tests>)
+            set_tests_properties(aura_windows_aoraton_realtime_tests PROPERTIES TIMEOUT 50)
+        endif()
         add_executable(aura_aoraton_account_smoke
             tests/smoke/aoraton_account_smoke.cpp
             simulator/app/src/winhttp_client.cpp
             simulator/app/src/loopback_sign_in.cpp
             simulator/app/src/aoraton_account_transport.cpp
+            simulator/app/src/windows_aoraton_realtime.cpp
             simulator/app/src/windows_aoraton_crypto.cpp
             simulator/app/src/windows_aoraton_vault.cpp
         )

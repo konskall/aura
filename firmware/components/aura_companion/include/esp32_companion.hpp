@@ -1,4 +1,6 @@
 #pragma once
+#include "esp32_photo_storage.hpp"
+#include "esp32_file_transfer.hpp"
 
 #include "aura/app_layout.hpp"
 #include "aura/aura_ui.hpp"
@@ -41,7 +43,7 @@ class Esp32Companion {
 public:
     explicit Esp32Companion(IAudioService& audio, DeviceStatusModel& status);
     void start();
-    void install(AuraUiCallbacks& callbacks);
+    void install(AuraUiCallbacks& callbacks, IAoratonService* aoraton = nullptr);
     void poll(std::uint32_t elapsed_ms);
     void apply(AuraUi& ui);
     InterfaceLanguage language() const noexcept { return language_; }
@@ -59,7 +61,7 @@ private:
     void begin_note();
     void finish_note();
     void save();
-    enum class StoreJobKind { Clock, Notes, Organizer, Sound, Display, Language, Layout, Voice, DeleteVoice };
+    enum class StoreJobKind { Clock, Notes, Organizer, Sound, Display, Language, Layout, Voice, DeleteVoice, AoratonSync };
     struct StoreJob {
         StoreJobKind kind{StoreJobKind::Clock};
         std::string name;
@@ -94,6 +96,16 @@ private:
     Esp32Ota updater_;
     Esp32Microphone microphone_;
     Esp32CompanionStore store_;
+    PhotoMailbox photo_mailbox_;
+    PhotoModel photos_{photo_mailbox_};
+    Esp32PhotoStorage photo_storage_{store_};
+    PhotoWorker photo_worker_{photo_mailbox_, photo_storage_};
+    Esp32FileTransfer transfer_;
+    AuraUi* active_ui_{nullptr};
+    std::uint64_t transfer_photo_revision_{0};
+    std::uint64_t transfer_removal_revision_{0};
+    bool transfer_removals_pending_{false};
+    bool transfer_photos_pending_{false};
     std::vector<ImuSample> imu_samples_;
     std::vector<std::int16_t> samples_;
     bool recording_note_{false};
@@ -104,6 +116,10 @@ private:
     AlarmRinger alarm_ringer_;  // one melody pass per cycle, through mute
     MessageChimeGate message_chime_;
     SoundSettings sound_{};
+    IAoratonService* aoraton_{nullptr};
+    AoratonSyncSettings aoraton_sync_;
+    std::string saved_aoraton_sync_text_;
+    bool aoraton_sync_save_pending_{false};
     std::uint64_t chime_phone_sequence_{0};
     std::uint32_t note_counter_{0};
     std::uint64_t saved_clock_{0};

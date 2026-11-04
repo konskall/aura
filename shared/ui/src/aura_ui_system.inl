@@ -209,6 +209,9 @@
         y += kRowPitch;
         settings_row(list, y, c().system_diagnostics, c().system_diagnostics_detail, ui::IconRole::Cpu,
                      ui::tokens::lilac, UiView::Diagnostics);
+        y += kRowPitch;
+        settings_row(list, y, c().system_credits, c().system_credits_detail, ui::IconRole::Information,
+                     ui::tokens::mint, UiView::Credits);
         y += kRowPitch + 8;
         line(list, c().system_power, kGutter + 4, y, kWidth - 8, ui::font_caption(), ui::tokens::text_secondary);
         y += 40;
@@ -233,6 +236,57 @@
             y += kRowPitch;
         }
         list_end(list, y, 8);
+    }
+
+    void credits_card(lv_obj_t* list, int& y, const char* title, const char* body,
+                      ui::IconRole role, std::uint32_t accent) {
+        auto* card = lv_obj_create(list);
+        ui::reset(card);
+        ui::style_platter(card, accent, ui::tokens::radius_large, false);
+        lv_obj_set_size(card, kWidth, 160);
+        lv_obj_set_pos(card, kGutter, y);
+
+        auto* well = icon_well(card, 48, role, accent, 28);
+        lv_obj_set_pos(well, 18, 18);
+        line(card, title, 82, 26, kWidth - 102, ui::font_headline());
+        auto* detail = label(card, body, 20, 78, kWidth - 40, ui::font_caption(),
+                             ui::tokens::text_secondary);
+        lv_obj_set_height(detail, LV_SIZE_CONTENT);
+        lv_obj_update_layout(detail);
+        const int card_height = std::max(132, 78 + static_cast<int>(lv_obj_get_height(detail)) + 20);
+        lv_obj_set_height(card, card_height);
+        y += card_height + 12;
+    }
+
+    void render_credits() {
+        make_header(c().system_credits);
+        auto* list = make_list();
+        int y = 12;
+
+        aura_wordmark(list, (ui::tokens::display_width - 144) / 2, y);
+        y += 68;
+        auto* intro = label(list, c().credits_intro, kGutter + 12, y, kWidth - 24, ui::font_caption(),
+                            ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
+        lv_obj_set_height(intro, LV_SIZE_CONTENT);
+        lv_obj_update_layout(intro);
+        y += static_cast<int>(lv_obj_get_height(intro)) + 24;
+
+        credits_card(list, y, c().credits_platform_title, c().credits_platform_body,
+                     ui::IconRole::Cpu, ui::tokens::blue);
+        credits_card(list, y, c().credits_icons_title, c().credits_icons_body,
+                     ui::IconRole::Palette, ui::tokens::lilac);
+        credits_card(list, y, c().credits_fonts_title, c().credits_fonts_body,
+                     ui::IconRole::File, ui::tokens::ice);
+        credits_card(list, y, c().credits_media_title, c().credits_media_body,
+                     ui::IconRole::Audio, ui::tokens::amber);
+        credits_card(list, y, c().credits_design_title, c().credits_design_body,
+                     ui::IconRole::Sparkles, ui::tokens::mint);
+
+        auto* note = label(list, c().credits_license_note, kGutter + 12, y + 4, kWidth - 24,
+                           ui::font_caption(), ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
+        lv_obj_set_height(note, LV_SIZE_CONTENT);
+        lv_obj_update_layout(note);
+        list_end(list, y + 4 + static_cast<int>(lv_obj_get_height(note)), 24);
     }
 
     // A compact procedural "AI core" shared by confirmations, restart and the
@@ -326,9 +380,7 @@
     // replaces the previous completely blank screen and accepts only a long press.
     void render_power_off() {
         header_action = true;
-        auto* brand = line(content, t().aura_name, 0, 76, ui::tokens::display_width, ui::font_brand(),
-                           ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
-        lv_obj_set_style_text_letter_space(brand, 8, 0);
+        auto* brand = aura_wordmark(content, (ui::tokens::display_width - 176) / 2, 48, true);
         lv_obj_set_style_opa(brand, LV_OPA_40, 0);
         system_orb(220, ui::IconRole::Power, ui::tokens::ice, true);
         auto* hint = label(content, capabilities.power_button ? c().system_power_off_hint_button
@@ -362,9 +414,7 @@
             detail = c().system_powering_on_detail;
         }
 
-        auto* brand = line(content, t().aura_name, 0, 58, ui::tokens::display_width, ui::font_brand(),
-                           ui::tokens::text, LV_TEXT_ALIGN_CENTER);
-        lv_obj_set_style_text_letter_space(brand, 8, 0);
+        aura_wordmark(content, (ui::tokens::display_width - 176) / 2, 26, true);
         system_orb(190, role, accent);
         boot_spinner = system_ring_outer;
         line(content, title, kGutter, 302, kWidth, ui::font_title(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);

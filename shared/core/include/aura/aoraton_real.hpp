@@ -25,6 +25,7 @@ enum class AoratonCommandType {
     Unpair,
     UnlockVault,
     AddInviteKey,
+    ConfigureSync,
 };
 
 class AoratonCommand final {
@@ -40,6 +41,7 @@ public:
     std::string room_id;
     std::string client_message_id;
     std::string plaintext;
+    AoratonSyncSettings sync_settings;
 
     void clear_plaintext() noexcept;
 };
@@ -131,6 +133,7 @@ public:
     bool unpair() override;
     bool unlock_keys(const std::string& passphrase) override;
     bool add_invite_key(const std::string& invite) override;
+    bool set_sync_settings(const AoratonSyncSettings& settings) override;
     const AoratonSnapshot& snapshot() const noexcept override { return snapshot_; }
 
 private:

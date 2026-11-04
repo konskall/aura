@@ -31,6 +31,18 @@ enum class AoratonDelivery {
     Uncertain,
 };
 enum class AoratonRuntimeMode { Mock, IntegrationTest, Live };
+
+struct AoratonSyncSettings {
+    bool polling_enabled{true};
+    std::uint32_t interval_seconds{10};
+    bool operator==(const AoratonSyncSettings& other) const noexcept {
+        return polling_enabled == other.polling_enabled && interval_seconds == other.interval_seconds;
+    }
+    bool operator!=(const AoratonSyncSettings& other) const noexcept { return !(*this == other); }
+};
+bool aoraton_sync_settings_valid(const AoratonSyncSettings& settings) noexcept;
+std::string serialize_aoraton_sync_settings(const AoratonSyncSettings& settings);
+bool parse_aoraton_sync_settings(std::string_view text, AoratonSyncSettings& settings);
 enum class AoratonPairingState {
     NotPaired,
     WaitingForBrowser,
@@ -109,6 +121,7 @@ struct AoratonSnapshot {
     std::size_t max_message_bytes{512};
     AoratonKeyState key_state{AoratonKeyState::Unknown};
     std::uint32_t key_count{0};
+    AoratonSyncSettings sync_settings;
 };
 
 class IAoratonService {
@@ -133,6 +146,7 @@ public:
     // mailbox inside a command that wipes them; neither is kept in a snapshot.
     virtual bool unlock_keys(const std::string&) { return false; }
     virtual bool add_invite_key(const std::string&) { return false; }
+    virtual bool set_sync_settings(const AoratonSyncSettings&) { return false; }
     // Mock/demo copy follows the selected UI language. Real transports keep
     // server-provided room names and message text unchanged.
     virtual void set_interface_language(InterfaceLanguage) {}
@@ -154,6 +168,7 @@ public:
     void tick(std::uint32_t elapsed_ms) override;
     void reset_mock() override;
     void set_interface_language(InterfaceLanguage language) override;
+    bool set_sync_settings(const AoratonSyncSettings& settings) override;
     const AoratonSnapshot& snapshot() const noexcept override { return snapshot_; }
 
 private:

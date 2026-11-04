@@ -473,4 +473,59 @@ LocalDateTime from_minute_index(std::int64_t index) noexcept {
     return result;
 }
 
+std::optional<std::int64_t> parse_iso_timestamp(std::string_view value) noexcept {
+    if (value.size() < 20 || value.size() > 48 || value[4] != '-' || value[7] != '-' ||
+        (value[10] != 'T' && value[10] != ' ') || value[13] != ':' || value[16] != ':') return std::nullopt;
+    const auto number = [&](std::size_t start, std::size_t count) {
+        int result = 0;
+        if (start + count > value.size()) return -1;
+        for (std::size_t i = start; i < start + count; ++i) {
+            if (value[i] < '0' || value[i] > '9') return -1;
+            result = result * 10 + value[i] - '0';
+        }
+        return result;
+    };
+    const int year = number(0, 4), month = number(5, 2), day = number(8, 2);
+    const int hour = number(11, 2), minute = number(14, 2), second = number(17, 2);
+    if (year < 1970 || month < 1 || month > 12 || day < 1 || day > days_in_month(year, month) ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return std::nullopt;
+    std::size_t zone = 19;
+    if (value[zone] == '.') {
+        const auto start = ++zone;
+        while (zone < value.size() && value[zone] >= '0' && value[zone] <= '9') ++zone;
+        if (zone == start || zone - start > 9) return std::nullopt;
+    }
+    if (zone >= value.size()) return std::nullopt;
+    int offset = 0;
+    if ((value[zone] == 'Z' || value[zone] == 'z') && zone + 1 == value.size()) {
+        offset = 0;
+    } else if (value[zone] == '+' || value[zone] == '-') {
+        const int hours = number(zone + 1, 2);
+        int minutes = 0;
+        const auto length = value.size() - zone;
+        if (length == 6 && value[zone + 3] == ':') minutes = number(zone + 4, 2);
+        else if (length == 5) minutes = number(zone + 3, 2);
+        else if (length != 3) return std::nullopt;
+        if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return std::nullopt;
+        offset = (hours * 60 + minutes) * (value[zone] == '-' ? -1 : 1);
+    } else return std::nullopt;
+    return days_from_civil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second - offset * 60;
+}
+
+MessageTimeLabel message_time_label(std::string_view value, const LocalTimeConverter& to_local) {
+    if (value.size() == 5 && value[2] == ':' && value[0] >= '0' && value[0] <= '2' &&
+        value[1] >= '0' && value[1] <= '9' && value[3] >= '0' && value[3] <= '5' &&
+        value[4] >= '0' && value[4] <= '9' && (value[0] != '2' || value[1] <= '3')) return {std::string(value), false};
+    const auto timestamp = parse_iso_timestamp(value);
+    if (!timestamp) return {};
+    const auto local = to_local ? to_local(*timestamp) : std::nullopt;
+    const bool converted = local && local_date_time_valid(*local);
+    const auto minutes = *timestamp >= 0 ? *timestamp / 60 : -((-*timestamp + 59) / 60);
+    const auto civil = converted ? *local : from_minute_index(minutes);
+    std::string clock(5, '0');
+    clock[0] += civil.hour / 10; clock[1] += civil.hour % 10; clock[2] = ':';
+    clock[3] += civil.minute / 10; clock[4] += civil.minute % 10;
+    return {std::move(clock), !converted};
+}
+
 }  // namespace aura

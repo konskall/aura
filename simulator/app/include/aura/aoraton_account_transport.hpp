@@ -5,6 +5,7 @@
 #include "aura/windows_aoraton_crypto.hpp"
 #include "aura/windows_aoraton_vault.hpp"
 #include "aura/winhttp_client.hpp"
+#include "aura/windows_aoraton_realtime.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -70,6 +71,7 @@ private:
     WindowsAoratonCryptoV2 message_crypto_;
     WindowsAoratonStore store_;
     LoopbackSignInChannel channel_;
+    WindowsAoratonRealtime realtime_;
     AoratonAccountWorker worker_;
     std::thread thread_;
     std::atomic<bool> stopping_{false};

@@ -2,8 +2,10 @@
 #include "aura/aoraton_crypto.hpp"
 #include "aura/json_reader.hpp"
 #include "aura/windows_aoraton_crypto.hpp"
+#include "aura/windows_local_time.hpp"
 
 #include <cstdlib>
+#include <cwchar>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -212,6 +214,43 @@ int main() {
                "absurd iteration count refused");
     }
 
+    {
+        const auto utc = parse_iso_timestamp("2026-10-31T07:05:00Z");
+        expect(utc && *utc == 1793430300, "server timestamp is an absolute Unix instant");
+        for (const auto* form : {"2026-10-31T07:05:00.123456+00:00", "2026-10-31T09:05:00+02:00",
+                                 "2026-10-31T09:05:00+0200", "2026-10-31T09:05:00+02",
+                                 "2026-10-31T02:05:00-05:00"}) {
+            expect(parse_iso_timestamp(form) == utc, "fractional seconds and numeric offsets refer to the same instant");
+        }
+        for (const auto* invalid : {"2026-10-31T07:05:00", "2026-02-29T07:05:00Z", "2026-13-01T07:05:00Z",
+                                    "2026-10-31T24:05:00Z", "2026-10-31T07:60:00Z", "2026-10-31T07:05:00+02:99",
+                                    "2026-10-31T07:05:00.Z", "2026-10-31T07:05:00Zjunk"}) {
+            expect(!parse_iso_timestamp(invalid), "malformed/ambiguous timestamps do not invent a time");
+        }
+        DYNAMIC_TIME_ZONE_INFORMATION athens{};
+        bool found = false;
+        for (DWORD index = 0; EnumDynamicTimeZoneInformation(index, &athens) == ERROR_SUCCESS; ++index) {
+            if (std::wcscmp(athens.TimeZoneKeyName, L"GTB Standard Time") == 0) { found = true; break; }
+        }
+        expect(found, "Athens timezone fixture exists in the Windows timezone database");
+        const LocalTimeConverter local = [&](std::int64_t instant) {
+            return aura::simulator::windows_local_time(instant, &athens);
+        };
+        for (const auto& sample : {std::pair<const char*, const char*>{"2026-10-31T07:05:00Z", "09:05"},
+                {"2026-07-31T07:05:00Z", "10:05"}, {"2026-03-29T00:59:00Z", "02:59"},
+                {"2026-03-29T01:00:00Z", "04:00"}, {"2026-10-25T00:59:00Z", "03:59"},
+                {"2026-10-25T01:00:00Z", "03:00"}, {"2026-12-31T23:30:00Z", "01:30"}}) {
+            const auto label = message_time_label(sample.first, local);
+            expect(label.clock == sample.second && !label.utc, "message uses Athens rules at its own date, including DST boundaries");
+        }
+        const auto midnight = local(*parse_iso_timestamp("2026-12-31T23:30:00Z"));
+        expect(midnight && midnight->year == 2027 && midnight->month == 1 && midnight->day == 1,
+               "local conversion crosses the year boundary correctly");
+        expect(message_time_label("18:42", local).clock == "18:42", "DEMO fixture clocks are not converted twice");
+        expect(message_time_label("24:42", local).clock.empty(), "invalid clock fixture is rejected");
+        const auto fallback = message_time_label("2026-10-31T09:05:00+02:00", {});
+        expect(fallback.utc && fallback.clock == "07:05", "unavailable local zone preserves an explicit UTC fallback");
+    }
     std::cout << "aoraton account tests passed\n";
     return 0;
 }

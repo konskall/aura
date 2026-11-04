@@ -175,6 +175,7 @@ struct VisualStrings {
     const char* weather_active_alert_one;
     const char* weather_nearby_alert_one;
     const char* weather_nearby_lightning_one_minute_format;  // %.0f km
+    const char* day_month_format;  // day, month name: Γραφίτης's second date line
 };
 
 const VisualStrings& visual_el_gr() noexcept;

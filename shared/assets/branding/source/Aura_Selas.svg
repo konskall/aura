@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="3408" height="1260" viewBox="64 400 1136 420" role="img" aria-labelledby="title">
+  <title id="title">Aura — Σέλας</title>
+  <defs>
+    <linearGradient id="color" x1="108" y1="560" x2="1158" y2="700" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1ce8ed"/><stop offset=".36" stop-color="#20aef7"/><stop offset=".60" stop-color="#6385ff"/><stop offset=".83" stop-color="#c49aff"/><stop offset="1" stop-color="#9c64ee"/>
+    </linearGradient>
+    <linearGradient id="light" x1="0" y1="0" x2=".8" y2="1">
+      <stop stop-color="#c2ffff" stop-opacity=".68"/><stop offset=".54" stop-color="#99edff" stop-opacity=".08"/><stop offset="1" stop-color="#e5caff" stop-opacity=".42"/>
+    </linearGradient>
+    <linearGradient id="fold" x1=".1" y1="0" x2=".8" y2="1">
+      <stop stop-color="#0087e9"/><stop offset=".48" stop-color="#32dbed"/><stop offset="1" stop-color="#b0efff"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="0" y1="1" x2="1" y2="0">
+      <stop stop-color="#4070ff"/><stop offset=".53" stop-color="#9f7df4"/><stop offset="1" stop-color="#e0b8ff"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#67e5ed"/><stop offset=".6" stop-color="#3baff6"/><stop offset="1" stop-color="#3577f9"/>
+    </linearGradient>
+    <path id="A" fill-rule="evenodd" d="M108 768 274 484C289 453 303 435 330 435 351 435 365 451 379 478L510 719C522 743 541 763 559 774 511 777 468 772 429 750L318 689C286 671 265 661 243 670 216 681 203 705 185 730 168 754 143 764 108 768ZM336 510 393 623C339 602 301 594 246 628Z"/>
+    <path id="u" d="M506 531H532C549 531 564 549 564 568V661C564 698 584 718 620 718 656 718 674 699 674 661V531H700C717 531 732 549 732 568V665C732 735 688 777 620 777 549 777 506 735 506 665Z"/>
+    <path id="r" d="M748 773V633C748 570 781 531 840 531 873 531 906 542 966 527L913 577C895 595 881 602 859 598 822 591 805 611 805 650V728C805 753 786 773 761 773Z"/>
+    <path id="a" fill-rule="evenodd" d="M1013 529C1091 529 1125 581 1131 648L1143 734C1147 752 1152 764 1158 774H1112C1091 774 1081 761 1073 746 1053 766 1028 775 999 775 930 775 882 726 882 655 882 583 936 529 1013 529ZM1012 586C971 586 942 615 942 655 942 694 969 718 1006 718 1044 718 1073 692 1073 651 1073 612 1050 586 1012 586Z"/>
+    <clipPath id="clipA"><use xlink:href="#A"/></clipPath>
+    <clipPath id="clipU"><use xlink:href="#u"/></clipPath>
+    <clipPath id="clipR"><use xlink:href="#r"/></clipPath>
+    <clipPath id="clipa"><use xlink:href="#a"/></clipPath>
+  </defs>
+  <g fill="url(#color)"><use xlink:href="#A"/><use xlink:href="#u"/><use xlink:href="#r"/><use xlink:href="#a"/></g>
+  <g clip-path="url(#clipA)">
+    <path fill="url(#light)" d="M270 482C305 418 353 418 379 478L559 774C507 764 463 726 434 676L336 510C315 469 299 466 270 482Z"/>
+    <path fill="url(#fold)" d="M108 768 274 484C297 461 320 473 336 510L246 628C310 588 359 613 425 664L559 774C500 772 473 759 429 750L318 689C286 671 265 661 243 670 216 681 203 705 185 730 168 754 143 764 108 768Z"/>
+  </g>
+  <g clip-path="url(#clipU)">
+    <path fill="url(#blue)" d="M506 531H564V661C564 698 584 718 620 718 656 718 674 699 674 661 673 711 654 745 615 748 556 750 506 701 506 643Z"/>
+    <path fill="url(#light)" d="M506 643C519 709 574 747 615 748 673 750 716 718 733 663V791H500Z"/>
+  </g>
+  <g clip-path="url(#clipR)">
+    <path fill="url(#violet)" d="M738 646C777 578 838 550 966 527L913 577C895 595 881 602 859 598 822 591 805 611 805 650V728C790 758 770 770 748 773Z"/>
+    <path fill="url(#light)" d="M742 639C793 556 854 554 966 527 904 546 870 551 831 563 790 576 764 601 742 639Z"/>
+  </g>
+  <g clip-path="url(#clipa)">
+    <path fill="url(#violet)" d="M882 655C882 583 936 529 1013 529 1069 529 1101 554 1119 596 1074 554 1010 557 972 580 932 603 921 643 948 693 974 746 1046 749 1073 746 1004 813 882 774 882 655Z"/>
+    <path fill="url(#light)" d="M955 550C1030 522 1080 543 1107 576 1138 615 1131 730 1158 774H1112C1091 774 1081 761 1073 746 1094 706 1093 645 1073 610 1045 565 1000 555 955 550Z"/>
+  </g>
+</svg>

@@ -15,6 +15,8 @@
 #include "aura/organizer.hpp"
 #include "aura/ota_update.hpp"
 #include "aura/phone_link.hpp"
+#include "aura/photo_runtime.hpp"
+#include "aura/file_transfer_runtime.hpp"
 #include "aura/provider.hpp"
 #include "aura/sounds.hpp"
 #include "aura/translation.hpp"
@@ -77,7 +79,7 @@ public:
     void start(std::shared_ptr<BridgeSpeechService> speech);
     void provider_changed();
 
-    TurnRequest turn_request(std::string prompt);
+    TurnRequest turn_request(std::string prompt, bool private_message = false);
     // Returns true when a narrow, deterministic offline command consumed the
     // already-started assistant turn. Side effects remain confirmation-gated.
     bool handle_offline_command(const std::string& prompt);
@@ -106,6 +108,8 @@ public:
 
     ClockServicesModel& clock() noexcept { return clock_; }
     NotesModel& notes() noexcept { return notes_; }
+    PhotoModel& photos() noexcept { return photos_->model(); }
+    FileTransferRuntime& transfer() noexcept { return *transfer_; }
     OrganizerModel& organizer() noexcept { return organizer_; }
     TranslationModel& translation() noexcept { return translation_; }
     PhoneNotificationModel& phone() noexcept { return phone_; }
@@ -134,6 +138,12 @@ public:
     void factory_reset();
 
 private:
+    std::unique_ptr<PhotoRuntime> photos_;
+    std::unique_ptr<FileTransferRuntime> transfer_;
+    std::uint64_t transfer_photo_revision_{0};
+    std::uint64_t transfer_removal_revision_{0};
+    bool transfer_removals_pending_{false};
+    bool transfer_photos_pending_{false};
     enum class VoiceJob { None, Assistant, Note, Translate };
     enum class ListenOrigin { Manual, FollowUp, BargeIn };
 
@@ -148,6 +158,7 @@ private:
     void deliver_transcript(VoiceJob job, TranscriptResult result);
     void translate(std::uint32_t entry, const std::string& text);
     bool speak(const std::string& text, const std::string& language);
+    void stop_speech();
     void pump_speech();
     void reset_speech_pipeline();
     void start_barge_monitor();
@@ -201,6 +212,8 @@ private:
     bool transcript_ignored_{false};
     NoteTranscriptions note_transcriptions_;
     std::optional<std::future<SpeechResult>> speech_job_;
+    bool speech_job_ignored_{false};
+    bool speech_audio_active_{false};
     std::optional<SpeechResult> speech_ready_;
     struct PendingSpeech {
         std::string text;
@@ -214,6 +227,7 @@ private:
     std::vector<std::future<SpeechResult>> retired_speech_;
     std::vector<std::future<AssistantReply>> retired_translations_;
     bool voice_turn_{false};
+    bool private_message_turn_{false};
     std::string streamed_spoken_prefix_;
     bool assistant_speech_active_{false};
     bool assistant_audio_started_{false};

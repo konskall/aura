@@ -1,4 +1,5 @@
 #include "aura/aoraton.hpp"
+#include "aura/text_util.hpp"
 
 #include <algorithm>
 
@@ -14,6 +15,34 @@ std::string bounded(std::string value, std::size_t maximum) {
 }
 
 MockAoratonService::MockAoratonService() { reset_mock(); }
+
+bool aoraton_sync_settings_valid(const AoratonSyncSettings& settings) noexcept {
+    return settings.interval_seconds == 10 || settings.interval_seconds == 30 ||
+           settings.interval_seconds == 60 || settings.interval_seconds == 300;
+}
+std::string serialize_aoraton_sync_settings(const AoratonSyncSettings& settings) {
+    if (!aoraton_sync_settings_valid(settings)) return {};
+    return std::string("{\"version\":1,\"enabled\":") + (settings.polling_enabled ? "true" : "false") +
+           ",\"seconds\":" + std::to_string(settings.interval_seconds) + "}\n";
+}
+bool parse_aoraton_sync_settings(std::string_view text, AoratonSyncSettings& settings) {
+    const auto parsed = parse_flat_json(text, 128);
+    if (!parsed || parsed->size() != 3 || parsed->integer("version") != 1) return false;
+    const auto enabled = parsed->boolean("enabled");
+    const auto seconds = parsed->integer("seconds");
+    if (!enabled || !seconds || *seconds < 0 || *seconds > 300) return false;
+    AoratonSyncSettings candidate{*enabled, static_cast<std::uint32_t>(*seconds)};
+    if (!aoraton_sync_settings_valid(candidate)) return false;
+    settings = candidate;
+    return true;
+}
+bool MockAoratonService::set_sync_settings(const AoratonSyncSettings& settings) {
+    if (!aoraton_sync_settings_valid(settings)) return false;
+    if (settings == snapshot_.sync_settings) return true;
+    snapshot_.sync_settings = settings;
+    touch();
+    return true;
+}
 
 void MockAoratonService::touch() { ++snapshot_.sequence; }
 
@@ -180,7 +209,9 @@ void MockAoratonService::reset_mock() {
     // The sequence must keep increasing across a reset: the UI skips any
     // snapshot whose sequence it has already applied.
     const auto sequence = snapshot_.sequence;
+    const auto sync_settings = snapshot_.sync_settings;
     snapshot_ = {};
+    snapshot_.sync_settings = sync_settings;
     snapshot_.sequence = sequence;
     snapshot_.mock_mode = true;
     snapshot_.rooms = {

@@ -546,14 +546,18 @@
 
     static void speak_answer_event(lv_event_t* event) {
         auto* self = self_of(event);
-        if (!self->accept_action() || !self->callbacks.on_speak || self->snapshot.answer_text.empty()) return;
+        if (!self->accept_action()) return;
+        if (self->stop_read_aloud()) return;
+        if (!self->callbacks.on_speak || self->snapshot.answer_text.empty()) return;
         self->callbacks.on_speak(self->snapshot.answer_text,
                                  interface_language_code(self->interface_language));
     }
 
     static void briefing_speak_event(lv_event_t* event) {
         auto* self = self_of(event);
-        if (!self->accept_action() || !self->callbacks.on_speak) return;
+        if (!self->accept_action()) return;
+        if (self->stop_read_aloud()) return;
+        if (!self->callbacks.on_speak) return;
         self->callbacks.on_speak(self->briefing_speech(),
                                  interface_language_code(self->interface_language));
     }
@@ -691,10 +695,12 @@
 
     // The date line on Home opens "Today".
     void attach_briefing_target() {
-        if (!home_date) return;
-        lv_obj_set_clickable(home_date, true);
-        lv_obj_set_ext_click_area(home_date, 14);
-        lv_obj_add_event_cb(home_date, briefing_event, LV_EVENT_CLICKED, this);
+        for (auto* date : {home_date, home_date_detail}) {
+            if (!date) continue;
+            lv_obj_set_clickable(date, true);
+            lv_obj_set_ext_click_area(date, 14);
+            lv_obj_add_event_cb(date, briefing_event, LV_EVENT_CLICKED, this);
+        }
     }
 
     // Edit modes belong to the screen that started them. Leaving it by any
@@ -931,6 +937,11 @@
                 case LauncherApp::Organizer:
                     cell = app_cell_in(grid, column, row, index, c().app_organizer, ui::IconRole::Calendar,
                                        ui::tokens::indigo, UiView::Calendar);
+                    break;
+                case LauncherApp::Photos:
+                    cell = app_cell_in(grid, column, row, index, p().title, ui::IconRole::Image,
+                                       ui::tokens::mint, UiView::Photos, photos_open_event);
+                    set_target(cell, UiView::Photos);
                     break;
                 case LauncherApp::Count: break;
             }
@@ -1196,7 +1207,9 @@
         auto* wake = list_row(list, y, c().wake_word, capabilities.wake_word ? c().enabled : c().wake_word_unavailable,
                               ui::IconRole::Ear, ui::tokens::lilac);
         if (!capabilities.wake_word) lv_obj_set_style_opa(wake, LV_OPA_60, 0);
-        return y + kRowPitch;
+          y += kRowPitch;
+          settings_row(list, y, f().entry, f().trust, ui::IconRole::Download, ui::tokens::mint, UiView::FileTransfer);
+          return y + kRowPitch;
     }
 
     int render_phone_rows(lv_obj_t* list, int y) {
@@ -1298,8 +1311,21 @@
         return capabilities.speech_output && callbacks.on_speak && !snapshot.answer_text.empty();
     }
 
+    ui::IconRole read_aloud_icon() const {
+        return extras.speaking && callbacks.on_speak_stop ? ui::IconRole::Stop : ui::IconRole::VolumeUp;
+    }
+
+    bool stop_read_aloud() {
+        if (!extras.speaking || !callbacks.on_speak_stop) return false;
+        callbacks.on_speak_stop();
+        // A stop is immediate; the platform publishes its matching snapshot next poll.
+        extras.speaking = false;
+        render(current_view);
+        return true;
+    }
+
     void render_answer_companion() {
-        if (can_speak_answer()) make_header(t().answer_title, ui::IconRole::VolumeUp, speak_answer_event, ui::tokens::mint);
+        if (can_speak_answer()) make_header(t().answer_title, read_aloud_icon(), speak_answer_event, ui::tokens::mint);
         else make_header(t().answer_title);
         line(content, snapshot.user_text.empty() ? t().ask_example : snapshot.user_text.c_str(),
              kGutter + 4, 100, kWidth - 8, ui::font_caption(), ui::tokens::text_tertiary);
@@ -1733,10 +1759,10 @@
                          {OrganizerKind::Task, c().organizer_tasks},
                          {OrganizerKind::Shopping, c().organizer_shopping}};
         for (int index = 0; index < 3; ++index) {
-            // Compact tabs end at y 132, above the list that starts at 140.
+            // Keep the tabs below the header's 64 px controls (y 16..79).
             auto* tab = pill(content, tabs[index].title,
                              organizer_kind == tabs[index].kind ? ui::ButtonTone::Primary : ui::ButtonTone::Secondary,
-                             kGutter + index * 144, 76, 136, organizer_tab_event);
+                             kGutter + index * 144, 92, 136, organizer_tab_event);
             lv_obj_set_height(tab, 56);
             if (auto* tab_label = lv_obj_get_child(tab, 0)) {
                 lv_obj_set_style_text_font(tab_label, ui::font_caption(), 0);
@@ -1744,7 +1770,7 @@
             set_value(tab, static_cast<std::uintptr_t>(tabs[index].kind));
         }
 
-        auto* list = make_list(140, 328);
+        auto* list = make_list(156, ui::tokens::display_height - 156);
         int y = 0;
         if (organizer_kind == OrganizerKind::Event) {
             for (const auto& event : organizer.events) {
@@ -1793,7 +1819,7 @@
             const char* empty = organizer_kind == OrganizerKind::Event ? c().organizer_events_empty :
                                 (organizer_kind == OrganizerKind::Task ? c().organizer_tasks_empty :
                                                                         c().organizer_shopping_empty);
-            line(list, empty, 24, 116, kWidth - 48, ui::font_body(), ui::tokens::text_secondary,
+            label(list, empty, kGutter, 116, kWidth, ui::font_body(), ui::tokens::text_secondary,
                  LV_TEXT_ALIGN_CENTER);
             y = 260;
         }
@@ -2142,7 +2168,7 @@
         }
         const auto briefing = current_briefing();
         if (capabilities.speech_output && callbacks.on_speak) {
-            make_header(greeting(briefing.period), ui::IconRole::VolumeUp, briefing_speak_event, ui::tokens::mint);
+            make_header(greeting(briefing.period), read_aloud_icon(), briefing_speak_event, ui::tokens::mint);
         } else {
             make_header(greeting(briefing.period));
         }
@@ -2314,6 +2340,11 @@
         const int total = notification_total();
         const bool radio_on = radio.state == RadioState::Playing || radio.state == RadioState::Connecting;
         const auto alarm = next_alarm(clock);
+        const bool graphite = appearance == Appearance::Graphite;
+        const auto* text_font = graphite ? ui::font_body() : ui::font_caption();
+        const auto* clock_font = graphite ? ui::font_hero() : ui::font_clock();
+        const int date_offset = graphite ? lv_font_get_line_height(clock_font) + 8 : 92;
+        const int rows_offset = graphite ? date_offset + lv_font_get_line_height(text_font) + 16 : 150;
         // The rows stack from the weather down; the whole block is centred on
         // the screen whichever rows are present.
         const int weather_height = has_weather ? 90 : 0;
@@ -2321,12 +2352,27 @@
         if (total > 0) block_height += 62;
         if (radio_on) block_height += (total > 0 ? 40 : 62);
         if (alarm) block_height += (total > 0 || radio_on) ? 40 : 62;
+        if (graphite) {
+            const int rows = (total > 0 ? 1 : 0) + (radio_on ? 1 : 0) + (alarm ? 1 : 0);
+            block_height = weather_height + date_offset + lv_font_get_line_height(text_font) +
+                           (rows > 0 ? 16 + rows * 40 : 0);
+        }
         const int top = ui::tokens::display_height / 2 - block_height / 2;
-        // A faint halo in the colour of the sky behind the clock: four thin
-        // steps read as one soft glow, and only its core rises above black. It
-        // stays within the clock block (260 px), so most of the AMOLED is dark.
-        if (lit) {
-            for (int size = 260; size >= 140; size -= 40) {
+        // Four faint concentric layers frame the whole ambient information
+        // block. Scale with its height while keeping a black margin and the
+        // same low opacity, including when the larger hero clock is used.
+        if (lit && photos.ambient) {
+            photo_image(content, *photos.ambient, ambient_descriptor, dx, dy, 480, 480);
+            auto* shade = lv_obj_create(content); ui::reset(shade);
+            lv_obj_set_size(shade, 480, 480);
+            lv_obj_set_style_bg_color(shade, lv_color_black(), 0);
+            lv_obj_set_style_bg_opa(shade, LV_OPA_80, 0);
+            if (photos.demo) line(content, t().demo, 24, 444, 432, ui::font_caption(), ui::tokens::amber, LV_TEXT_ALIGN_CENTER);
+        }
+        if (lit && !photos.ambient) {
+            const int halo_diameter = std::clamp(block_height + 72, 360, 416);
+            for (const int percent : {100, 85, 70, 55}) {
+                const int size = halo_diameter * percent / 100;
                 auto* halo = make_dot(content, size, tint, 10);
                 lv_obj_set_pos(halo, ui::tokens::display_width / 2 + dx - size / 2,
                                ui::tokens::display_height / 2 + dy - size / 2);
@@ -2351,7 +2397,7 @@
             char temperature[16];
             std::snprintf(temperature, sizeof(temperature), "%d°", whole_degrees(sky.temperature_c));
             ui::make_label(row, temperature, kDim, ui::font_title());
-            auto* city = ui::make_label(row, sky.location.name.c_str(), kFaint, ui::font_caption());
+            auto* city = ui::make_label(row, sky.location.name.c_str(), kFaint, text_font);
             lv_label_set_long_mode(city, LV_LABEL_LONG_DOT);
             lv_obj_set_style_max_width(city, 200, 0);
             char range[48];
@@ -2363,22 +2409,23 @@
             } else if (sky.origin == WeatherDataOrigin::Cache || sky.stale) {
                 detail += std::string(" · ") + v().weather_cached;
             }
-            line(content, detail.c_str(), kGutter + dx, top + 44 + dy, kWidth, ui::font_caption(), kFaint,
+            line(content, detail.c_str(), kGutter + dx, top + 44 + dy, kWidth, text_font, kFaint,
                  LV_TEXT_ALIGN_CENTER);
         }
         const int clock_y = top + weather_height;
         if (status.clock_valid) {
             char time[12];
             std::snprintf(time, sizeof(time), "%02d:%02d", status.hour, status.minute);
-            label(content, time, dx, clock_y + dy, ui::tokens::display_width, ui::font_clock(), kDim,
+            label(content, time, graphite ? kGutter + dx : dx, clock_y + dy,
+                  graphite ? kWidth : ui::tokens::display_width, clock_font, kDim,
                   LV_TEXT_ALIGN_CENTER);
         }
         const auto date = date_text();
         if (!date.empty()) {
-            line(content, date.c_str(), kGutter + dx, clock_y + 92 + dy, kWidth, ui::font_caption(), kDim,
+            line(content, date.c_str(), kGutter + dx, clock_y + date_offset + dy, kWidth, text_font, kDim,
                  LV_TEXT_ALIGN_CENTER);
         }
-        int y = clock_y + 150;
+        int y = clock_y + rows_offset;
         if (total > 0) {
             auto* row = centered_row(y, 10);
             make_dot(row, 10, ui::tokens::pink, LV_OPA_80);
@@ -2387,7 +2434,7 @@
             std::string text = total == 1 ? c().aod_new_one : count;
             const auto source = notification_source();
             if (!source.empty()) text += " · " + source;
-            auto* note = ui::make_label(row, text.c_str(), kDim, ui::font_caption());
+            auto* note = ui::make_label(row, text.c_str(), kDim, text_font);
             lv_label_set_long_mode(note, LV_LABEL_LONG_DOT);
             lv_obj_set_style_max_width(note, 340, 0);
             y += 40;
@@ -2397,7 +2444,7 @@
             icon_view(row, ui::IconRole::Audio, 24, ui::tokens::magenta);
             char now_playing[128];
             std::snprintf(now_playing, sizeof(now_playing), c().radio_aod_format, radio.station.name.c_str());
-            auto* station = ui::make_label(row, now_playing, kDim, ui::font_caption());
+            auto* station = ui::make_label(row, now_playing, kDim, text_font);
             lv_label_set_long_mode(station, LV_LABEL_LONG_DOT);
             lv_obj_set_style_max_width(station, 330, 0);
             y += 40;
@@ -2407,7 +2454,7 @@
             icon_view(row, ui::IconRole::Reminder, 24, kFaint);
             char time[8];
             std::snprintf(time, sizeof(time), "%02d:%02d", alarm->hour, alarm->minute);
-            ui::make_label(row, time, kFaint, ui::font_caption());
+            ui::make_label(row, time, kFaint, text_font);
         }
     }
 
@@ -2644,6 +2691,11 @@
             case UiView::Translate: render_translate(); break;
             case UiView::ConversationHistory: render_conversation_history(); break;
             case UiView::AlwaysOn: render_always_on(); break;
+            case UiView::Photos: render_photos(); break;
+            case UiView::PhotoViewer: render_photo_viewer(); break;
+            case UiView::PhotoSettings: render_photo_settings(); break;
+            case UiView::PhotoDelete: render_photo_delete(); break;
+            case UiView::FileTransfer: render_transfer(); break;
             case UiView::PhoneCall: render_phone_call(); break;
             case UiView::PhoneNotification: render_phone_notification(); break;
             case UiView::PhoneLink: render_phone_link(); break;

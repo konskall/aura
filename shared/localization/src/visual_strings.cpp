@@ -62,7 +62,8 @@ const VisualStrings& visual_el_gr() noexcept {
         {"Ρολόι · Light 96", "Αριθμοί · Light 72", "Τίτλος · SemiBold 32",
          "Επικεφαλίδα · Medium 28", "Κείμενο · Regular 26", "Λεζάντα · Regular 22"},
         "Αποστολή", "Σύνδεση…",
-        "1 ενεργή προειδοποίηση", "1 κοντινή προειδοποίηση", "Καταιγίδα στα %.0f km · 1 λεπτό"
+        "1 ενεργή προειδοποίηση", "1 κοντινή προειδοποίηση", "Καταιγίδα στα %.0f km · 1 λεπτό",
+        "%d %s"
     };
     return strings;
 }
@@ -117,7 +118,8 @@ const VisualStrings& visual_en_us() noexcept {
         {"Clock · Light 96", "Numbers · Light 72", "Title · SemiBold 32",
          "Headline · Medium 28", "Body · Regular 26", "Caption · Regular 22"},
         "Send", "Connecting…",
-        "1 active warning", "1 nearby warning", "Storm %.0f km away · 1 min"
+        "1 active warning", "1 nearby warning", "Storm %.0f km away · 1 min",
+        "%d %s"
     };
     return strings;
 }

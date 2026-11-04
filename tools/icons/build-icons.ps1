@@ -22,6 +22,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Icon generation failed: $LASTEXITCODE" }
     node (Join-Path $PSScriptRoot 'generate-appearance-icons.mjs')
     if ($LASTEXITCODE -ne 0) { throw "Appearance icon generation failed: $LASTEXITCODE" }
+    node (Join-Path $PSScriptRoot 'generate-brand-assets.mjs')
+    if ($LASTEXITCODE -ne 0) { throw "Brand asset generation failed: $LASTEXITCODE" }
 } finally {
     Pop-Location
 }

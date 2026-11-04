@@ -130,7 +130,7 @@ AoratonAccountTransport::AoratonAccountTransport(AoratonMailbox& mailbox, Aorato
                          return http_.fetch_following_redirects(url) == 200;
                      })
                    : LoopbackSignInChannel::BrowserOpener{}),
-      worker_(mailbox, options_.config, http_, account_crypto_, message_crypto_, store_, channel_) {}
+      worker_(mailbox, options_.config, http_, account_crypto_, message_crypto_, store_, channel_, &realtime_) {}
 
 AoratonAccountTransport::~AoratonAccountTransport() { stop(); }
 
@@ -142,7 +142,9 @@ void AoratonAccountTransport::start() {
 
 void AoratonAccountTransport::stop() {
     stopping_ = true;
+    realtime_.stop();
     if (thread_.joinable()) thread_.join();
+    realtime_.stop();
 }
 
 void AoratonAccountTransport::run() {

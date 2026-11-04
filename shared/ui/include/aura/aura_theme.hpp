@@ -56,11 +56,16 @@ constexpr int BUTTON_HEIGHT = 80;
 constexpr int CHIP_HEIGHT = 64;
 constexpr int HEADER_BUTTON = 64;
 constexpr Rect CONTENT_SAFE_RECT{GUTTER, HEADER_HEIGHT, CONTENT_WIDTH, display_height - HEADER_HEIGHT};
-// The orb and its halo ring sit at the same place on Home and in every
-// assistant state, so starting to talk never moves the presence.
-constexpr Rect HERO_RECT{140, 160, 200, 200};
-constexpr Rect MERCURY_RECT{152, 172, 176, 176};
-constexpr int HALO_RADIUS = 96;
+// The presence sits at the same place on Home and in every assistant state,
+// so starting to talk never moves it.
+constexpr Rect HERO_RECT{114, 120, 252, 252};
+constexpr Rect SYNAPSE_RECT{114, 120, 252, 252};
+// Marble and Aurora retain their original compact Home target and spacing;
+// enlarging Halo's Synapse must not reshape the other appearances.
+constexpr int COMPACT_PRESENCE_TARGET = 176;
+// Halo's transparent talk target stays below the tappable date line even
+// though the non-interactive Synapse atmosphere extends through HERO_RECT.
+constexpr Rect HALO_TALK_RECT{128, 148, 224, 224};
 constexpr Rect BOTTOM_ACTION_SAFE_RECT{GUTTER, 376, CONTENT_WIDTH, 88};
 
 constexpr int radius_small = 14;

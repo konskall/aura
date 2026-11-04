@@ -28,7 +28,8 @@ $flags = @(
 )
 $includes = @(
     'shared\core\include', 'shared\localization\include', 'shared\ui\include',
-    'shared\assets\fonts', 'shared\assets\icons', 'simulator\config'
+    'shared\assets\fonts', 'shared\assets\icons', 'simulator\config',
+    'shared\assets\branding'
 ) | ForEach-Object { '-I' + (Join-Path $repo $_) }
 $includes += '-I' + $lvgl
 

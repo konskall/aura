@@ -1,6 +1,6 @@
 # AURA v12 "Halo" UI redesign
 
-Status: **IMPLEMENTED IN THE SIMULATOR** (`scripts/test.ps1` green, see `docs/VERIFICATION.md`) · firmware compile not run · physical display untested.
+Status: **IMPLEMENTED IN THE SIMULATOR** (native tests and evidence green, see `docs/VERIFICATION.md`) · firmware compile not run · physical display untested.
 Plan: `docs/superpowers/plans/2026-10-22-aura-v12-halo-redesign.md`.
 The owner asked for a radical, modern and professional UI for an always-with-me AI companion and delegated the
 design decisions (no interview). Everything below is the designer's call unless a constraint from `AGENTS.md`
@@ -21,8 +21,9 @@ generic and expensive to render on an ESP32-S3.
    under 64 px. Lists show three to four rows, not seven.
 3. **Black is the canvas.** True black (`#000000`) AMOLED. Content sits on borderless graphite platters. No drop
    shadows and no blur (also the cheapest path for LVGL on the ESP32-S3).
-4. **One living element.** The Mercury orb and its halo ring are AURA's presence and the only decoration. The
-   state colours are reserved for it: cyan listening, violet thinking, magenta speaking.
+4. **One living element.** Synapse is AURA's presence: a centred reactor inside symmetric kinetic light paths,
+   resonance marks and wavefronts. State colours remain reserved for it: cyan listening, violet thinking,
+   magenta speaking.
 5. **Status by exception.** Time is always visible. Wi-Fi/battery appear in full on Home; elsewhere only when
    they need attention (offline, low battery, charging).
 
@@ -38,7 +39,7 @@ generic and expensive to render on an ESP32-S3.
 | `text` | `#F5F8FC` | primary text |
 | `text_secondary` | `#A9B5C7` | secondary text |
 | `text_tertiary` | `#748197` | captions, hints |
-| `ice` / `blue` / `indigo` / `lilac` / `magenta` | unchanged | orb states and interaction |
+| `ice` / `blue` / `indigo` / `lilac` / `magenta` | unchanged | presence states and interaction |
 | `mint` / `amber` / `coral` / `pink` | unchanged | success / warning / danger / alerts |
 
 Radii: platter 28, chip/pill = height/2, keys 14. Spacing: 8 px grid, 24 px side gutter (content width 432).
@@ -75,20 +76,37 @@ Subset fonts fall back to the title font. The 14/17/18/20/24/40/64 px objects an
 
 ## Halo (assistant presence)
 
-The 176 px Mercury orb is drawn at the same place on Home and in every assistant state (centre 240,260), so a
-tap on the orb turns it into the listening state without a jump. A 3–10 px ring of radius 96 surrounds it:
-dim lilac when idle, cyan following microphone level when listening, a rotating violet segment while thinking,
-magenta following the audio envelope while speaking. The ring stays below luminance 145 inside the orb's image
-bounds (the Mercury evidence rule) and is updated together with Mercury frames (15 FPS), not at 30 FPS.
+Synapse uses one bounded 252 × 252 RGB565+A8 frame at the same place on Home and in every assistant state
+(centre 240,246), so a tap changes to listening without a jump. Its luminous reactor is locked to the exact
+frame centre. Eight main paths are four point-reflected pairs with 168 samples per path, surrounded by five
+segmented orbital traces, 84 resonance ticks, three expanding wavefronts, a dense translucent chord web and
+18 moving particles (30 while Thinking). The reactor now follows the approved browser presentation's radial
+structure: a 112 px violet outer field, a 58 px cyan inner field, a dark 58–75 px aperture lens, a broad
+white-to-cyan nucleus and a smooth cyan/violet corona. The nucleus, aperture, rings and all path geometry use
+the same integer frame centre, so neither the apparent glow nor the bright core drifts off-axis. All elements
+are drawn by the shared renderer; the previous separate LVGL halo arc remains removed. Composition uses three
+depth layers: the complete rear lattice, the reactor lens/nucleus, and a final pass containing only z-positive
+strands plus two restrained front half-chords derived from the moving reflected path pairs. Those foreground
+fibres cross the cyan sphere at every phase, so the reactor reads as enclosed by the network instead of pasted
+over it.
+
+Idle drifts slowly, Listening expands and brightens from the real microphone level, Thinking accelerates its
+violet wavefronts, and Speaking reacts to the real playback envelope in magenta. State changes ease over 200 ms,
+Reduced Motion freezes the animation, and the renderer targets one update every 50 ms (20 FPS; measured at
+21.22 FPS in the Windows evidence run). On slower hardware the wait after each frame grows to three times that
+frame's drawing time, so the presence never takes more than a third of the UI thread, down to 5 FPS at most
+(`AuraMercuryView::paced_interval`). The source keeps a soft transparent border and ends at y=371,
+immediately above controls that begin at y=372. Its non-interactive atmosphere may overlap the date visually;
+the separate 224 × 224 talk target begins at y=148 so it does not steal taps from the date line.
 
 ## Screens
 
-- **Home**: Wi-Fi glyph (left) and battery (right) at the top; 96 px clock and a 24 px date; the orb (tap =
+- **Home**: Wi-Fi glyph (left) and battery (right) at the top; 96 px clock and a 24 px date; Synapse (tap =
   talk) with a one-line hint; two 64 px chips: weather glance (icon + temperature + city, or "Καιρός") and
   "Εφαρμογές" (dot when there are notifications). Swipe left/up → apps, swipe down → notifications.
 - **Apps**: 3 × 2 grid of 104 px tinted circles with 24 px labels: Συνομιλία, Καιρός, Μηνύματα, Ήχος,
   Ειδοποιήσεις, Ρυθμίσεις. The whole cell (circle + label) is one target.
-- **Listening / Thinking / Speaking**: 32 px state title and a caption at the top; orb + halo; controls at the
+- **Listening / Thinking / Speaking**: 32 px state title and a caption at the top; Synapse; controls at the
   bottom (two 80 px pills; one pill; three 88 px round buttons).
 - **Answer**: header; the question as a 22 px secondary quote; the answer at 26 px in a scroller; a primary
   "Ρώτα ξανά" pill.
@@ -104,4 +122,5 @@ bounds (the Mercury evidence rule) and is updated together with Mercury frames (
 ## Non-goals
 
 No new product features beyond navigation gestures and the Home glance; no change to state machines, services,
-privacy rules, demo labelling, or the bridge. Firmware is not compiled in this pass (owner request).
+privacy rules, demo labelling, or the bridge. Firmware is not compiled in this pass because ESP-IDF 5.5.5 was
+not active in the verification shell.

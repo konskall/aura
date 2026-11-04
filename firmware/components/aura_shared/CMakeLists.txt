@@ -3,6 +3,11 @@ set(AURA_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../..")
 idf_component_register(
     SRCS
         "${AURA_ROOT}/shared/core/src/app_layout.cpp"
+        "${AURA_ROOT}/shared/core/src/photos.cpp"
+        "${AURA_ROOT}/shared/core/src/file_transfer.cpp"
+        "${AURA_ROOT}/shared/third_party/qrcodegen/qrcodegen.c"
+        "${AURA_ROOT}/shared/core/src/photo_decoder.cpp"
+        "${AURA_ROOT}/shared/third_party/tjpgd/tjpgd.c"
         "${AURA_ROOT}/shared/core/src/appearance.cpp"
         "${AURA_ROOT}/shared/core/src/aoraton.cpp"
         "${AURA_ROOT}/shared/core/src/assistant_companion.cpp"
@@ -27,6 +32,7 @@ idf_component_register(
         "${AURA_ROOT}/shared/core/src/json_reader.cpp"
         "${AURA_ROOT}/shared/core/src/aoraton_account.cpp"
         "${AURA_ROOT}/shared/core/src/aoraton_account_worker.cpp"
+        "${AURA_ROOT}/shared/core/src/aoraton_realtime.cpp"
         "${AURA_ROOT}/shared/core/src/aoraton_inco.cpp"
         "${AURA_ROOT}/shared/core/src/audio_service.cpp"
         "${AURA_ROOT}/shared/core/src/assistant_state.cpp"
@@ -37,6 +43,9 @@ idf_component_register(
         "${AURA_ROOT}/shared/core/src/weather.cpp"
         "${AURA_ROOT}/shared/core/src/wifi.cpp"
         "${AURA_ROOT}/shared/localization/src/companion_strings.cpp"
+        "${AURA_ROOT}/shared/localization/src/photo_strings.cpp"
+        "${AURA_ROOT}/shared/localization/src/transfer_strings.cpp"
+        "${AURA_ROOT}/shared/localization/src/transfer_page.cpp"
         "${AURA_ROOT}/shared/localization/src/strings.cpp"
         "${AURA_ROOT}/shared/localization/src/visual_strings.cpp"
         "${AURA_ROOT}/shared/ui/src/aura_ui.cpp"
@@ -53,6 +62,7 @@ idf_component_register(
         "${AURA_ROOT}/shared/assets/icons/aura_icon_assets_material.cpp"
         "${AURA_ROOT}/shared/assets/icons/aura_icon_assets_phosphor.cpp"
         "${AURA_ROOT}/shared/assets/icons/aura_icon_assets_solar.cpp"
+        "${AURA_ROOT}/shared/assets/branding/aura_brand_assets.cpp"
         "${AURA_ROOT}/shared/assets/fonts/aura_font_plex_regular_22.c"
         "${AURA_ROOT}/shared/assets/fonts/aura_font_plex_regular_26.c"
         "${AURA_ROOT}/shared/assets/fonts/aura_font_plex_medium_28.c"
@@ -90,6 +100,7 @@ idf_component_register(
         "${AURA_ROOT}/shared/ui/include"
         "${AURA_ROOT}/shared/assets/fonts"
         "${AURA_ROOT}/shared/assets/icons"
+        "${AURA_ROOT}/shared/assets/branding"
     REQUIRES lvgl
 )
 

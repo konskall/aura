@@ -1,10 +1,16 @@
 #include "aura/aura_ui.hpp"
+#include "aura/photo_strings.hpp"
+#include "aura/transfer_strings.hpp"
+#include "../../third_party/qrcodegen/qrcodegen.h"
+#include "src/misc/cache/instance/lv_image_cache.h"
+#include "src/misc/cache/instance/lv_image_header_cache.h"
 
 #include "aura/aura_theme.hpp"
 #include "aura/briefing.hpp"
 #include "aura/companion_strings.hpp"
 #include "aura/text_util.hpp"
 #include "aura/aura_icons.hpp"
+#include "aura_brand_assets.hpp"
 #include "aura/aura_keyboard.hpp"
 #include "aura/aura_appearance.hpp"
 #include "aura/aura_mercury_view.hpp"
@@ -120,9 +126,8 @@ struct AuraUi::Impl {
     bool header_action{false};
     lv_obj_t* home_clock{};
     lv_obj_t* home_date{};
+    lv_obj_t* home_date_detail{};  // Γραφίτης: the day and month under the weekday
     lv_obj_t* hero_image{};
-    lv_obj_t* halo{};
-    ui::MercuryState halo_state{ui::MercuryState::Idle};
     lv_obj_t* state_label{};
     lv_obj_t* answer_label{};
     lv_obj_t* audio_state_label{};
@@ -176,6 +181,10 @@ struct AuraUi::Impl {
     // gets a draft.
     std::string weather_query_draft;
     std::string compose_draft;
+    AoratonMessage selected_message;
+    std::string thread_room;
+    int32_t thread_scroll{0};
+    bool thread_follow_tail{true};
     // The city picker shows presets first; the keyboard opens on request.
     bool weather_typing{false};
     NavigationStack<UiView> navigation{UiView::Home};
@@ -607,6 +616,30 @@ struct AuraUi::Impl {
         if (!self->aoraton.rooms.empty()) self->navigate(UiView::AoratonCompose);
     }
 
+    static void aoraton_message_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action()) return;
+        const auto index = reinterpret_cast<std::uintptr_t>(lv_obj_get_user_data(lv_event_get_current_target_obj(event)));
+        if (index >= self->aoraton.messages.size()) return;
+        self->selected_message = self->aoraton.messages[index];
+        self->navigate(UiView::AoratonMessage);
+    }
+
+    static void aoraton_assist_preview_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (self->accept_action() && self->callbacks.on_aoraton_assist) self->navigate(UiView::AoratonAssist);
+    }
+
+    static void aoraton_assist_confirm_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action() || !self->callbacks.on_aoraton_assist || self->selected_message.local_display_text.empty()) return;
+        const std::string text = self->selected_message.local_display_text;
+        // Replace the consent screen: Back from the answer returns to the message.
+        self->navigation.replace(UiView::Assistant);
+        self->render(UiView::Assistant);
+        self->callbacks.on_aoraton_assist(text);
+    }
+
     static void prepare_message_event(lv_event_t* event) {
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
         if (!self->accept_action()) return;
@@ -662,6 +695,7 @@ struct AuraUi::Impl {
             self->aoraton.awaiting_confirmation = false;
             self->aoraton.pending_text.clear();
             self->compose_draft.clear();
+            self->thread_follow_tail = true;
             self->navigation.replace(UiView::AoratonConversation);
             self->render(UiView::AoratonConversation);
         }
@@ -839,6 +873,11 @@ struct AuraUi::Impl {
     static void gesture_event(lv_event_t* event) {
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
         const lv_dir_t direction = lv_indev_get_gesture_dir(lv_indev_active());
+        if (self->current_view == UiView::PhotoViewer && (direction == LV_DIR_LEFT || direction == LV_DIR_RIGHT)) {
+            lv_indev_wait_release(lv_indev_active());
+            if (self->callbacks.on_photo_advance) self->callbacks.on_photo_advance(direction == LV_DIR_LEFT ? 1 : -1);
+            return;
+        }
         if (self->current_view == UiView::Home) {
             // Home: up or left opens the apps, down shows notifications.
             if (direction == LV_DIR_LEFT || direction == LV_DIR_TOP) {
@@ -857,6 +896,10 @@ struct AuraUi::Impl {
         // of its own (strips, sliders, keyboards).
         switch (self->current_view) {
             case UiView::Launcher:
+            case UiView::Photos:
+            case UiView::PhotoSettings:
+            case UiView::PhotoDelete:
+            case UiView::FileTransfer:
             case UiView::Radio:
             case UiView::RadioSearch:
             case UiView::ConversationHistory:
@@ -868,6 +911,9 @@ struct AuraUi::Impl {
             case UiView::AoratonRooms:
             case UiView::AoratonPair:
             case UiView::AoratonConversation:
+            case UiView::AoratonMessage:
+            case UiView::AoratonAssist:
+            case UiView::AoratonSyncSettings:
             case UiView::Wifi:
             case UiView::WifiDetails:
             case UiView::WeatherSettings:
@@ -886,6 +932,7 @@ struct AuraUi::Impl {
             case UiView::AppearanceSettings:
             case UiView::Update:
             case UiView::System:
+            case UiView::Credits:
             case UiView::SystemConfirm:
                 lv_indev_wait_release(lv_indev_active());
                 self->render_back(self->navigation.back());
@@ -1288,6 +1335,68 @@ struct AuraUi::Impl {
         return well;
     }
 
+    // Brand artwork keeps its original colors in every appearance.
+    lv_obj_t* brand_image(lv_obj_t* parent, const lv_image_dsc_t* source, int size) {
+        auto* image = lv_image_create(parent);
+        lv_image_set_src(image, source);
+        lv_image_set_scale(image, static_cast<std::uint32_t>(size * LV_SCALE_NONE / source->header.w));
+        const int height = static_cast<int>((static_cast<std::uint32_t>(source->header.h) * size +
+                                             source->header.w / 2U) / source->header.w);
+        lv_obj_set_size(image, size, height);
+        lv_obj_set_style_image_recolor_opa(image, LV_OPA_TRANSP, 0);
+        lv_obj_set_clickable(image, false);
+        lv_obj_set_scrollable(image, false);
+        return image;
+    }
+
+    // One shared, non-recoloured Aura wordmark for every appearance. Both
+    // variants are generated at their exact display size from the approved SVG.
+    lv_obj_t* aura_wordmark(lv_obj_t* parent, int x, int y, bool hero = false) {
+        const auto* source = hero ? &aura_brand_aura_hero : &aura_brand_aura_compact;
+        auto* image = brand_image(parent, source, source->header.w);
+        lv_obj_set_pos(image, x, y);
+        return image;
+    }
+
+    void aoraton_header(ui::IconRole action = ui::IconRole::Count, lv_event_cb_t callback = nullptr,
+                         bool enabled = true) {
+        make_header(t().aoraton, action, callback, ui::tokens::blue, enabled);
+        auto* logo = brand_image(content, &aura_brand_aoraton, 32);
+        lv_obj_set_pos(logo, 96, 32);
+        lv_obj_set_x(header_title, 140);
+        lv_obj_set_width(header_title, 244);
+    }
+
+    void aoraton_brand(int y, int size) {
+        auto* image = brand_image(content, &aura_brand_aoraton, size);
+        lv_obj_set_pos(image, (ui::tokens::display_width - size) / 2, y);
+    }
+
+    void google_sign_in_button() {
+        auto* button = pill(content, c().aoraton_sign_in, ui::ButtonTone::Primary,
+                            kGutter, kActionY, kWidth, pairing_start_event);
+        // The shape and type follow the appearance; Google's mark is always
+        // full-color on neutral white, including the gradient-primary looks.
+        lv_obj_set_style_bg_color(button, ui::color(0xFFFFFF), 0);
+        lv_obj_set_style_bg_grad_dir(button, LV_GRAD_DIR_NONE, 0);
+        lv_obj_set_style_bg_color(button, ui::color(0xF2F2F2), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(button, 1, 0);
+        lv_obj_set_style_border_color(button, ui::color(0x747775), 0);
+        lv_obj_set_style_pad_hor(button, 24, 0);
+        lv_obj_set_style_pad_ver(button, 0, 0);
+        lv_obj_set_style_pad_column(button, 12, 0);
+        lv_obj_set_flex_flow(button, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(button, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        auto* title = lv_obj_get_child(button, 0);
+        lv_obj_set_align(title, LV_ALIGN_TOP_LEFT);
+        lv_obj_set_style_text_color(title, ui::color(0x1F1F1F), 0);
+        lv_obj_set_style_max_width(title, kWidth - 48 - 32 - 12, 0);
+        lv_obj_set_width(title, LV_SIZE_CONTENT);
+        auto* mark = brand_image(button, &aura_brand_google, 32);
+        lv_obj_move_to_index(mark, 0);
+        ui::set_button_disabled(button, !callbacks.on_aoraton_pair_start);
+    }
+
     // Title + explanation, centred, stacked by their real heights.
     lv_obj_t* state_text(int y, const char* title, const char* detail, const char* note = nullptr) {
         auto* column = lv_obj_create(content);
@@ -1427,71 +1536,22 @@ struct AuraUi::Impl {
         if (status_bar) lv_obj_move_foreground(status_bar);
     }
 
-    // ---- Presence: halo ring + Mercury orb --------------------------------
+    // ---- Presence -----------------------------------------------------------
 
-    // The ring stays below luminance 145 inside the orb's image bounds (the
-    // Mercury evidence rule) and is updated with Mercury frames (15 FPS).
+    // The selected appearance owns the complete presence. Halo's Synapse
+    // includes its reactor, paths and resonance inside one bounded frame.
     // The presence's centre: the same on Home and in every assistant state, so
     // starting to talk never moves it (each look sets its own).
     int hero_y() const { return ui::active_metrics().hero_center_y; }
 
     void create_presence(ui::MercuryState state, std::uint32_t accent) {
-        halo_state = state;
-        if (appearance == Appearance::Halo) create_halo_ring(state, accent);
+        (void)accent;
         presence->set_state(state);
         presence->set_level(state == ui::MercuryState::Listening ? input_amplitude : audio.envelope);
         // A capture is a still picture: the presence shows its state, not a blend.
         presence->set_reduced_motion(reduced_motion || capture_mode);
-        hero_image = presence->attach(content, ui::tokens::MERCURY_RECT.x + ui::tokens::MERCURY_RECT.width / 2,
+        hero_image = presence->attach(content, ui::tokens::SYNAPSE_RECT.x + ui::tokens::SYNAPSE_RECT.width / 2,
                                      hero_y());
-    }
-
-    // Άλως's ring around Mercury; the other looks' presences draw their own.
-    void create_halo_ring(ui::MercuryState state, std::uint32_t accent) {
-        const int size = ui::tokens::HALO_RADIUS * 2 + 8;
-        halo = lv_arc_create(content);
-        lv_obj_set_size(halo, size, size);
-        lv_obj_set_pos(halo, kHaloCenterX - size / 2, hero_y() - size / 2);
-        lv_obj_set_style_pad_all(halo, 0, 0);
-        lv_obj_set_style_bg_opa(halo, LV_OPA_TRANSP, 0);
-        lv_arc_set_bg_angles(halo, 0, 360);
-        lv_arc_set_angles(halo, 0, state == ui::MercuryState::Thinking ? 100 : 360);
-        lv_arc_set_rotation(halo, 270);
-        lv_obj_set_style_arc_color(halo, ui::color(ui::tokens::separator), LV_PART_MAIN);
-        lv_obj_set_style_arc_opa(halo, LV_OPA_60, LV_PART_MAIN);
-        lv_obj_set_style_arc_width(halo, 2, LV_PART_MAIN);
-        lv_obj_set_style_arc_color(halo, ui::color(accent), LV_PART_INDICATOR);
-        lv_obj_set_style_arc_width(halo, state == ui::MercuryState::Thinking ? 6 : 3, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_opa(halo, state == ui::MercuryState::Idle ? 120 : 190, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_rounded(halo, true, LV_PART_INDICATOR);
-        lv_obj_set_style_opa(halo, LV_OPA_TRANSP, LV_PART_KNOB);
-        lv_obj_set_clickable(halo, false);
-    }
-
-    void update_halo(const MotionFrame& frame) {
-        if (!halo) return;
-        int width = 3;
-        int opacity = 150;
-        switch (halo_state) {
-            case ui::MercuryState::Idle:
-                opacity = 90 + static_cast<int>(frame.pulse * 70.0F);
-                break;
-            case ui::MercuryState::Listening:
-                width = 3 + static_cast<int>(input_amplitude * 7.0F);
-                opacity = 150 + static_cast<int>(input_amplitude * 50.0F);
-                break;
-            case ui::MercuryState::Thinking:
-                width = 6;
-                opacity = 220;
-                lv_arc_set_rotation(halo, static_cast<int32_t>((270U + phase_ms / 3U) % 360U));
-                break;
-            case ui::MercuryState::Speaking:
-                width = 3 + static_cast<int>(audio.envelope * 7.0F);
-                opacity = 160 + static_cast<int>(audio.envelope * 60.0F);
-                break;
-        }
-        lv_obj_set_style_arc_width(halo, width, LV_PART_INDICATOR);
-        lv_obj_set_style_arc_opa(halo, static_cast<lv_opa_t>(std::clamp(opacity, 0, 220)), LV_PART_INDICATOR);
     }
 
     // State title and caption above the presence.
@@ -1511,8 +1571,17 @@ struct AuraUi::Impl {
             set_text_if_changed(home_clock, clock);
         }
         if (!home_date) return;
-        if (status.date_valid && status.month >= 1 && status.month <= 12 &&
-            status.weekday >= 0 && status.weekday <= 6) {
+        const bool date_valid = status.date_valid && status.month >= 1 && status.month <= 12 &&
+                                status.weekday >= 0 && status.weekday <= 6;
+        if (home_date_detail) {
+            // Γραφίτης: the weekday, and under it the day and month (or the hint).
+            set_text_if_changed(home_date, date_valid ? v().weekday_names[status.weekday] : "");
+            char date[48] = {};
+            if (date_valid) {
+                std::snprintf(date, sizeof(date), v().day_month_format, status.day, v().month_names[status.month - 1]);
+            }
+            set_text_if_changed(home_date_detail, date_valid ? date : t().presence_idle_hint);
+        } else if (date_valid) {
             char date[80];
             std::snprintf(date, sizeof(date), v().date_format, v().weekday_names[status.weekday], status.day,
                           v().month_names[status.month - 1]);
@@ -1579,14 +1648,12 @@ struct AuraUi::Impl {
             render_home_graphite();
             return;
         }
-        // The clock, or the wordmark until the clock is known.
+        // The clock, or the approved wordmark until the clock is known.
         if (status.clock_valid) {
             home_clock = label(content, "", 0, 42, ui::tokens::display_width, ui::font_clock(), ui::tokens::text,
                                LV_TEXT_ALIGN_CENTER);
         } else {
-            auto* brand = label(content, t().aura_name, 0, 64, ui::tokens::display_width, ui::font_brand(),
-                                ui::tokens::text, LV_TEXT_ALIGN_CENTER);
-            lv_obj_set_style_text_letter_space(brand, 10, 0);
+            aura_wordmark(content, (ui::tokens::display_width - 144) / 2, 46);
         }
         home_date = line(content, "", kGutter, 116, kWidth, ui::font_body(), ui::tokens::text_secondary,
                          LV_TEXT_ALIGN_CENTER);
@@ -1597,8 +1664,8 @@ struct AuraUi::Impl {
         // The whole halo is the talk button.
         auto* talk = lv_button_create(content);
         ui::reset(talk);
-        lv_obj_set_size(talk, ui::tokens::HERO_RECT.width, ui::tokens::HERO_RECT.height);
-        lv_obj_set_pos(talk, ui::tokens::HERO_RECT.x, hero_y() - ui::tokens::HERO_RECT.height / 2);
+        lv_obj_set_size(talk, ui::tokens::HALO_TALK_RECT.width, ui::tokens::HALO_TALK_RECT.height);
+        lv_obj_set_pos(talk, ui::tokens::HALO_TALK_RECT.x, ui::tokens::HALO_TALK_RECT.y);
         lv_obj_set_style_radius(talk, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(talk, ui::color(ui::tokens::text), LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(talk, LV_OPA_10, LV_STATE_PRESSED);
@@ -1799,29 +1866,21 @@ struct AuraUi::Impl {
     void render_aoraton_rooms() {
         if (!aoraton.mock_mode && aoraton.pairing != AoratonPairingState::Paired) {
             const bool reauth = aoraton.pairing == AoratonPairingState::ReauthorizationRequired;
-            make_header(t().aoraton);
+            aoraton_header();
             if (aoraton.runtime_mode == AoratonRuntimeMode::IntegrationTest) header_tag(t().secure_test, ui::tokens::amber);
-            state_symbol(96, 88, reauth ? ui::IconRole::Lock : ui::IconRole::Encrypted,
-                         reauth ? ui::tokens::amber : ui::tokens::lilac);
+            aoraton_brand(96, 88);
             line(content, reauth ? c().aoraton_reauth : t().aoraton_connect, kGutter, 196, kWidth, ui::font_title(),
                  ui::tokens::text, LV_TEXT_ALIGN_CENTER);
             label(content, reauth ? c().aoraton_reauth_detail : c().aoraton_sign_in_help, kGutter, 242, kWidth,
                   ui::font_caption(), ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
-            auto* connect = pill(content, c().aoraton_sign_in, ui::ButtonTone::Primary, kGutter, kActionY, kWidth,
-                                 pairing_start_event);
-            ui::set_button_disabled(connect, !callbacks.on_aoraton_pair_start);
+            google_sign_in_button();
             return;
         }
         const bool connected = aoraton.connection == AoratonConnectionState::Connected;
-        make_header(t().aoraton, ui::IconRole::Compose, compose_event, ui::tokens::blue,
+        aoraton_header(ui::IconRole::Compose, compose_event,
                     !aoraton.rooms.empty() && connected);
         auto* list = make_list();
-        // The live account is polled, so it never claims instant delivery.
-        const char* status = !connected ? t().disconnected :
-                             (aoraton.mock_mode ? security_text() : c().aoraton_live_polling);
-        line(list, status, kGutter + 4, 0, kWidth - 8, ui::font_caption(),
-             connected ? ui::tokens::mint : ui::tokens::coral);
-        int y = 40;
+        int y = 0;
         // All authorized rooms (bounded by the service) live in one vertical scroller.
         const std::size_t count = aoraton.rooms.size();
         for (std::size_t index = 0; index < count; ++index) {
@@ -1904,7 +1963,7 @@ struct AuraUi::Impl {
     // The signed-in account: a card with who and whether the link is up, then
     // room keys, invite paste and sign out, all above the fold.
     void render_aoraton_account() {
-        make_header(t().aoraton);
+        aoraton_header();
         auto* list = make_list();
         auto* card = lv_obj_create(list);
         ui::reset(card);
@@ -1925,7 +1984,8 @@ struct AuraUi::Impl {
         const bool connected = aoraton.connection == AoratonConnectionState::Connected;
         const std::uint32_t link_color = connected ? ui::tokens::mint : ui::tokens::coral;
         lv_obj_set_pos(make_dot(card, 10, link_color), 106, 67);
-        const std::string link = std::string(connected ? t().connected : t().disconnected) + " · " + c().aoraton_e2ee;
+        const std::string link = connected && aoraton.realtime_active ? c().aoraton_realtime_ready :
+                                std::string(connected ? t().connected : t().disconnected) + " · " + c().aoraton_e2ee;
         line(card, link.c_str(), 124, 58, kWidth - 144, ui::font_caption(), link_color);
         int y = 112;
         const bool invite_error = aoraton.key_state == AoratonKeyState::NotMember ||
@@ -1939,11 +1999,87 @@ struct AuraUi::Impl {
                                ui::IconRole::Copy, ui::tokens::blue);
         lv_obj_set_clickable(paste, static_cast<bool>(callbacks.on_aoraton_paste_invite));
         lv_obj_add_event_cb(paste, paste_invite_event, LV_EVENT_CLICKED, this);
-        // Back returns to the rooms; sign-out stays above the fold.
+        y += kRowPitch;
+        const auto summary = sync_summary();
+        settings_row(list, y, c().aoraton_sync_periodic, summary.c_str(), ui::IconRole::Refresh,
+                     ui::tokens::mint, UiView::AoratonSyncSettings);
         y += kRowPitch;
         auto* sign_out = pill(list, c().aoraton_sign_out, ui::ButtonTone::Danger, kGutter, y, kWidth, unpair_event);
         ui::set_button_disabled(sign_out, !callbacks.on_aoraton_unpair);
         list_end(list, y + kButtonHeight + 16);
+    }
+
+    const char* sync_interval_text(std::uint32_t seconds) const {
+        switch (seconds) {
+            case 30: return c().aoraton_sync_30;
+            case 60: return c().aoraton_sync_60;
+            case 300: return c().aoraton_sync_300;
+            default: return c().aoraton_sync_10;
+        }
+    }
+    std::string sync_summary() const {
+        if (!aoraton.sync_settings.polling_enabled) return c().aoraton_sync_off;
+        char text[80];
+        std::snprintf(text, sizeof(text), c().aoraton_sync_every, sync_interval_text(aoraton.sync_settings.interval_seconds));
+        return text;
+    }
+    void change_sync(AoratonSyncSettings settings) {
+        if (!callbacks.on_aoraton_sync_changed || !callbacks.on_aoraton_sync_changed(settings)) {
+            show_toast(c().aoraton_sync_failed, ui::tokens::coral);
+            return;
+        }
+        aoraton.sync_settings = settings;
+        render(UiView::AoratonSyncSettings);
+    }
+    static void sync_toggle_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action()) return;
+        auto settings = self->aoraton.sync_settings;
+        settings.polling_enabled = !settings.polling_enabled;
+        self->change_sync(settings);
+    }
+    static void sync_interval_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action() || !self->aoraton.sync_settings.polling_enabled) return;
+        auto settings = self->aoraton.sync_settings;
+        settings.interval_seconds = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(
+            lv_obj_get_user_data(lv_event_get_current_target_obj(event))));
+        if (aoraton_sync_settings_valid(settings)) self->change_sync(settings);
+    }
+    void render_aoraton_sync_settings() {
+        make_header(c().aoraton_sync_title);
+        if (aoraton.runtime_mode != AoratonRuntimeMode::Live) header_tag(t().demo, ui::tokens::amber);
+        auto* list = make_list();
+        auto* row = list_row(list, 0, c().aoraton_sync_switch, c().aoraton_sync_enabled,
+                              ui::IconRole::Refresh, ui::tokens::mint, kRowHeight, 252);
+        add_switch(row, aoraton.sync_settings.polling_enabled);
+        lv_obj_set_clickable(row, static_cast<bool>(callbacks.on_aoraton_sync_changed));
+        lv_obj_add_event_cb(row, sync_toggle_event, LV_EVENT_CLICKED, this);
+        line(list, c().aoraton_sync_title, kGutter + 4, 106, kWidth - 8, ui::font_caption(), ui::tokens::text_secondary);
+        const std::uint32_t intervals[]{10, 30, 60, 300};
+        for (int index = 0; index < 4; ++index) {
+            const bool selected = aoraton.sync_settings.interval_seconds == intervals[index];
+            auto* tile = lv_button_create(list);
+            ui::reset(tile);
+            ui::style_platter(tile, selected ? ui::tokens::mint : ui::tokens::blue, ui::tokens::radius_medium, selected);
+            lv_obj_set_pos(tile, kGutter + (index % 2) * 222, 140 + (index / 2) * 76);
+            lv_obj_set_size(tile, 210, 64);
+            auto* title = ui::make_label(tile, sync_interval_text(intervals[index]),
+                                         selected ? ui::tokens::mint : ui::tokens::text, ui::font_caption());
+            lv_obj_align(title, LV_ALIGN_LEFT_MID, 12, 0);
+            if (selected) {
+                auto* check = icon_view(tile, ui::IconRole::Check, 24, ui::tokens::mint);
+                lv_obj_align(check, LV_ALIGN_RIGHT_MID, -12, 0);
+            }
+            lv_obj_set_user_data(tile, reinterpret_cast<void*>(static_cast<std::uintptr_t>(intervals[index])));
+            lv_obj_set_clickable(tile, true);
+            lv_obj_add_event_cb(tile, sync_interval_event, LV_EVENT_CLICKED, this);
+            ui::set_button_disabled(tile, !aoraton.sync_settings.polling_enabled || !callbacks.on_aoraton_sync_changed);
+        }
+        auto* note = label(list, c().aoraton_sync_note, kGutter + 4, 304, kWidth - 8, ui::font_caption(),
+                            ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
+        lv_obj_update_layout(note);
+        list_end(list, 304 + lv_obj_get_height(note), 16);
     }
 
     void render_aoraton_unlock() {
@@ -1989,16 +2125,13 @@ struct AuraUi::Impl {
             render_aoraton_account();
             return;
         }
-        make_header(t().aoraton);
+        aoraton_header();
         if (state == AoratonPairingState::NotPaired || state == AoratonPairingState::ReauthorizationRequired) {
             const bool reauth = state == AoratonPairingState::ReauthorizationRequired;
-            state_symbol(100, 96, reauth ? ui::IconRole::Lock : ui::IconRole::Encrypted,
-                         reauth ? ui::tokens::amber : ui::tokens::lilac);
+            aoraton_brand(100, 96);
             state_text(212, reauth ? c().aoraton_reauth : t().aoraton_connect,
                        reauth ? c().aoraton_reauth_detail : c().aoraton_sign_in_help);
-            auto* connect = pill(content, c().aoraton_sign_in, ui::ButtonTone::Primary, kGutter, kActionY, kWidth,
-                                 pairing_start_event);
-            ui::set_button_disabled(connect, !callbacks.on_aoraton_pair_start);
+            google_sign_in_button();
             return;
         }
 
@@ -2094,9 +2227,11 @@ struct AuraUi::Impl {
 
     void render_aoraton_conversation() {
         const auto* room = selected_room();
-        make_header(room ? room->display_name.c_str() : t().aoraton);
+        make_header(room ? room->display_name.c_str() : t().aoraton, ui::IconRole::Microphone, ask_event,
+                    ui::tokens::lilac, static_cast<bool>(callbacks.on_ask));
         line(content, security_text(), kGutter + 4, 98, kWidth - 8, ui::font_caption(), ui::tokens::mint);
         auto* thread = lv_obj_create(content);
+        primary_scroller = thread;
         ui::reset(thread);
         lv_obj_set_size(thread, kWidth, 240);
         lv_obj_set_pos(thread, kGutter, 132);
@@ -2118,7 +2253,8 @@ struct AuraUi::Impl {
             std::size_t in_room = 0;
             for (const auto& message : aoraton.messages) in_room += message.room_id == room->id ? 1U : 0U;
             std::size_t skip = in_room > kConversationRenderLimit ? in_room - kConversationRenderLimit : 0;
-            for (const auto& message : aoraton.messages) {
+            for (std::size_t index = 0; index < aoraton.messages.size(); ++index) {
+                const auto& message = aoraton.messages[index];
                 if (message.room_id != room->id) continue;
                 if (skip > 0) {
                     --skip;
@@ -2134,33 +2270,58 @@ struct AuraUi::Impl {
                 lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
                 lv_obj_set_flex_align(row, incoming ? LV_FLEX_ALIGN_START : LV_FLEX_ALIGN_END,
                                       LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-                auto* bubble = lv_obj_create(row);
+                auto* bubble = lv_button_create(row);
                 ui::reset(bubble);
-                lv_obj_set_style_bg_color(bubble, ui::color(incoming ? ui::tokens::surface : 0x173A6B), 0);
-                lv_obj_set_style_bg_opa(bubble, LV_OPA_COVER, 0);
-                lv_obj_set_style_radius(bubble, ui::tokens::radius_medium, 0);
+                ui::style_platter(bubble, incoming ? ui::tokens::surface : ui::tokens::blue,
+                                  ui::tokens::radius_medium, !incoming);
+                lv_obj_set_clickable(bubble, true);
+                lv_obj_set_user_data(bubble, reinterpret_cast<void*>(index));
+                lv_obj_add_event_cb(bubble, aoraton_message_event, LV_EVENT_CLICKED, this);
                 lv_obj_set_style_pad_hor(bubble, 16, 0);
                 lv_obj_set_style_pad_ver(bubble, 12, 0);
-                lv_obj_set_size(bubble, 352, LV_SIZE_CONTENT);
+                lv_obj_set_size(bubble, 392, LV_SIZE_CONTENT);
                 lv_obj_set_layout(bubble, LV_LAYOUT_FLEX);
                 lv_obj_set_flex_flow(bubble, LV_FLEX_FLOW_COLUMN);
                 lv_obj_set_style_pad_row(bubble, 4, 0);
+                const char* author = message.direction == AoratonDirection::Outgoing ? c().aoraton_you : message.author.c_str();
+                if (author[0]) {
+                    auto* sender = ui::make_label(bubble, author, incoming ? ui::tokens::lilac : ui::tokens::blue,
+                                                  ui::font_caption());
+                    lv_obj_set_width(sender, lv_pct(100));
+                    lv_obj_set_height(sender, lv_font_get_line_height(ui::font_caption()));
+                    lv_label_set_long_mode(sender, LV_LABEL_LONG_DOT);
+                }
                 auto* text = ui::make_label(bubble, message.local_display_text.c_str(), ui::tokens::text,
                                             ui::font_body());
                 lv_obj_set_width(text, lv_pct(100));
                 std::uint32_t status_color = ui::tokens::text_tertiary;
+                std::string metadata = message_time(message.received_at);
                 if (const char* status_text = delivery_text(message.delivery, status_color)) {
-                    auto* state = ui::make_label(bubble, status_text, status_color, ui::font_caption());
+                    if (!metadata.empty()) metadata += " · ";
+                    metadata += status_text;
+                }
+                if (!metadata.empty()) {
+                    auto* state = ui::make_label(bubble, metadata.c_str(), status_color, ui::font_caption());
                     lv_obj_set_width(state, lv_pct(100));
+                    lv_obj_set_height(state, lv_font_get_line_height(ui::font_caption()));
+                    lv_label_set_long_mode(state, LV_LABEL_LONG_DOT);
                     lv_obj_set_style_text_align(state, LV_TEXT_ALIGN_RIGHT, 0);
                 }
             }
         }
         if (!any) label(thread, t().no_messages, 0, 20, kWidth, ui::font_body(), ui::tokens::text_secondary);
         // A conversation opens at its newest message, like every chat client.
-        if (last_line) {
+        if (room && thread_room != room->id) {
+            thread_room = room->id;
+            thread_follow_tail = true;
+            thread_scroll = 0;
+        }
+        if (last_line && thread_follow_tail) {
             lv_obj_update_layout(thread);
-            lv_obj_scroll_to_view(last_line, LV_ANIM_OFF);
+            lv_obj_scroll_to_y(thread, std::max<int32_t>(0, lv_obj_get_scroll_bottom(thread)), LV_ANIM_OFF);
+        } else {
+            lv_obj_update_layout(thread);
+            lv_obj_scroll_to_y(thread, thread_scroll, LV_ANIM_OFF);
         }
         // A reply bar, like every chat client, opens the composer.
         auto* reply = lv_button_create(content);
@@ -2212,14 +2373,63 @@ struct AuraUi::Impl {
         lv_obj_set_style_pad_all(card, 20, 0);
         line(card, room ? room->display_name.c_str() : t().aoraton, 0, 0, kWidth - 44, ui::font_headline(),
              ui::tokens::lilac);
-        auto* body = label(card, aoraton.pending_text.c_str(), 0, 44, kWidth - 44, ui::font_body(), ui::tokens::text);
-        lv_obj_set_height(body, 92);
-        lv_label_set_long_mode(body, LV_LABEL_LONG_DOT);
+        message_reader(card, aoraton.pending_text, 0, 44, kWidth - 44, 92);
         line(card, aoraton.runtime_mode == AoratonRuntimeMode::Mock ? t().delivery_demo : security_text(),
              0, 140, kWidth - 44, ui::font_caption(), ui::tokens::text_tertiary);
         pill(content, t().cancel, ui::ButtonTone::Danger, kGutter, kActionY, 160, cancel_message_event);
         pill(content, v().send_action, ui::ButtonTone::Primary, kGutter + 176, kActionY, kWidth - 176,
              confirm_message_event);
+    }
+
+    std::string message_time(const std::string& value) const {
+        const auto time = message_time_label(value, callbacks.on_local_time);
+        if (!time.utc) return time.clock;
+        char utc[24];
+        std::snprintf(utc, sizeof(utc), c().aoraton_time_utc_format, time.clock.c_str());
+        return utc;
+    }
+
+    lv_obj_t* message_reader(lv_obj_t* parent, const std::string& text, int x, int y, int width, int height) {
+        auto* reader = lv_obj_create(parent);
+        ui::reset(reader);
+        lv_obj_set_pos(reader, x, y);
+        lv_obj_set_size(reader, width, height);
+        lv_obj_set_clickable(reader, true);
+        lv_obj_set_scrollable(reader, true);
+        lv_obj_set_scroll_dir(reader, LV_DIR_VER);
+        ui::style_scrollbar(reader);
+        label(reader, text.c_str(), 0, 0, width - 10, ui::font_body(), ui::tokens::text);
+        return reader;
+    }
+
+    void render_aoraton_message(bool consent) {
+        make_header(consent ? c().aoraton_share_question : c().aoraton_message_title);
+        const auto& message = selected_message;
+        int reader_top = 192;
+        if (consent) {
+            auto* hint = label(content, c().aoraton_share_hint, kGutter, 98, kWidth, ui::font_caption(), ui::tokens::text_secondary);
+            lv_obj_update_layout(hint);
+            reader_top = std::max(reader_top, 110 + static_cast<int>(lv_obj_get_height(hint)));
+        } else {
+            const std::string author = message.direction == AoratonDirection::Outgoing ? c().aoraton_you : message.author;
+            line(content, author.c_str(), kGutter, 98, kWidth, ui::font_caption(), ui::tokens::lilac);
+            std::uint32_t color = ui::tokens::text_tertiary;
+            std::string metadata = message_time(message.received_at);
+            if (const char* delivery = delivery_text(message.delivery, color)) {
+                if (!metadata.empty()) metadata += " · ";
+                metadata += delivery;
+            }
+            label(content, metadata.c_str(), kGutter, 128, kWidth, ui::font_caption(), color);
+        }
+        primary_scroller = message_reader(content, message.local_display_text, kGutter, reader_top, kWidth, 364 - reader_top);
+        if (consent) {
+            pill(content, t().cancel, ui::ButtonTone::Danger, kGutter, kActionY, 160, back_event);
+            pill(content, c().aoraton_share_action, ui::ButtonTone::Primary, kGutter + 176, kActionY,
+                 kWidth - 176, aoraton_assist_confirm_event);
+        } else if (callbacks.on_aoraton_assist) {
+            pill(content, c().aoraton_ask_aura, ui::ButtonTone::Primary, kGutter, kActionY, kWidth,
+                 aoraton_assist_preview_event);
+        }
     }
 
     void render_weather_state(WeatherState state) {
@@ -3364,12 +3574,11 @@ struct AuraUi::Impl {
         if (capture_mode || !motion.active()) return;
         if (motion.mode() == MotionMode::Listening) motion.set_amplitude(input_amplitude);
         else if (motion.mode() == MotionMode::Speaking) motion.set_amplitude(audio.envelope);
-        const auto frame = motion.tick(elapsed_ms);
+        motion.tick(elapsed_ms);
         if (presence->object()) {
             presence->set_level(motion.mode() == MotionMode::Listening ? input_amplitude : audio.envelope);
             presence->set_reduced_motion(reduced_motion);
-            // The halo follows the Mercury frame rate, so both share one redraw.
-            if (presence->tick(elapsed_ms)) update_halo(frame);
+            presence->tick(elapsed_ms);
         }
         update_audio_widgets();
     }
@@ -3450,14 +3659,15 @@ struct AuraUi::Impl {
     }
 
     void reset_view_pointers() {
+        transfer_timer = nullptr; transfer_bar = nullptr;
         presence->detach();
         header_back = nullptr;
         header_title = nullptr;
         header_action = false;
         home_clock = nullptr;
         home_date = nullptr;
+        home_date_detail = nullptr;
         hero_image = nullptr;
-        halo = nullptr;
         state_label = nullptr;
         answer_label = nullptr;
         audio_state_label = nullptr;
@@ -3522,9 +3732,15 @@ struct AuraUi::Impl {
     // Data refreshes re-render the visible view (e.g. every second while a pairing
     // countdown runs); only a view change or an explicit state change fades in.
     void render(UiView view, bool fade = false) {
+        if (current_view == UiView::PhotoViewer && view != UiView::PhotoViewer && photos.playing && callbacks.on_photo_play)
+            callbacks.on_photo_play(false);
         if (blocked_by_power(view)) return;
         const bool refresh = view == current_view;
         const bool restoring = restore_scroll && !refresh;
+        if (current_view == UiView::AoratonConversation && primary_scroller) {
+            thread_scroll = lv_obj_get_scroll_y(primary_scroller);
+            thread_follow_tail = lv_obj_get_scroll_bottom(primary_scroller) <= 12;
+        }
         restore_scroll = false;
         if (!refresh && primary_scroller) remembered_scroll(current_view) = lv_obj_get_scroll_y(primary_scroller);
         const int32_t saved_scroll = refresh && primary_scroller ? lv_obj_get_scroll_y(primary_scroller) :
@@ -3553,6 +3769,9 @@ struct AuraUi::Impl {
             case UiView::AoratonConversation: render_aoraton_conversation(); break;
             case UiView::AoratonCompose: render_aoraton_compose(); break;
             case UiView::AoratonConfirm: render_aoraton_confirm(); break;
+            case UiView::AoratonMessage: render_aoraton_message(false); break;
+            case UiView::AoratonAssist: render_aoraton_message(true); break;
+            case UiView::AoratonSyncSettings: render_aoraton_sync_settings(); break;
             case UiView::Weather: render_weather(); break;
             case UiView::WeatherSettings: render_weather_settings(); break;
             case UiView::WeatherLocation: render_weather_location(); break;
@@ -3585,13 +3804,19 @@ struct AuraUi::Impl {
             case UiView::AppearanceSettings:
             case UiView::Update:
             case UiView::Radio:
-            case UiView::RadioSearch: render_companion(view); break;
+            case UiView::RadioSearch:
+            case UiView::Photos:
+            case UiView::PhotoViewer:
+            case UiView::PhotoSettings:
+            case UiView::PhotoDelete:
+            case UiView::FileTransfer: render_companion(view); break;
             case UiView::System: render_system(); break;
+            case UiView::Credits: render_credits(); break;
             case UiView::SystemConfirm: render_system_confirm(); break;
             case UiView::PowerOff: render_power_off(); break;
             case UiView::Boot: render_boot(); break;
         }
-        if ((refresh || restoring) && primary_scroller && saved_scroll > 0) {
+        if (view != UiView::AoratonConversation && (refresh || restoring) && primary_scroller && saved_scroll > 0) {
             lv_obj_update_layout(primary_scroller);
             const int32_t limit = lv_obj_get_scroll_y(primary_scroller) + lv_obj_get_scroll_bottom(primary_scroller);
             lv_obj_scroll_to_y(primary_scroller, std::max<int32_t>(0, std::min(saved_scroll, limit)), LV_ANIM_OFF);
@@ -3629,7 +3854,7 @@ struct AuraUi::Impl {
         // Home shows the full status; other screens only what needs attention.
         lv_obj_set_hidden(status_left, !home);
         lv_obj_set_hidden(status_right, !home && header_action);
-        lv_obj_set_hidden(status_time, home);
+        lv_obj_set_hidden(status_time, home || (current_view == UiView::PhotoViewer && photo_fullscreen));
         lv_obj_set_hidden(status_alert, home || !(status.connection_known && !status.online));
         lv_obj_set_hidden(status_bluetooth, !(status.bluetooth_known && status.bluetooth_enabled));
         lv_obj_set_hidden(status_developer, !developer_mode);
@@ -3648,12 +3873,14 @@ struct AuraUi::Impl {
         if (header_title && !header_action) {
             lv_obj_update_layout(status_right);
             const int right_x = ui::tokens::display_width - 20 - lv_obj_get_width(status_right);
-            lv_obj_set_width(header_title, std::max(120, right_x - 12 - 96));
+            lv_obj_set_width(header_title, std::max(120, right_x - 12 - static_cast<int>(lv_obj_get_x(header_title))));
         }
         lv_obj_set_hidden(status_bar, immersive(current_view));
     }
 
 #include "aura_ui_companion.inl"
+#include "aura_ui_photos.inl"
+#include "aura_ui_transfer.inl"
 #include "aura_ui_system.inl"
 #include "aura_ui_appearance.inl"
 #include "aura_ui_marble.inl"
@@ -3814,6 +4041,14 @@ void AuraUi::apply_aoraton(const AoratonSnapshot& snapshot) {
     const bool keys_unlocked = old.key_state == AoratonKeyState::Unlocking &&
                                snapshot.key_state == AoratonKeyState::Ready && snapshot.key_count > 0;
     impl_->aoraton = snapshot;
+    if (!snapshot.mock_mode && snapshot.pairing != AoratonPairingState::Paired) {
+        impl_->selected_message = {};
+        if (impl_->current_view == UiView::AoratonMessage || impl_->current_view == UiView::AoratonAssist) {
+            impl_->navigation.replace(UiView::AoratonRooms);
+            impl_->render(UiView::AoratonRooms);
+            return;
+        }
+    }
     if (keys_unlocked) {
         char message[64];
         std::snprintf(message, sizeof(message), impl_->c().aoraton_keys_unlocked_format,
@@ -3834,6 +4069,7 @@ void AuraUi::apply_aoraton(const AoratonSnapshot& snapshot) {
         impl_->current_view == UiView::AoratonPair ||
         impl_->current_view == UiView::AoratonConversation ||
         impl_->current_view == UiView::AoratonConfirm ||
+        impl_->current_view == UiView::AoratonSyncSettings ||
         (notifications_changed && (impl_->current_view == UiView::Home ||
                                    impl_->current_view == UiView::Launcher ||
                                    impl_->current_view == UiView::AlwaysOn))) {
@@ -4026,5 +4262,30 @@ UiView AuraUi::view() const noexcept { return impl_->current_view; }
 lv_obj_t* AuraUi::root() const noexcept { return impl_->screen; }
 
 #include "aura_ui_companion_api.inl"
+
+void AuraUi::apply_photos(const PhotoSnapshot& snapshot) {
+    auto& self = *impl_;
+    if (snapshot.sequence == self.photos.sequence) return;
+    lv_image_cache_drop(&self.photo_descriptor);
+    lv_image_cache_drop(&self.ambient_descriptor);
+    lv_image_header_cache_drop(&self.photo_descriptor);
+    lv_image_header_cache_drop(&self.ambient_descriptor);
+    self.photos = snapshot;
+    if (self.current_view == UiView::Photos || self.current_view == UiView::PhotoViewer ||
+        self.current_view == UiView::PhotoSettings || self.current_view == UiView::AlwaysOn)
+        self.render(self.current_view);
+}
+
+void AuraUi::apply_transfer(const TransferSnapshot& snapshot) {
+    auto& self = *impl_;
+    if (snapshot.sequence == self.transfer.sequence) return;
+    const bool structural = snapshot.state != self.transfer.state || snapshot.error != self.transfer.error ||
+        snapshot.address != self.transfer.address || snapshot.pin != self.transfer.pin ||
+        snapshot.last_name != self.transfer.last_name || snapshot.completed != self.transfer.completed;
+    self.transfer = snapshot;
+    if (self.current_view != UiView::FileTransfer) return;
+    if (structural) self.render(UiView::FileTransfer);
+    else self.update_transfer_progress();
+}
 
 }  // namespace aura

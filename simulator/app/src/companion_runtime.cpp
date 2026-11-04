@@ -168,6 +168,8 @@ Appearance read_stored_appearance(const std::string& store_dir) {
 }
 
 CompanionRuntime::CompanionRuntime(CompanionContext context) : ctx_(std::move(context)) {
+    photos_ = std::make_unique<PhotoRuntime>(ctx_.store_dir, ctx_.deterministic);
+    transfer_ = std::make_unique<FileTransferRuntime>(ctx_.store_dir, ctx_.deterministic);
     capabilities_.imu = true;          // simulated through the control panel
     // A normal interactive run exposes pairing only when a real platform
     // transport exists. Deterministic evidence retains its labelled DEMO path.
@@ -310,7 +312,24 @@ void CompanionRuntime::install(AuraUiCallbacks& callbacks) {
         bump_extras();
     };
     callbacks.on_language_changed = [this](InterfaceLanguage language) { set_language(language); };
+    callbacks.on_aoraton_sync_changed = [this](const AoratonSyncSettings& settings) {
+        if (!ctx_.aoraton || !aoraton_sync_settings_valid(settings)) return false;
+        const auto previous = ctx_.aoraton->snapshot().sync_settings;
+        if (settings == previous) return true;
+        if (!ctx_.deterministic && !ctx_.store_dir.empty() &&
+            !write_file(std::filesystem::path(ctx_.store_dir) / "aoraton-sync.txt", serialize_aoraton_sync_settings(settings))) return false;
+        if (ctx_.aoraton->set_sync_settings(settings)) return true;
+        if (!ctx_.deterministic && !ctx_.store_dir.empty())
+            write_file(std::filesystem::path(ctx_.store_dir) / "aoraton-sync.txt", serialize_aoraton_sync_settings(previous));
+        return false;
+    };
     callbacks.on_speak = [this](const std::string& text, const std::string& language) { speak(text, language); };
+    callbacks.on_speak_stop = [this] { stop_speech(); };
+    auto audio_stop = callbacks.on_audio_stop;
+    callbacks.on_audio_stop = [this, audio_stop] {
+        stop_speech();
+        if (audio_stop) audio_stop();
+    };
     callbacks.on_timer_start = [this](std::uint32_t seconds, const std::string& label) {
         return clock_.start_timer(seconds, label) == ClockResult::Ok;
     };
@@ -359,6 +378,16 @@ void CompanionRuntime::install(AuraUiCallbacks& callbacks) {
         if (status.date_valid) last_briefing_day_ = days_from_civil(status.year, status.month, status.day);
     };
     callbacks.on_display_settings = [this](const DisplaySettings& settings) { display_.set_settings(settings); };
+    callbacks.on_photos_refresh = [this] { photos().refresh(); };
+    callbacks.on_transfer_start = [this] { return transfer().start(); };
+    callbacks.on_transfer_stop = [this] { transfer().stop(); };
+    callbacks.on_transfer_browser = [this] { transfer().open_browser(); };
+    callbacks.on_photo_select = [this](std::size_t index) { return photos().select(index); };
+    callbacks.on_photo_advance = [this](int direction) { photos().advance(direction); };
+    callbacks.on_photo_play = [this](bool playing) { photos().set_playing(playing); };
+    callbacks.on_photo_interval = [this](unsigned seconds) { return photos().set_interval(seconds); };
+    callbacks.on_photo_ambient = [this](bool enabled) { return photos().set_ambient(enabled); };
+    callbacks.on_photo_delete = [this](const std::string& name) { return photos().erase(name); };
     callbacks.on_wake = [this] { display_.user_activity(now_ms()); };
     callbacks.on_phone_call = [this](std::uint32_t uid, bool accept) {
         if (ctx_.on_phone_action) ctx_.on_phone_action(uid, accept);
@@ -434,12 +463,13 @@ void CompanionRuntime::install(AuraUiCallbacks& callbacks) {
     };
 }
 
-TurnRequest CompanionRuntime::turn_request(std::string prompt) {
+TurnRequest CompanionRuntime::turn_request(std::string prompt, bool private_message) {
     reset_speech_pipeline();
     streamed_spoken_prefix_.clear();
     TurnRequest request;
-    request.history = memory_.recent(now_ms());
-    if (extras_.memory_turns != request.history.size()) {
+    private_message_turn_ = private_message;
+    request.history = private_message ? std::vector<ConversationTurn>{} : memory_.recent(now_ms());
+    if (!private_message && extras_.memory_turns != request.history.size()) {
         extras_.memory_turns = request.history.size();
         extras_.conversation_history = request.history;
         bump_extras();
@@ -454,9 +484,9 @@ TurnRequest CompanionRuntime::turn_request(std::string prompt) {
     input.phone = &phone_;
     input.unread_messages = static_cast<int>(ctx_.aoraton->snapshot().notifications.size());
     input.question = prompt;
-    request.context = build_device_context(input);
-    request.web_search = question_requests_web_search(prompt);
-    request.prompt = std::move(prompt);
+    if (!private_message) request.context = build_device_context(input);
+    request.web_search = !private_message && question_requests_web_search(prompt);
+    request.prompt = private_message ? std::string(strings_for(language_).aoraton_assist_instruction) + prompt : std::move(prompt);
     request.interface_language = language_;
     if (extras_.pending_action) {
         extras_.pending_action.reset();
@@ -577,6 +607,12 @@ void CompanionRuntime::deliver_stream_update(const AssistantStreamSnapshot& upda
 
 void CompanionRuntime::deliver_reply(const std::string& raw) {
     auto parsed = parse_assistant_answer(raw);
+    // The consent was to read one message, never to execute its contents or
+    // the model's suggestions. Even valid ACTION output cannot open a send.
+    if (private_message_turn_) {
+        parsed.action_rejected = parsed.action_rejected || parsed.action.has_value();
+        parsed.action.reset();
+    }
     auto& controller = *ctx_.controller;
     const std::string question = controller.snapshot().user_text;
     const auto& strings = strings_for(language_);
@@ -584,7 +620,7 @@ void CompanionRuntime::deliver_reply(const std::string& raw) {
     std::string text = answer_display_text(parsed, strings.action_question, strings.action_refused);
     if (text.empty()) text = strings.empty_answer;
     controller.dispatch({EventType::FinalResult, text});
-    memory_.record(question, text, now_ms());
+    if (!private_message_turn_) memory_.record(question, text, now_ms());
     extras_.conversation_history = memory_.recent(now_ms());
     extras_.memory_turns = extras_.conversation_history.size();
     std::optional<AssistantAction> action = parsed.action;
@@ -924,6 +960,10 @@ bool CompanionRuntime::speak(const std::string& text, const std::string& languag
     // producer noise instead of growing an unbounded audio queue.
     if (speech_queue_.size() >= 2) return false;
     speech_queue_.push_back({std::move(bounded), language});
+    if (!extras_.speaking) {
+        extras_.speaking = true;
+        bump_extras();
+    }
     pump_speech();
     return true;
 }
@@ -933,10 +973,18 @@ void CompanionRuntime::preview_voice(AssistantVoice voice) {
     speak(strings_for(language_).voice_preview_phrase, interface_language_code(language_));
 }
 
+void CompanionRuntime::stop_speech() {
+    if (speech_audio_active_) ctx_.audio->stop();
+    reset_speech_pipeline();
+    // Stopping the voice must also silence any final streamed remainder.
+    voice_turn_ = false;
+}
+
 void CompanionRuntime::pump_speech() {
     if (!speech_ || speech_job_ || speech_ready_ || speech_queue_.empty()) return;
     auto request = std::move(speech_queue_.front());
     speech_queue_.pop_front();
+    speech_job_ignored_ = false;
     speech_job_ = speech_->synthesize(std::move(request.text), std::move(request.language),
                                       assistant_voice_id(sound_.assistant_voice));
 }
@@ -945,10 +993,12 @@ void CompanionRuntime::reset_speech_pipeline() {
     stop_barge_monitor();
     speech_queue_.clear();
     speech_ready_.reset();
-    if (speech_job_ && !retire(speech_job_, retired_speech_)) {
-        // Keep the in-flight future owned until it completes.  Starting more
-        // synthesis here would make cancellation spam grow host threads.
-        return;
+    // Even at the retired-job bound, a cancelled result can never play later.
+    speech_job_ignored_ = speech_job_ && !retire(speech_job_, retired_speech_);
+    speech_audio_active_ = false;
+    if (extras_.speaking) {
+        extras_.speaking = false;
+        bump_extras();
     }
     assistant_speech_active_ = false;
     assistant_audio_started_ = false;
@@ -1006,6 +1056,22 @@ void CompanionRuntime::finish_spoken_reply_chain() {
 }
 
 void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
+    transfer().poll();
+    const auto transfer_state = transfer().session().snapshot();
+    if (transfer_state.photos_revision != transfer_photo_revision_) {
+        transfer_photo_revision_ = transfer_state.photos_revision; transfer_photos_pending_ = true;
+    }
+    if (transfer_state.removals_revision != transfer_removal_revision_) {
+        transfer_removal_revision_ = transfer_state.removals_revision; transfer_removals_pending_ = true;
+    }
+    if (transfer_photos_pending_ && ctx_.ui && (ctx_.ui->view() != UiView::PhotoViewer || transfer_removals_pending_) && !photos().snapshot().scanning) {
+        const bool refreshed = transfer_removals_pending_ ? photos().external_removal() : photos().refresh();
+        if (refreshed) {
+            if (transfer_removals_pending_ && (ctx_.ui->view() == UiView::PhotoViewer || ctx_.ui->view() == UiView::PhotoSettings || ctx_.ui->view() == UiView::PhotoDelete)) ctx_.ui->show(UiView::Photos);
+            transfer_photos_pending_ = transfer_removals_pending_ = false;
+        }
+    }
+    photos().poll(elapsed_ms, ctx_.ui && ctx_.ui->view() == UiView::PhotoViewer);
     const auto now = now_ms();
     clock_.tick(elapsed_ms);
     prune(retired_transcripts_);
@@ -1071,7 +1137,9 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
         }
     }
     if (ready(speech_job_)) {
-        speech_ready_ = speech_job_->get();
+        auto result = speech_job_->get();
+        if (!speech_job_ignored_) speech_ready_ = std::move(result);
+        speech_job_ignored_ = false;
         speech_job_.reset();
     }
     if (speech_ready_) {
@@ -1087,6 +1155,7 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
             const bool started = ctx_.audio->play_pcm(speech_ready_->clip);
             speech_ready_.reset();
             if (started) {
+                speech_audio_active_ = true;
                 std::clog << "AURA speech playback started: rate=" << sample_rate << ", channels="
                           << static_cast<unsigned>(channels) << ", samples=" << samples << std::endl;
                 extras_.spoken_reply = true;
@@ -1102,7 +1171,15 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
     }
     pump_speech();
     const auto speech_audio_state = ctx_.audio->diagnostics().state;
-    const bool speech_pipeline_empty = !speech_job_ && !speech_ready_ && speech_queue_.empty();
+    if (speech_audio_state != AudioState::Playing && speech_audio_state != AudioState::Paused) {
+        speech_audio_active_ = false;
+    }
+    const bool speech_pipeline_empty = (!speech_job_ || speech_job_ignored_) &&
+                                       !speech_ready_ && speech_queue_.empty();
+    if (extras_.speaking && speech_pipeline_empty && !speech_audio_active_) {
+        extras_.speaking = false;
+        bump_extras();
+    }
     if (assistant_speech_active_ && assistant_reply_final_ && speech_pipeline_empty &&
         speech_audio_state != AudioState::Playing && speech_audio_state != AudioState::Paused) {
         if (!assistant_audio_started_) follow_up_armed_ = false;
@@ -1127,7 +1204,9 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
         // A finished answer or a waiting confirmation lets the screen time out.
         const bool busy = holds_screen_awake(ctx_.controller->snapshot()) || clock_.snapshot().alert ||
                           job_ != VoiceJob::None || audio_state == AudioState::Playing ||
-                          phone_.snapshot().incoming_call || ota_.snapshot().state == UpdateState::Downloading;
+                          phone_.snapshot().incoming_call || ota_.snapshot().state == UpdateState::Downloading ||
+                          photos().snapshot().playing || transfer_state.state == TransferState::Receiving ||
+                          (ctx_.ui->view() == UiView::FileTransfer && (transfer_state.state == TransferState::Ready || transfer_state.state == TransferState::Starting));
         display_.hold_awake(busy, now);
         display_.tick(now);
         const bool dark = display_.snapshot().mode == DisplayMode::AlwaysOn ||
@@ -1186,6 +1265,8 @@ void CompanionRuntime::apply() {
     voice_.stt_available = capabilities_.speech_recognition;
     voice_.tts_available = capabilities_.speech_output;
     ui.apply_display(display_.snapshot());
+    ui.apply_photos(photos().snapshot());
+    ui.apply_transfer(transfer().session().snapshot());
     ui.apply_clock(clock_.snapshot());
     ui.apply_notes(notes_.snapshot());
     ui.apply_organizer(organizer_.snapshot());
@@ -1199,6 +1280,7 @@ void CompanionRuntime::apply() {
 
 void CompanionRuntime::set_powered_off(bool off) {
     if (off) {
+        transfer().stop();
         if (job_ != VoiceJob::None) cancel_voice();
         reset_speech_pipeline();
         ctx_.audio->stop();
@@ -1224,6 +1306,9 @@ void CompanionRuntime::soft_restart() {
 }
 
 void CompanionRuntime::factory_reset() {
+    transfer().stop();
+    photos().reset();
+    if (ctx_.aoraton) ctx_.aoraton->set_sync_settings({});
     for (const auto& timer : std::vector<TimerItem>(clock_.snapshot().timers)) clock_.cancel_timer(timer.id);
     clock_.dismiss_alert();
     clock_.restore("aura-clock 1\n");
@@ -1252,7 +1337,7 @@ void CompanionRuntime::factory_reset() {
     if (!ctx_.deterministic) {
         const std::filesystem::path root(ctx_.store_dir);
         std::error_code error;
-        for (const char* name : {"clock.txt", "notes.txt", "organizer.txt", "sound.txt", "display.txt", "language.txt"}) {
+        for (const char* name : {"clock.txt", "notes.txt", "organizer.txt", "sound.txt", "display.txt", "language.txt", "aoraton-sync.txt"}) {
             const auto path = root / name;
             std::filesystem::remove(path, error);
             auto temporary = path;
@@ -1400,6 +1485,9 @@ bool CompanionRuntime::handle_event(const std::string& type, const std::string& 
 
 void CompanionRuntime::load_stores() {
     const std::filesystem::path root(ctx_.store_dir);
+    AoratonSyncSettings sync;
+    if (ctx_.aoraton && parse_aoraton_sync_settings(read_file(root / "aoraton-sync.txt"), sync))
+        ctx_.aoraton->set_sync_settings(sync);
     const auto clock_data = read_file(root / "clock.txt");
     if (!clock_data.empty()) clock_.restore(clock_data);
     const auto notes_data = read_file(root / "notes.txt");
@@ -1547,7 +1635,24 @@ bool CompanionRuntime::capture(const std::string& scenario) {
     voice_capabilities.speech_recognition = true;
     voice_capabilities.speech_output = true;
 
-    if (scenario == "clock") {
+    if (scenario.rfind("file-transfer", 0) == 0) {
+        if (scenario == "file-transfer") transfer().stop();
+        else {
+            transfer().start();
+            const auto generation = transfer().session().snapshot().generation;
+            if (scenario == "file-transfer-receiving") transfer().session().progress(generation, "DEMO photo.jpg", 131072, 262144);
+            else if (scenario == "file-transfer-expired") transfer().session().tick(kTransferLeaseMs);
+        }
+        ui.apply_transfer(transfer().session().snapshot()); ui.show(UiView::FileTransfer);
+    } else if (scenario == "photos" || scenario == "photo-viewer" || scenario == "photo-settings" || scenario == "photo-ambient" || scenario == "photo-delete") {
+        photos().seed_demo();
+        if (scenario == "photo-ambient") photos().set_ambient(true);
+        ui.apply_photos(photos().snapshot());
+        ui.show(scenario == "photos" ? UiView::Photos : scenario == "photo-settings" ? UiView::PhotoSettings : scenario == "photo-delete" ? UiView::PhotoDelete :
+                scenario == "photo-ambient" ? UiView::AlwaysOn : UiView::PhotoViewer);
+    } else if (scenario == "photos-empty") {
+        photos().reset(); ui.apply_photos(photos().snapshot()); ui.show(UiView::Photos);
+    } else if (scenario == "clock") {
         seed_clock();
         ui.show(UiView::Clock);
     } else if (scenario == "clock-new") {

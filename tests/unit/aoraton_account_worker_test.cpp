@@ -367,13 +367,29 @@ AoratonIncoConfig inco_on() {
     return inco;
 }
 
+class FakeRealtime final : public IAoratonRealtime {
+public:
+    void configure(const std::string&, const std::string&, const std::string& access,
+                   const std::vector<std::string>& keys) override {
+        token = access; rooms = keys; enabled = true;
+    }
+    AoratonRealtimeUpdate poll() override {
+        const auto result = update; update.refresh_required = false; return result;
+    }
+    void stop() override { enabled = false; token.clear(); rooms.clear(); update = {}; }
+    std::string token;
+    std::vector<std::string> rooms;
+    bool enabled{false};
+    AoratonRealtimeUpdate update;
+};
+
 struct Rig {
-    explicit Rig(AoratonIncoConfig inco = {})
+    explicit Rig(AoratonIncoConfig inco = {}, bool use_realtime = false)
         : service(mailbox, AoratonRuntimeMode::Live, [this] {
               return aoraton_new_client_message_id(account);
           }),
           worker(mailbox, {kBase, kAnon, "http://127.0.0.1:4779/aoraton/callback", std::move(inco)}, server, account,
-                 messages, store, channel) {}
+                 messages, store, channel, use_realtime ? &realtime : nullptr) {}
 
     void pump(int rounds = 6) {
         for (int index = 0; index < rounds; ++index) {
@@ -408,6 +424,7 @@ struct Rig {
     WindowsAoratonAccountCrypto account;
     WindowsAoratonCryptoV2 messages;
     RealAoratonService service;
+    FakeRealtime realtime;
     AoratonAccountWorker worker;
     std::int64_t now_ms{1000};
 };
@@ -429,6 +446,112 @@ std::string fixture_passphrase() {
 
 int main() {
     const std::string passphrase = fixture_passphrase();
+
+    {
+        Rig rig({}, true);
+        rig.sign_in();
+        expect(rig.service.unlock_keys(passphrase), "unlock for sync settings");
+        rig.pump();
+        rig.realtime.update = {true, true};
+        rig.pump();
+        const AoratonSyncSettings off{false, 60};
+        expect(rig.service.set_sync_settings(off), "disable only periodic polling");
+        rig.pump();
+        const int before = rig.server.requests;
+        rig.server.add(kAlpha, "u-maria", "Maria", "DEMO realtime while polling off");
+        rig.advance(60000);
+        expect(rig.server.requests == before && rig.notifications() == 0 && rig.service.snapshot().realtime_active,
+               "off disables the scheduled overview fetch without disabling realtime");
+        rig.realtime.update.refresh_required = true;
+        rig.pump();
+        expect(rig.notifications() == 1, "realtime invalidation still synchronizes immediately while polling is off");
+        expect(rig.service.set_sync_settings({true, 60}), "select one-minute polling");
+        rig.pump();
+        const int enabled = rig.server.requests;
+        rig.advance(59000);
+        expect(rig.server.requests == enabled, "one-minute setting does not poll at the old ten-second interval");
+        rig.advance(1000);
+        expect(rig.server.requests > enabled, "one-minute setting polls at the selected deadline");
+        expect(!rig.service.set_sync_settings({true, 1}) && !rig.service.set_sync_settings({true, 3600}),
+               "unsupported polling intervals fail typed validation");
+        for (const auto seconds : {10U, 30U, 60U, 300U}) {
+            AoratonSyncSettings restored;
+            const AoratonSyncSettings chosen{false, seconds};
+            expect(parse_aoraton_sync_settings(serialize_aoraton_sync_settings(chosen), restored) && restored == chosen,
+                   "on/off and every supported interval round-trip through the settings store");
+        }
+        AoratonSyncSettings untouched{false, 30};
+        for (const auto* invalid : {"{}", "{\"version\":2,\"enabled\":true,\"seconds\":60}",
+                                    "{\"version\":1,\"enabled\":true,\"seconds\":1}",
+                                    "{\"version\":1,\"enabled\":1,\"seconds\":60}"}) {
+            expect(!parse_aoraton_sync_settings(invalid, untouched) && untouched == AoratonSyncSettings{false, 30},
+                   "malformed settings never partially change state");
+        }
+        expect(rig.service.set_sync_settings(off), "disable polling before token maintenance check");
+        rig.pump();
+        const int refreshes = rig.server.refreshes;
+        rig.worker.step(rig.now_ms + 100, 1792760000 + 3570);
+        rig.service.tick(16);
+        expect(rig.server.refreshes == refreshes + 1 && rig.realtime.token == rig.server.access,
+               "quiet realtime renews its JWT before expiry even with polling disabled");
+    }
+
+    {
+        Rig rig({}, true);
+        rig.sign_in();
+        expect(rig.service.unlock_keys(passphrase), "unlock for polling-off recovery");
+        rig.pump();
+        rig.realtime.update = {true, true};
+        rig.pump();
+        expect(rig.service.set_sync_settings({false, 60}), "disable scheduled polling for recovery");
+        rig.pump();
+        rig.server.network_down = true;
+        rig.realtime.update.refresh_required = true;
+        rig.pump();
+        expect(rig.service.snapshot().connection == AoratonConnectionState::Reconnecting, "network failure is visible");
+        rig.server.network_down = false;
+        rig.server.add(kAlpha, "u-maria", "Maria", "DEMO recovered while periodic checks are off");
+        rig.advance(AoratonAccountWorker::kRetryIntervalMs);
+        expect(rig.service.snapshot().connection == AoratonConnectionState::Connected && rig.notifications() == 1 && rig.realtime.enabled,
+               "connection recovery and backfill continue even when periodic polling is off");
+    }
+
+    {
+        Rig rig({}, true);
+        rig.sign_in();
+        expect(rig.realtime.enabled && rig.realtime.rooms.size() == 3 && rig.realtime.token == rig.server.access,
+               "realtime configured from authenticated membership and current JWT");
+        expect(!rig.service.snapshot().realtime_active, "unacknowledged socket cannot claim realtime");
+        expect(rig.service.unlock_keys(passphrase), "unlock for realtime");
+        rig.pump();
+        rig.server.add(kAlpha, "u-maria", "Maria", "DEMO realtime");
+        rig.realtime.update = {true, true};
+        rig.advance(100);
+        expect(rig.service.snapshot().realtime_active && rig.notifications() == 1,
+               "new message and notification arrive before the ten-second timer");
+        rig.realtime.update.refresh_required = true;
+        rig.pump();
+        expect(rig.notifications() == 1, "duplicate invalidation cannot duplicate notifications");
+        rig.realtime.update.active = false;
+        rig.pump();
+        expect(!rig.service.snapshot().realtime_active, "socket loss accurately displays polling fallback");
+        rig.server.add(kAlpha, "u-maria", "Maria", "DEMO during disconnect");
+        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        expect(rig.notifications() == 2, "fallback fetches missed messages");
+        rig.server.add(kAlpha, "u-maria", "Maria", "DEMO reconnect backfill");
+        rig.realtime.update = {true, true};
+        rig.advance(100);
+        expect(rig.notifications() == 3, "rejoining backfills without waiting for polling");
+        rig.server.access_expired = true;
+        rig.realtime.update.refresh_required = true;
+        rig.pump();
+        expect(rig.realtime.token == rig.server.access && rig.server.refreshes == 1,
+               "REST auth rotation updates the realtime JWT");
+        expect(rig.service.unpair(), "sign out queued");
+        rig.pump();
+        expect(!rig.realtime.enabled && rig.realtime.token.empty() && !rig.service.snapshot().realtime_active,
+               "sign-out stops subscriptions and erases the adapter token");
+    }
 
     // sign_in_happy_path, rooms_overview_and_locked_room, unlock_vault_then_rooms_unlocked
     {

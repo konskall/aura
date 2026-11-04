@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="el">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self' file:; style-src 'self' file:; img-src 'self' file: data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>AURA</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="../../../shared/localization/previews/halo-motion.js"></script>
+  <script defer src="motion.js"></script>
+  <script defer src="preview.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="masthead">
+      <a class="brand" href="#top" aria-label="AURA"><span class="brand-ring" aria-hidden="true"></span>AURA</a>
+      <span class="edition" data-copy="eyebrow"></span>
+      <button id="language" class="quiet" type="button"></button>
+    </header>
+    <main id="top">
+      <section class="intro">
+        <div><h1 data-copy="heading"></h1><p data-copy="intro"></p></div>
+        <span class="demo-badge" data-copy="demo"></span>
+      </section>
+      <section class="transport">
+        <div class="state-tabs" id="states" role="group"></div>
+        <div class="playback">
+          <div class="playback-buttons"><button type="button" id="cycle" aria-pressed="true"><span class="cycle-symbol" aria-hidden="true">↻</span><span data-copy="cycle"></span></button><button type="button" id="pause" class="quiet"></button></div>
+          <label class="voice-control"><span data-copy="voice"></span><input id="voice" type="range" min="0" max="100" value="65"><output for="voice" id="voice-value">65%</output></label>
+        </div>
+        <div class="journey-track" aria-hidden="true"><span id="journey-progress"></span></div>
+      </section>
+      <p class="state-caption" id="state-caption" aria-live="polite"></p>
+      <section id="concepts" class="concept-grid"></section>
+      <div id="preference" class="preference" hidden aria-live="polite"><span class="preference-dot" aria-hidden="true"></span><div><strong id="preference-name"></strong><p data-copy="selectionHint"></p></div></div>
+    </main>
+    <footer><p data-copy="footer"></p><span data-copy="local"></span></footer>
+  </div>
+  <dialog id="focus-dialog">
+    <div class="focus-top"><button type="button" id="close-focus" class="quiet"><span aria-hidden="true">←</span> <span data-copy="back"></span></button><span data-copy="frame"></span></div>
+    <div class="focus-layout">
+      <div class="device" id="device"><div class="device-top"><span>AURA</span><span class="demo-badge" data-copy="demo"></span></div><canvas id="focus-canvas" width="480" height="480" role="img"></canvas><div class="device-caption"><span id="device-state"></span><p id="device-line"></p></div></div>
+      <div class="focus-description"><span class="concept-number" id="focus-number"></span><p class="material" id="focus-material"></p><h2 id="focus-name"></h2><p id="focus-detail"></p><div class="focus-states" id="focus-states" role="group"></div><div class="focus-playback"><button type="button" id="focus-cycle" class="quiet" data-copy="cycle"></button><button type="button" id="focus-pause" class="quiet"></button></div><button type="button" id="focus-choose" class="primary"></button><div class="focus-navigation"><button type="button" id="previous-concept" class="quiet">←</button><button type="button" id="next-concept" class="quiet">→</button></div></div>
+    </div>
+  </dialog>
+</body>
+</html>

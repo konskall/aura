@@ -16,7 +16,7 @@ are reserved for the assistant's states.
 | Pill button | 80 px high; bottom action row at y=380 (one 432 px or two 208 px pills) |
 | Chip | 64 px pill with icon, 28 px value and 22 px detail (Home weather glance) |
 | Apps | 3×2 grid of 104 px tinted circles with 22 px labels; the whole 144×164 cell is the target |
-| Presence | 176 px Mercury orb centred at (240,260) inside a 96 px-radius halo ring; same position on Home and in every assistant state |
+| Presence | 224 px Synapse centred at (240,260): centred reactor, eight symmetric kinetic paths, wavefronts and resonance; same position on Home and in every assistant state |
 | Keyboard | full width, 4 rows of 55–68 px keys, 28 px legends, pop-overs |
 
 Status is shown by exception. Home carries Wi-Fi (also the shortcut to Wi-Fi settings), Bluetooth, the simulator-only

@@ -38,7 +38,14 @@ std::int64_t Esp32Companion::now_minute() const {
 }
 
 void Esp32Companion::start() {
+    transfer_.initialize();
     const bool storage_mounted = store_.mount();
+    if (!storage_mounted) {
+        PhotoResult unavailable; unavailable.error = PhotoError::Storage;
+        photo_mailbox_.publish(std::move(unavailable));
+    }
+    parse_aoraton_sync_settings(store_.read("aoraton-sync.txt"), aoraton_sync_);
+    saved_aoraton_sync_text_ = serialize_aoraton_sync_settings(aoraton_sync_);
     if (const auto data = store_.read("clock.txt"); !data.empty()) clock_.restore(data);
     if (const auto data = store_.read("notes.txt"); !data.empty()) notes_.restore(data);
     if (const auto data = store_.read("organizer.txt"); !data.empty()) organizer_.restore(data);
@@ -69,7 +76,7 @@ void Esp32Companion::start() {
         storage_jobs_ = xQueueCreate(8, sizeof(StoreJob*));
         storage_results_ = xQueueCreate(8, sizeof(StoreJob*));
         if (!storage_jobs_ || !storage_results_ ||
-            xTaskCreate(storage_task_entry, "aura_store", 6144, this, 3, &storage_task_handle_) != pdPASS) {
+            xTaskCreate(storage_task_entry, "aura_store", 16384, this, 3, &storage_task_handle_) != pdPASS) {
             ESP_LOGE(kTag, "storage worker unavailable; persistent writes and voice notes disabled");
             if (storage_jobs_) vQueueDelete(storage_jobs_);
             if (storage_results_) vQueueDelete(storage_results_);
@@ -107,7 +114,23 @@ void Esp32Companion::start() {
     gpio_config(&button);
 }
 
-void Esp32Companion::install(AuraUiCallbacks& callbacks) {
+void Esp32Companion::install(AuraUiCallbacks& callbacks, IAoratonService* aoraton) {
+    callbacks.on_transfer_start = [this] { return transfer_.start(); };
+    callbacks.on_transfer_stop = [this] { transfer_.stop(); };
+    callbacks.on_photos_refresh = [this] { if (storage_jobs_ && storage_accepting_) photos_.refresh(); };
+    callbacks.on_photo_select = [this](std::size_t index) { return storage_jobs_ && storage_accepting_ && photos_.select(index); };
+    callbacks.on_photo_advance = [this](int direction) { photos_.advance(direction); };
+    callbacks.on_photo_play = [this](bool playing) { photos_.set_playing(playing); };
+    callbacks.on_photo_interval = [this](unsigned seconds) { return storage_jobs_ && storage_accepting_ && photos_.set_interval(seconds); };
+    callbacks.on_photo_ambient = [this](bool enabled) { return storage_jobs_ && storage_accepting_ && photos_.set_ambient(enabled); };
+    callbacks.on_photo_delete = [this](const std::string& name) { return storage_jobs_ && storage_accepting_ && photos_.erase(name); };
+    aoraton_ = aoraton;
+    if (aoraton_) aoraton_->set_sync_settings(aoraton_sync_);
+    callbacks.on_aoraton_sync_changed = [this](const AoratonSyncSettings& settings) {
+        if (!aoraton_ || !storage_jobs_ || !aoraton_sync_settings_valid(settings) || !aoraton_->set_sync_settings(settings)) return false;
+        aoraton_sync_ = settings;
+        return true;
+    };
     callbacks.on_language_changed = [this](InterfaceLanguage language) {
         language_ = language;
     };
@@ -277,6 +300,22 @@ void Esp32Companion::finish_note() {
 }
 
 void Esp32Companion::poll(std::uint32_t elapsed_ms) {
+    transfer_.poll();
+    const auto transfer_state = transfer_.session().snapshot();
+    if (transfer_state.photos_revision != transfer_photo_revision_) {
+        transfer_photo_revision_ = transfer_state.photos_revision; transfer_photos_pending_ = true;
+    }
+    if (transfer_state.removals_revision != transfer_removal_revision_) {
+        transfer_removal_revision_ = transfer_state.removals_revision; transfer_removals_pending_ = true;
+    }
+    if (transfer_photos_pending_ && active_ui_ && (active_ui_->view() != UiView::PhotoViewer || transfer_removals_pending_) && !photos_.snapshot().scanning) {
+        const bool refreshed = transfer_removals_pending_ ? photos_.external_removal() : photos_.refresh();
+        if (refreshed) {
+            if (transfer_removals_pending_ && (active_ui_->view() == UiView::PhotoViewer || active_ui_->view() == UiView::PhotoSettings || active_ui_->view() == UiView::PhotoDelete)) active_ui_->show(UiView::Photos);
+            transfer_photos_pending_ = transfer_removals_pending_ = false;
+        }
+    }
+    photos_.poll(elapsed_ms, photos_.snapshot().playing);
     const auto now = now_ms();
     poll_storage_results();
     clock_.tick(elapsed_ms);
@@ -342,7 +381,9 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
 
     const bool busy = clock_.snapshot().alert || recording_note_ || phone_.snapshot().incoming_call ||
                       audio_.diagnostics().state == AudioState::Playing ||
-                      ota_.snapshot().state == UpdateState::Downloading;
+                      ota_.snapshot().state == UpdateState::Downloading || photos_.snapshot().playing ||
+                      transfer_state.state == TransferState::Receiving ||
+                      (active_ui_ && active_ui_->view() == UiView::FileTransfer && (transfer_state.state == TransferState::Ready || transfer_state.state == TransferState::Starting));
     display_.hold_awake(busy, now);
     display_.tick(now);
     const int brightness = display_.snapshot().brightness_percent;
@@ -388,9 +429,13 @@ void Esp32Companion::storage_task_entry(void* context) {
 }
 
 void Esp32Companion::storage_task() {
+    photo_worker_.initialize();
     for (;;) {
+        storage_busy_ = true;
+        photo_worker_.step();
+        storage_busy_ = false;
         StoreJob* job = nullptr;
-        if (xQueueReceive(storage_jobs_, &job, portMAX_DELAY) != pdTRUE || !job) continue;
+        if (xQueueReceive(storage_jobs_, &job, pdMS_TO_TICKS(25)) != pdTRUE || !job) continue;
         storage_busy_ = true;
         switch (job->kind) {
             case StoreJobKind::Clock:
@@ -400,6 +445,7 @@ void Esp32Companion::storage_task() {
             case StoreJobKind::Display:
             case StoreJobKind::Language:
             case StoreJobKind::Layout:
+            case StoreJobKind::AoratonSync:
                 job->success = store_.write(job->name.c_str(), job->text);
                 break;
             case StoreJobKind::Voice:
@@ -463,6 +509,10 @@ void Esp32Companion::poll_storage_results() {
                 if (job->success) saved_layout_text_ = job->text;
                 else saved_layout_sequence_ = 0;
                 break;
+            case StoreJobKind::AoratonSync:
+                aoraton_sync_save_pending_ = false;
+                if (job->success) saved_aoraton_sync_text_ = job->text;
+                break;
             case StoreJobKind::Voice: {
                 std::uint32_t id = 0;
                 if (job->success && notes_.add_voice(job->name, job->duration_ms, job->minute, &id) == NoteResult::Ok) {
@@ -507,6 +557,11 @@ void Esp32Companion::save() {
         if (enqueue(job)) pending = true;
     };
 
+    if (!aoraton_sync_save_pending_) {
+        auto data = serialize_aoraton_sync_settings(aoraton_sync_);
+        if (data != saved_aoraton_sync_text_)
+            queue_text(StoreJobKind::AoratonSync, "aoraton-sync.txt", std::move(data), 0, aoraton_sync_save_pending_);
+    }
     if (!clock_save_pending_ && clock_.snapshot().sequence != saved_clock_) {
         const auto sequence = clock_.snapshot().sequence;
         auto data = clock_.serialize();
@@ -566,11 +621,14 @@ void Esp32Companion::save() {
 }
 
 void Esp32Companion::apply(AuraUi& ui) {
+    active_ui_ = &ui;
     if (capabilities_dirty_) {
         capabilities_dirty_ = false;
         ui.set_capabilities(capabilities_);
     }
     ui.apply_display(display_.snapshot());
+    ui.apply_photos(photos_.snapshot());
+    ui.apply_transfer(transfer_.session().snapshot());
     ui.apply_clock(clock_.snapshot());
     ui.apply_notes(notes_.snapshot());
     ui.apply_organizer(organizer_.snapshot());
@@ -603,13 +661,14 @@ void Esp32Companion::confirm_image_after(std::uint32_t uptime_ms) {
 void Esp32Companion::run_deferred_system_action() {
     const int raw = pending_system_action_.exchange(-1);
     if (raw < 0) return;
+    transfer_.shutdown();
     const auto action = static_cast<SystemAction>(raw);
     storage_accepting_ = false;
     bool storage_flushed = true;
     if (storage_jobs_) {
         storage_flushed = false;
-        for (int attempt = 0; attempt < 200; ++attempt) {
-            if (uxQueueMessagesWaiting(storage_jobs_) == 0 && !storage_busy_.load()) {
+        for (int attempt = 0; attempt < 1000; ++attempt) {
+            if (uxQueueMessagesWaiting(storage_jobs_) == 0 && !photo_mailbox_.pending() && !storage_busy_.load()) {
                 storage_flushed = true;
                 break;
             }

@@ -9,13 +9,16 @@
 #include "aura/device_status.hpp"
 #include "aura/display_power.hpp"
 #include "aura/fuel_prices.hpp"
+#include "aura/file_transfer.hpp"
 #include "aura/language.hpp"
 #include "aura/notes.hpp"
 #include "aura/organizer.hpp"
 #include "aura/ota_update.hpp"
 #include "aura/phone_link.hpp"
+#include "aura/photos.hpp"
 #include "aura/radio.hpp"
 #include "aura/sounds.hpp"
+#include "aura/text_util.hpp"
 #include "aura/translation.hpp"
 #include "aura/voice.hpp"
 #include "aura/weather.hpp"
@@ -85,9 +88,18 @@ enum class UiView {
     AoratonUnlock,
     // System: device information and power
     System,
+    Credits,
     SystemConfirm,
     PowerOff,
     Boot,
+    AoratonMessage,
+    AoratonAssist,
+    AoratonSyncSettings,
+    Photos,
+    PhotoViewer,
+    PhotoSettings,
+    FileTransfer,
+    PhotoDelete,
 };
 
 // Power actions from Settings > System. PowerOn comes from a long press on the
@@ -116,10 +128,24 @@ struct AssistantExtras {
     std::string speech_output_provider;
     bool web_search_ready{false};
     bool spoken_reply{false};  // the reply is being or was spoken
+    bool speaking{false};      // speech is being prepared or played; a read-aloud tap stops it
     std::uint64_t sequence{0};
 };
 
 struct AuraUiCallbacks {
+    std::function<bool()> on_transfer_start;
+    std::function<void()> on_transfer_stop;
+    std::function<void()> on_transfer_browser;
+    std::function<void()> on_photos_refresh;
+    std::function<bool(std::size_t)> on_photo_select;
+    std::function<void(int)> on_photo_advance;
+    std::function<void(bool)> on_photo_play;
+    std::function<bool(unsigned)> on_photo_interval;
+    std::function<bool(bool)> on_photo_ambient;
+    std::function<bool(const std::string&)> on_photo_delete;
+    // Platform timezone conversion for the timestamp's date (including DST),
+    // never the offset of today's clock applied to all historical messages.
+    std::function<std::optional<LocalDateTime>(std::int64_t unix_seconds)> on_local_time;
     std::function<void()> on_ask;
     std::function<void()> on_end_listening;
     std::function<void()> on_cancel;
@@ -146,6 +172,10 @@ struct AuraUiCallbacks {
     // link is read by the platform (the PC clipboard) and never shown.
     std::function<bool(const std::string& passphrase)> on_aoraton_unlock;
     std::function<bool()> on_aoraton_paste_invite;
+    // Explicit per-message consent, after displaying the exact selected text.
+    // The platform treats this as a read-only, isolated assistant turn.
+    std::function<void(const std::string& text)> on_aoraton_assist;
+    std::function<bool(const AoratonSyncSettings& settings)> on_aoraton_sync_changed;
     std::function<void()> on_weather_open;
     std::function<void()> on_weather_refresh;
     std::function<void(WeatherRefreshInterval interval)> on_weather_refresh_interval;
@@ -165,6 +195,7 @@ struct AuraUiCallbacks {
     std::function<void()> on_action_decline;
     std::function<void()> on_conversation_clear;
     std::function<void(const std::string& text, const std::string& language)> on_speak;
+    std::function<void()> on_speak_stop;
     std::function<bool(std::uint32_t seconds, const std::string& label)> on_timer_start;
     std::function<void(std::uint32_t id, bool paused)> on_timer_pause;
     std::function<void(std::uint32_t id)> on_timer_cancel;
@@ -291,6 +322,8 @@ public:
     std::size_t mercury_buffer_bytes() const noexcept;
     bool reduced_motion() const noexcept;
     UiView view() const noexcept;
+    void apply_photos(const PhotoSnapshot& snapshot);
+    void apply_transfer(const TransferSnapshot& snapshot);
     lv_obj_t* root() const noexcept;
 
 private:

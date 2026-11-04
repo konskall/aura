@@ -52,7 +52,7 @@ The fallback Open-Meteo request keeps current temperature, apparent temperature,
 
 ## Premium UI and motion
 
-The ready route uses a fixed device header, 64 px IBM Plex numeric temperature, condition/day-night hero scene, horizontally scrollable metric and forecast cards, and a tappable forecast detail card. Clear, cloudy, rain, storm, snow, fog, wind and night render from bounded LVGL objects allocated during route construction. The 33 ms UI-thread tick only changes positions, opacity, scale and rotation; it performs no allocation or provider work. Reduced-motion and deterministic capture modes stop weather motion. The weather renderer is independent from the Mercury assistant renderer.
+The ready route uses a fixed device header, 64 px IBM Plex numeric temperature, condition/day-night hero scene, horizontally scrollable metric and forecast cards, and a tappable forecast detail card. Clear, cloudy, rain, storm, snow, fog, wind and night render from bounded LVGL objects allocated during route construction. The 33 ms UI-thread tick only changes positions, opacity, scale and rotation; it performs no allocation or provider work. Reduced-motion and deterministic capture modes stop weather motion. The weather renderer is independent from the Synapse assistant renderer.
 
 ## Firmware boundary
 

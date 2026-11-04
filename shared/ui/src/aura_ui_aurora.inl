@@ -47,8 +47,7 @@
         if (status.clock_valid) {
             home_clock = label(content, "", 30, 34, 330, ui::font_display(), ui::tokens::text);
         } else {
-            auto* brand = label(content, t().aura_name, 30, 40, 330, ui::font_brand(), ui::tokens::text);
-            lv_obj_set_style_text_letter_space(brand, 10, 0);
+            aura_wordmark(content, 30, 42);
         }
         home_date = line(content, "", 32, 34 + lv_font_get_line_height(ui::font_display()) + 4, 330, ui::font_body(),
                          ui::tokens::text_secondary);
@@ -64,16 +63,16 @@
         create_presence(ui::MercuryState::Idle, ui::tokens::indigo);
         auto* talk = lv_button_create(content);
         ui::reset(talk);
-        lv_obj_set_size(talk, ui::tokens::MERCURY_RECT.width, ui::tokens::MERCURY_RECT.height);
-        lv_obj_set_pos(talk, kHaloCenterX - ui::tokens::MERCURY_RECT.width / 2,
-                       hero_y() - ui::tokens::MERCURY_RECT.height / 2);
+        lv_obj_set_size(talk, ui::tokens::COMPACT_PRESENCE_TARGET, ui::tokens::COMPACT_PRESENCE_TARGET);
+        lv_obj_set_pos(talk, kHaloCenterX - ui::tokens::COMPACT_PRESENCE_TARGET / 2,
+                       hero_y() - ui::tokens::COMPACT_PRESENCE_TARGET / 2);
         lv_obj_set_style_radius(talk, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(talk, ui::color(ui::tokens::text), LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(talk, LV_OPA_10, LV_STATE_PRESSED);
         lv_obj_set_clickable(talk, static_cast<bool>(callbacks.on_ask));
         lv_obj_add_event_cb(talk, ask_event, LV_EVENT_CLICKED, this);
         line(content, callbacks.on_ask ? t().home_hint : t().provider_unavailable, kGutter,
-             hero_y() + ui::tokens::MERCURY_RECT.height / 2 + 6, kWidth, ui::font_body(), ui::tokens::text_secondary,
+             hero_y() + ui::tokens::COMPACT_PRESENCE_TARGET / 2 + 6, kWidth, ui::font_body(), ui::tokens::text_secondary,
              LV_TEXT_ALIGN_CENTER);
 
         // The tiles: one or two side by side; DEMO data still says so first.
@@ -145,7 +144,7 @@
         const bool speak = can_speak_answer();
         pill(content, t().ask_again, ui::ButtonTone::Primary, kGutter, kActionY, speak ? kWidth - 96 : kWidth, ask_event);
         if (speak) {
-            round_button(content, ui::tokens::display_width - kGutter - 80, kActionY, 80, ui::IconRole::VolumeUp,
+            round_button(content, ui::tokens::display_width - kGutter - 80, kActionY, 80, read_aloud_icon(),
                          ui::tokens::text, speak_answer_event, true);
         }
     }

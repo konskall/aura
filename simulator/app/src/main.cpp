@@ -5,9 +5,13 @@
 #include "aura/aura_appearance.hpp"
 #include "aura/aura_theme.hpp"
 #include "aura/aura_ui.hpp"
+#include "aura/aura_icons.hpp"
+#include "aura_brand_assets.hpp"
 #include "aura/bridge_speech_service.hpp"
 #include "aura/companion_runtime.hpp"
 #include "aura/companion_strings.hpp"
+#include "aura/photo_strings.hpp"
+#include "aura/transfer_strings.hpp"
 #include "aura/control_events.hpp"
 #include "aura/device_status.hpp"
 #include "aura/aoraton_account_transport.hpp"
@@ -30,6 +34,7 @@
 #include "aura/windows_fuel_service.hpp"
 #include "aura/windows_radio_service.hpp"
 #include "aura/windows_wifi_service.hpp"
+#include "aura/windows_local_time.hpp"
 
 #include <algorithm>
 #include <array>
@@ -505,6 +510,8 @@ int main(int argc, char** argv) {
         int audio_pause{0};
         int audio_stop{0};
         int audio_mute{0};
+        int speak{0};
+        int speak_stop{0};
         int notifications_clear{0};
         int aoraton_room{0};
         int aoraton_prepare{0};
@@ -915,14 +922,16 @@ int main(int argc, char** argv) {
         controller.dispatch({aura::EventType::Cancel});
     };
     std::function<aura::TurnRequest(std::string)> turn_request_hook;
+    std::function<aura::TurnRequest(std::string)> message_request_hook;
+    bool private_message_turn = false;
     std::function<bool(const std::string&)> offline_command_hook;
     std::function<void(const std::string&)> local_answer_hook;
     std::function<void()> end_voice_turn_hook;
-    auto start_turn = [&](std::string prompt) {
-        auto calendar_intent = aura::analyze_greek_calendar_intent(prompt);
+    auto start_turn = [&](std::string prompt, bool message_help = false) {
+        auto calendar_intent = message_help ? aura::GreekCalendarIntent::None : aura::analyze_greek_calendar_intent(prompt);
+        std::optional<aura::NamedayMatch> nameday_match;
         // "Πότε γιορτάζει ο Γιώργος;" is answered here only for a listed name;
         // the assistant answers about anybody else.
-        std::optional<aura::NamedayMatch> nameday_match;
         if (calendar_intent == aura::GreekCalendarIntent::NamedayOf) {
             const auto& status = device_status.snapshot();
             if (status.date_valid) nameday_match = aura::greek_nameday_of(prompt, status.year);
@@ -934,8 +943,8 @@ int main(int argc, char** argv) {
         const auto radio_intent = offline_command ? aura::RadioIntent{} : aura::analyze_radio_intent(prompt);
         const auto* spoken_station = radio_intent.kind == aura::RadioIntentKind::PlayStation ?
             radio_model.find_spoken(prompt) : nullptr;
-        if (radio_intent.kind == aura::RadioIntentKind::Stop || spoken_station ||
-            (radio_intent.explicit_radio && radio_intent.kind != aura::RadioIntentKind::None)) {
+        if (!message_help && (radio_intent.kind == aura::RadioIntentKind::Stop || spoken_station ||
+            (radio_intent.explicit_radio && radio_intent.kind != aura::RadioIntentKind::None))) {
             if (aura::is_turn_active(controller.snapshot().state)) controller.dispatch({aura::EventType::Cancel});
             if (end_voice_turn_hook) end_voice_turn_hook();
             ui.show(aura::UiView::Radio);
@@ -953,7 +962,7 @@ int main(int argc, char** argv) {
         const auto weather_intent = aura::analyze_weather_intent(prompt);
         const bool answer_from_forecast = weather_intent.kind == aura::WeatherIntentKind::ShowSaved &&
                                           weather_model.snapshot().has_data;
-        if (weather_intent.kind != aura::WeatherIntentKind::None && !answer_from_forecast) {
+        if (!message_help && weather_intent.kind != aura::WeatherIntentKind::None && !answer_from_forecast) {
             // A weather request is answered by the Weather screen; close the
             // voice turn so the loop below does not re-submit a transcript.
             if (aura::is_turn_active(controller.snapshot().state)) controller.dispatch({aura::EventType::Cancel});
@@ -996,9 +1005,10 @@ int main(int argc, char** argv) {
         }
         if (prompt.empty()) prompt = text().capture_short_prompt;
         const bool started = controller.dispatch({aura::EventType::TurnStarted, prompt});
+        private_message_turn = message_help;
         apply();
         if (!started) return;
-        if (offline_command_hook && offline_command_hook(prompt)) {
+        if (!message_help && offline_command_hook && offline_command_hook(prompt)) {
             apply();
             return;
         }
@@ -1054,7 +1064,8 @@ int main(int argc, char** argv) {
             return;
         }
         aura::TurnRequest request;
-        if (turn_request_hook) request = turn_request_hook(std::move(prompt));
+        if (message_help && message_request_hook) request = message_request_hook(std::move(prompt));
+        else if (turn_request_hook) request = turn_request_hook(std::move(prompt));
         else request.prompt = std::move(prompt);
         pending_stream = std::make_shared<aura::AssistantStreamMailbox>();
         pending_stream_sequence = 0;
@@ -1138,6 +1149,7 @@ int main(int argc, char** argv) {
         }
     };
     turn_request_hook = [&companion](std::string prompt) { return companion.turn_request(std::move(prompt)); };
+    message_request_hook = [&companion](std::string prompt) { return companion.turn_request(std::move(prompt), true); };
     offline_command_hook = [&companion](const std::string& prompt) {
         return companion.handle_offline_command(prompt);
     };
@@ -1147,6 +1159,13 @@ int main(int argc, char** argv) {
     cancel_voice_hook = [&companion] { companion.cancel_voice(); };
 
     aura::AuraUiCallbacks ui_callbacks;
+    ui_callbacks.on_local_time = [](std::int64_t timestamp) { return aura::simulator::windows_local_time(timestamp); };
+    ui_callbacks.on_aoraton_assist = [&](const std::string& message) {
+        if (message.empty() || message.size() > aoraton.snapshot().max_message_bytes) return;
+        if (aura::is_turn_active(controller.snapshot().state)) cancel();
+        companion.end_voice_turn();
+        start_turn(message, true);
+    };
     ui_callbacks.on_ask = [&] {
         ++interaction_counts.ask;
         // A new question interrupts a spoken answer instead of talking over it.
@@ -1173,7 +1192,7 @@ int main(int argc, char** argv) {
         // "Try again" asks the same question again rather than going home.
         const std::string prompt = controller.snapshot().user_text;
         controller.dispatch({aura::EventType::Retry});
-        if (!prompt.empty()) start_turn(prompt);
+        if (!prompt.empty()) start_turn(prompt, private_message_turn);
     };
     ui_callbacks.on_home = [&] { ++interaction_counts.home; controller.dispatch({aura::EventType::Reset}); };
     ui_callbacks.on_notifications_clear = [&] {
@@ -1396,6 +1415,18 @@ int main(int argc, char** argv) {
     };
     companion.install(ui_callbacks);
     {
+        auto speak = ui_callbacks.on_speak;
+        ui_callbacks.on_speak = [&interaction_counts, speak](const std::string& text, const std::string& language) {
+            ++interaction_counts.speak;
+            if (speak) speak(text, language);
+        };
+        auto speak_stop = ui_callbacks.on_speak_stop;
+        ui_callbacks.on_speak_stop = [&interaction_counts, speak_stop] {
+            ++interaction_counts.speak_stop;
+            if (speak_stop) speak_stop();
+        };
+    }
+    {
         auto preview = ui_callbacks.on_sound_preview;
         ui_callbacks.on_sound_preview = [&interaction_counts, preview] {
             ++interaction_counts.sound_preview;
@@ -1501,6 +1532,7 @@ int main(int argc, char** argv) {
         controller.dispatch({aura::EventType::BatteryChanged, {}, 92});
         device_status.set_clock(18, 24, aura::StatusOrigin::Simulated);
         device_status.set_date(2026, 10, 22, 4, aura::StatusOrigin::Simulated);
+        if (capture_scenario == "brand-home") device_status.set_clock_unavailable();
         device_status.set_power(92, false, aura::StatusOrigin::Simulated);
         // Evidence never shows this desktop's saved city or cached forecast;
         // Home captures use labelled DEMO weather instead.
@@ -1533,7 +1565,7 @@ int main(int argc, char** argv) {
             ui.apply_status(device_status.snapshot());
             ui.show(aura::UiView::Home);
         }
-        else if (capture_scenario == "home") ui.show(aura::UiView::Home);
+        else if (capture_scenario == "home" || capture_scenario == "brand-home") ui.show(aura::UiView::Home);
         else if (capture_scenario == "ambient") {
             // The ambient screen is the always-on clock (the Home orb is "home").
             companion.capture("always-on");
@@ -1587,6 +1619,7 @@ int main(int argc, char** argv) {
         else if (capture_scenario == "appearance") ui.show(aura::UiView::AppearanceSettings);
         else if (capture_scenario == "diagnostics") ui.show(aura::UiView::Diagnostics);
         else if (capture_scenario == "system") ui.show(aura::UiView::System);
+        else if (capture_scenario == "credits") ui.show(aura::UiView::Credits);
         else if (capture_scenario == "system-restart") ui.show_system_confirmation(aura::SystemAction::Restart);
         else if (capture_scenario == "system-power-off") ui.show_system_confirmation(aura::SystemAction::PowerOff);
         else if (capture_scenario == "system-factory-reset") {
@@ -1640,7 +1673,13 @@ int main(int argc, char** argv) {
             snapshot.account_label = english_capture ? "DEMO account" : "DEMO λογαριασμός";
             snapshot.key_state = aura::AoratonKeyState::Ready;
             snapshot.key_count = 3;
+            snapshot.realtime_active = true;
             aura::UiView view = aura::UiView::AoratonPair;
+            if (capture_scenario == "aoraton-account-sync" || capture_scenario == "aoraton-account-sync-off") {
+                snapshot.runtime_mode = aura::AoratonRuntimeMode::IntegrationTest;
+                snapshot.sync_settings = {capture_scenario != "aoraton-account-sync-off", 60};
+                view = aura::UiView::AoratonSyncSettings;
+            }
             if (capture_scenario == "aoraton-account-signin") {
                 snapshot.pairing = aura::AoratonPairingState::NotPaired;
                 snapshot.connection = aura::AoratonConnectionState::Disconnected;
@@ -1709,10 +1748,51 @@ int main(int argc, char** argv) {
             aoraton.prepare_send("demo-family", text().capture_message);
             ui.apply_aoraton(aoraton.snapshot());
             ui.show(aura::UiView::AoratonConfirm);
-        } else if (capture_scenario == "aoraton-compose") {
+        } else if (capture_scenario == "aoraton-message" || capture_scenario == "aoraton-assist" ||
+                   capture_scenario == "aoraton-message-time") {
+            aoraton.select_room("demo-family");
+            auto state = aoraton.snapshot();
+            if (capture_scenario == "aoraton-message-time") state.messages.front().received_at = "2026-10-31T07:05:00Z";
+            state.messages.front().local_display_text += "\n\n" + std::string(text().capture_message);
+            ++state.sequence;
+            aoraton_capture_override = state;
+            ui.apply_aoraton(state);
+            ui.show(aura::UiView::AoratonConversation);
+            std::function<lv_obj_t*(lv_obj_t*, const char*)> find_label = [&](lv_obj_t* root, const char* value) -> lv_obj_t* {
+                if (lv_obj_check_type(root, &lv_label_class) && std::strcmp(lv_label_get_text(root), value) == 0) return root;
+                for (std::uint32_t i = 0; i < lv_obj_get_child_count(root); ++i) {
+                    if (auto* found = find_label(lv_obj_get_child(root, static_cast<std::int32_t>(i)), value)) return found;
+                }
+                return nullptr;
+            };
+            if (auto* body = find_label(ui.root(), state.messages.front().local_display_text.c_str())) {
+                lv_obj_send_event(lv_obj_get_parent(body), LV_EVENT_CLICKED, nullptr);
+            }
+            if (capture_scenario == "aoraton-assist") {
+                ui.tick(100);
+                const auto& strings = ui.language() == aura::InterfaceLanguage::English ?
+                    aura::l10n::companion_en_us() : aura::l10n::companion_el_gr();
+                if (auto* action = find_label(ui.root(), strings.aoraton_ask_aura)) {
+                    lv_obj_send_event(lv_obj_get_parent(action), LV_EVENT_CLICKED, nullptr);
+                }
+            }
+        } else if (capture_scenario == "aoraton-compose" || capture_scenario == "keyboard-variants") {
             aoraton.select_room("demo-family");
             ui.apply_aoraton(aoraton.snapshot());
             ui.show(aura::UiView::AoratonCompose);
+            if (capture_scenario == "keyboard-variants") {
+                std::function<lv_obj_t*(lv_obj_t*)> find_keyboard = [&](lv_obj_t* root) -> lv_obj_t* {
+                    if (lv_obj_check_type(root, &lv_keyboard_class)) return root;
+                    for (std::uint32_t i = 0; i < lv_obj_get_child_count(root); ++i) {
+                        if (auto* found = find_keyboard(lv_obj_get_child(root, static_cast<std::int32_t>(i)))) return found;
+                    }
+                    return nullptr;
+                };
+                if (auto* keyboard = find_keyboard(ui.root())) {
+                    lv_buttonmatrix_set_selected_button(keyboard, 7); // Ι: four accent variants
+                    lv_obj_send_event(keyboard, LV_EVENT_LONG_PRESSED, nullptr);
+                }
+            }
         } else if (capture_scenario == "weather-sunny" || capture_scenario == "weather-cloudy" ||
                    capture_scenario == "weather-rainy" || capture_scenario == "weather-stormy" ||
                    capture_scenario == "weather-snowy" || capture_scenario == "weather-night" ||
@@ -1934,6 +2014,7 @@ int main(int argc, char** argv) {
             aura::UiView::Notifications, aura::UiView::Settings, aura::UiView::Audio,
             aura::UiView::AoratonRooms, aura::UiView::AoratonPair, aura::UiView::AoratonConversation,
             aura::UiView::AoratonCompose, aura::UiView::AoratonConfirm,
+            aura::UiView::AoratonMessage, aura::UiView::AoratonAssist,
             aura::UiView::Weather, aura::UiView::WeatherSettings, aura::UiView::WeatherLocation,
             aura::UiView::Calendar,
             aura::UiView::Battery, aura::UiView::VoiceSettings,
@@ -2025,6 +2106,14 @@ int main(int argc, char** argv) {
             }
             results.push_back({std::move(action), std::move(point), passed, std::move(escaped)});
         };
+        // LVGL's own errors (an image source that is no longer valid, say) count
+        // against the run; each is still printed as before.
+        static int lvgl_errors = 0;
+        lv_log_register_print_cb([](lv_log_level_t level, const char* message) {
+            if (level >= LV_LOG_LEVEL_ERROR) ++lvgl_errors;
+            std::fputs(message, stdout);
+            std::fflush(stdout);
+        });
         auto pump = [&](int iterations = 9) {
             for (int i = 0; i < iterations; ++i) {
                 audio.tick(8);
@@ -2766,9 +2855,7 @@ int main(int argc, char** argv) {
         }
         audio.stop();
 
-        // System: software, diagnostics, then power actions that ask first.
-        // Rows at list y 0 and 96; after the "Power" caption, restart 240,
-        // power off 336, factory reset 432.
+        // System: software, diagnostics, credits, then power actions that ask first.
         auto wait_for_home = [&] {
             for (int round = 0; round < 40 && ui.view() != aura::UiView::Home; ++round) pump(9);
         };
@@ -2781,7 +2868,27 @@ int main(int argc, char** argv) {
         record("system.diagnostics", "row-center", ui.view() == aura::UiView::Diagnostics,
                std::to_string(static_cast<int>(ui.view())));
         reset_to(aura::UiView::System);
-        tap(220, 380);
+        tap(220, settings_row_y(2, 0));
+        const bool credits_opened = ui.view() == aura::UiView::Credits;
+        std::function<bool(lv_obj_t*, const char*)> credits_shows = [&](lv_obj_t* object,
+                                                                        const char* text) -> bool {
+            if (lv_obj_check_type(object, &lv_label_class) &&
+                std::strcmp(lv_label_get_text(object), text) == 0) return true;
+            for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                if (credits_shows(lv_obj_get_child(object, static_cast<int32_t>(index)), text)) return true;
+            }
+            return false;
+        };
+        const auto& credits_el = aura::l10n::companion_el_gr();
+        const bool credits_copy = credits_shows(ui.root(), credits_el.credits_platform_title) &&
+                                  credits_shows(ui.root(), credits_el.credits_icons_body);
+        tap(56, 56);
+        record("system.credits", "row-and-back",
+               credits_opened && credits_copy && ui.view() == aura::UiView::System,
+               std::to_string(static_cast<int>(ui.view())));
+        reset_to(aura::UiView::System);
+        scroll_view_to(120);
+        tap(220, 348);
         const bool restart_asks = ui.view() == aura::UiView::SystemConfirm;
         const int restart_before = interaction_counts.system_action;
         tap(352, 420);
@@ -2797,8 +2904,8 @@ int main(int argc, char** argv) {
             tap(240, settings_row_y(4, 96));
         }
         reset_to(aura::UiView::System);
-        scroll_view_to(120);
-        tap(220, 356);
+        scroll_view_to(216);
+        tap(220, 348);
         const bool power_asks = ui.view() == aura::UiView::SystemConfirm;
         tap(352, 420);
         const bool off = ui.view() == aura::UiView::PowerOff;
@@ -2834,8 +2941,8 @@ int main(int argc, char** argv) {
                power_asks && off && tap_ignored && powering_on && ui.view() == aura::UiView::Home,
                std::to_string(static_cast<int>(ui.view())));
         reset_to(aura::UiView::System);
-        scroll_view_to(120);
-        tap(220, 452);
+        scroll_view_to(216);
+        tap(220, 444);
         const bool reset_asks = ui.view() == aura::UiView::SystemConfirm;
         const int reset_before = interaction_counts.system_action;
         tap(128, 420);
@@ -2880,7 +2987,7 @@ int main(int argc, char** argv) {
                aura::audio_state_name(audio.diagnostics().state));
 
         // Room rows start below the security caption (first row centre y=180).
-        for (const auto& point : row_points(180)) {
+        for (const auto& point : row_points(140)) {
             aoraton.reset_mock();
             ui.apply_aoraton(aoraton.snapshot());
             reset_to(aura::UiView::AoratonRooms);
@@ -2943,6 +3050,79 @@ int main(int argc, char** argv) {
             aoraton_capture_override = snapshot;
             ui.apply_aoraton(snapshot);
         };
+        {
+            // Brand artwork must remain full-color and the whole Google CTA
+            // must fit in both connection routes, regardless of appearance.
+            const auto saved_look = ui.appearance();
+            const auto saved_language = ui.language();
+            std::function<lv_obj_t*(lv_obj_t*, const void*)> brand_in =
+                [&](lv_obj_t* object, const void* source) -> lv_obj_t* {
+                if (lv_obj_is_hidden(object)) return nullptr;
+                if (lv_obj_check_type(object, &lv_image_class) && lv_image_get_src(object) == source) return object;
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    if (auto* found = brand_in(lv_obj_get_child(object, static_cast<std::int32_t>(index)), source)) {
+                        return found;
+                    }
+                }
+                return nullptr;
+            };
+            std::function<lv_obj_t*(lv_obj_t*, const char*)> brand_label =
+                [&](lv_obj_t* object, const char* text) -> lv_obj_t* {
+                if (lv_obj_is_hidden(object)) return nullptr;
+                if (lv_obj_check_type(object, &lv_label_class) && std::strcmp(lv_label_get_text(object), text) == 0) {
+                    return object;
+                }
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    if (auto* found = brand_label(lv_obj_get_child(object, static_cast<std::int32_t>(index)), text)) {
+                        return found;
+                    }
+                }
+                return nullptr;
+            };
+            bool brands_ok = true;
+            std::string brands_detail;
+            for (const auto look : aura::kAppearances) {
+                ui.set_appearance(look);
+                for (const auto language : {aura::InterfaceLanguage::Greek, aura::InterfaceLanguage::English}) {
+                    ui.set_language(language);
+                    const auto& strings = language == aura::InterfaceLanguage::Greek ?
+                        aura::l10n::companion_el_gr() : aura::l10n::companion_en_us();
+                    for (const auto state : {aura::AoratonPairingState::NotPaired,
+                                             aura::AoratonPairingState::ReauthorizationRequired}) {
+                        account_snapshot(state);
+                        for (const auto view : {aura::UiView::AoratonRooms, aura::UiView::AoratonPair}) {
+                            ui.show(view);
+                            lv_obj_update_layout(ui.root());
+                            auto* aoraton_mark = brand_in(ui.root(), &aura_brand_aoraton);
+                            auto* google_mark = brand_in(ui.root(), &aura_brand_google);
+                            auto* title = brand_label(ui.root(), strings.aoraton_sign_in);
+                            auto* button = google_mark ? lv_obj_get_parent(google_mark) : nullptr;
+                            lv_area_t symbol{}, text{}, bounds{};
+                            if (google_mark) lv_obj_get_coords(google_mark, &symbol);
+                            if (title) lv_obj_get_coords(title, &text);
+                            if (button) lv_obj_get_coords(button, &bounds);
+                            const bool colors = aoraton_mark && google_mark &&
+                                lv_obj_get_style_image_recolor_opa(aoraton_mark, LV_PART_MAIN) == LV_OPA_TRANSP &&
+                                lv_obj_get_style_image_recolor_opa(google_mark, LV_PART_MAIN) == LV_OPA_TRANSP &&
+                                lv_color_to_u32(lv_obj_get_style_bg_color(button, LV_PART_MAIN)) % 0x1000000U == 0xFFFFFF;
+                            const bool fits = title && button && lv_obj_get_parent(title) == button &&
+                                symbol.x2 < text.x1 && symbol.x1 >= bounds.x1 + 16 && text.x2 <= bounds.x2 - 16 &&
+                                symbol.y1 >= bounds.y1 && symbol.y2 <= bounds.y2 &&
+                                text.y1 >= bounds.y1 && text.y2 <= bounds.y2;
+                            brands_ok = brands_ok && colors && fits;
+                            if ((!colors || !fits) && brands_detail.size() < 300) {
+                                brands_detail += std::string(aura::appearance_id(look)) + ":" +
+                                    std::to_string(static_cast<int>(view)) + ":" +
+                                    std::to_string(colors) + std::to_string(fits) + " ";
+                            }
+                        }
+                    }
+                }
+            }
+            ui.set_appearance(saved_look);
+            ui.set_language(saved_language);
+            record("aoraton.branding", "four-looks-two-languages", brands_ok, brands_detail);
+        }
         account_snapshot(aura::AoratonPairingState::NotPaired);
         reset_to(aura::UiView::AoratonRooms);
         const int sign_in_before = interaction_counts.aoraton_sign_in;
@@ -2984,7 +3164,8 @@ int main(int argc, char** argv) {
                std::to_string(static_cast<int>(ui.view())));
         reset_to(aura::UiView::AoratonPair);
         const int sign_out_before = interaction_counts.aoraton_sign_out;
-        tap(240, 432);
+        scroll_view_to(128);
+        tap(240, 416);
         record("aoraton.sign_out", "button-center",
                interaction_counts.aoraton_sign_out == sign_out_before + 1 && ui.view() == aura::UiView::AoratonRooms,
                std::to_string(interaction_counts.aoraton_sign_out - sign_out_before));
@@ -4714,6 +4895,58 @@ int main(int argc, char** argv) {
                     }
                     return nullptr;
                 };
+                std::function<lv_obj_t*(lv_obj_t*, const std::string&)> label_containing =
+                    [&](lv_obj_t* object, const std::string& part) -> lv_obj_t* {
+                    const auto count = lv_obj_get_child_count(object);
+                    for (std::uint32_t index = 0; index < count; ++index) {
+                        auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                        if (lv_obj_check_type(child, &lv_label_class) &&
+                            std::string(lv_label_get_text(child)).find(part) != std::string::npos) {
+                            return child;
+                        }
+                        if (auto* found = label_containing(child, part)) return found;
+                    }
+                    return nullptr;
+                };
+                // LVGL ends a cut label's text in dots.
+                const auto ends_in_dots = [](const std::string& text) {
+                    return text.size() >= 3 && text.compare(text.size() - 3, 3, "...") == 0;
+                };
+                const auto areas_meet = [](const lv_area_t& a, const lv_area_t& b) {
+                    return a.x1 <= b.x2 && b.x1 <= a.x2 && a.y1 <= b.y2 && b.y1 <= a.y2;
+                };
+                // Whether `area` (that of `self`) runs into a control other than
+                // `self` and its ancestors.
+                std::function<bool(lv_obj_t*, lv_obj_t*, const lv_area_t&)> runs_into_control =
+                    [&](lv_obj_t* object, lv_obj_t* self, const lv_area_t& area) {
+                    const auto count = lv_obj_get_child_count(object);
+                    for (std::uint32_t index = 0; index < count; ++index) {
+                        auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                        if (child == self || lv_obj_is_hidden(child)) continue;
+                        bool ancestor = false;
+                        for (auto* up = lv_obj_get_parent(self); up && !ancestor; up = lv_obj_get_parent(up)) {
+                            ancestor = up == child;
+                        }
+                        lv_area_t own{};
+                        lv_obj_get_coords(child, &own);
+                        if (!ancestor && lv_obj_is_clickable(child) && !lv_obj_check_type(child, &lv_label_class) &&
+                            areas_meet(own, area)) {
+                            return true;
+                        }
+                        if (runs_into_control(child, self, area)) return true;
+                    }
+                    return false;
+                };
+                std::function<void(lv_obj_t*, std::vector<lv_obj_t*>&)> collect_labels =
+                    [&](lv_obj_t* object, std::vector<lv_obj_t*>& found) {
+                    const auto count = lv_obj_get_child_count(object);
+                    for (std::uint32_t index = 0; index < count; ++index) {
+                        auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                        if (lv_obj_is_hidden(child)) continue;
+                        if (lv_obj_check_type(child, &lv_label_class)) found.push_back(child);
+                        collect_labels(child, found);
+                    }
+                };
 
                 // The kit on real screens: 52 px squircle wells at 15 %, a white
                 // Primary with black text.
@@ -5001,6 +5234,131 @@ int main(int argc, char** argv) {
                     record("graphite.briefing", "timeline", today_ok_graphite, today_detail_graphite);
                 }
 
+                // Home's day and date on every weekday and month, in both languages:
+                // whole, and clear of the clock, Apps and the tiles (Friday 30
+                // October wrapped onto a third line under the tiles).
+                {
+                    const auto saved = device_status.snapshot();
+                    bool date_ok = true;
+                    std::string date_detail;
+                    bool lines_ok = true;
+                    std::string lines_detail;
+                    for (const auto language : languages) {
+                        ui.set_language(language);
+                        const auto& visual = language == aura::InterfaceLanguage::English ? aura::l10n::visual_en_us() :
+                                                                                          aura::l10n::visual_el_gr();
+                        reset_to(aura::UiView::Home);
+                        for (int month = 1; month <= 12; ++month) {
+                            for (int weekday = 0; weekday <= 6; ++weekday) {
+                                device_status.set_date(2026, month, 28, weekday, aura::StatusOrigin::Simulated);
+                                pump(1);
+                                lv_obj_update_layout(ui.root());
+                                auto* hero = label_in_font(view_content(), graphite_fonts.hero);
+                                lv_area_t hero_area{};
+                                if (hero) lv_obj_get_coords(hero, &hero_area);
+                                std::string problem;
+                                for (const char* part : {visual.weekday_names[weekday], visual.month_names[month - 1]}) {
+                                    auto* shown = label_containing(view_content(), part);
+                                    if (!shown) {
+                                        problem += std::string("missing ") + part + ";";
+                                        continue;
+                                    }
+                                    const std::string text = lv_label_get_text(shown);
+                                    lv_area_t area{};
+                                    lv_obj_get_coords(shown, &area);
+                                    if (ends_in_dots(text)) problem += "cut [" + text + "];";
+                                    if (hero && areas_meet(area, hero_area)) problem += "clock [" + text + "];";
+                                    if (runs_into_control(view_content(), shown, area)) problem += "control [" + text + "];";
+                                }
+                                if (!problem.empty() && date_detail.size() < 300) date_detail += problem + " ";
+                                date_ok = date_ok && problem.empty();
+                                // As in the reference: the weekday alone, and under it the
+                                // day and month, one line each («Παρασκευή» / «28 Φεβρουαρίου»).
+                                auto* day_line = label_containing(view_content(), visual.weekday_names[weekday]);
+                                auto* date_line = label_containing(view_content(), visual.month_names[month - 1]);
+                                const auto one_line = [&](lv_obj_t* label) {
+                                    return lv_obj_get_height(label) <= lv_font_get_line_height(font_of(label)) + 1;
+                                };
+                                const std::string expected_date = "28 " + std::string(visual.month_names[month - 1]);
+                                const bool two_lines = day_line && date_line && day_line != date_line &&
+                                    std::string(lv_label_get_text(day_line)) == visual.weekday_names[weekday] &&
+                                    std::string(lv_label_get_text(date_line)) == expected_date &&
+                                    one_line(day_line) && one_line(date_line) &&
+                                    lv_obj_get_y(day_line) < lv_obj_get_y(date_line);
+                                if (!two_lines && lines_detail.size() < 300) {
+                                    lines_detail += std::string(day_line ? lv_label_get_text(day_line) : "-") + "|" +
+                                                    (date_line ? lv_label_get_text(date_line) : "-") + " ";
+                                }
+                                lines_ok = lines_ok && two_lines;
+                            }
+                        }
+                    }
+                    device_status.set_date(saved.year, saved.month, saved.day, saved.weekday, aura::StatusOrigin::Live);
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    pump(2);
+                    record("graphite.home_date", "every-weekday-and-month", date_ok, date_detail);
+                    record("graphite.home_date_lines", "weekday-over-date", lines_ok, lines_detail);
+                }
+
+                // Apps: a quiet app keeps its symbol's colour on a grey well; only a
+                // live tile takes the coloured well.
+                {
+                    reset_to(aura::UiView::Launcher);
+                    pump(2);
+                    auto* settings_cell = find_target(view_content(), aura::UiView::Settings);
+                    auto* well = settings_cell ? lv_obj_get_child(settings_cell, 0) : nullptr;
+                    auto* symbol = well ? lv_obj_get_child(well, 0) : nullptr;
+                    const bool grey_well = well &&
+                        lv_color_to_u32(lv_obj_get_style_bg_color(well, LV_PART_MAIN)) % 0x1000000U ==
+                            graphite_palette.surface_high;
+                    const bool coloured = symbol &&
+                        lv_color_to_u32(lv_obj_get_style_image_recolor(symbol, LV_PART_MAIN)) % 0x1000000U !=
+                            graphite_palette.text_secondary;
+                    record("graphite.launcher_icons", "symbol-keeps-colour", grey_well && coloured,
+                           std::to_string(grey_well) + std::to_string(coloured));
+                }
+
+                // The ambient clock: Home's hero numerals, the rest at body size,
+                // every line on the screen and clear of the others.
+                {
+                    std::uint32_t alarm_id = 0;
+                    companion.clock().add_alarm(7, 30, true, "", &alarm_id);
+                    reset_to(aura::UiView::Home);
+                    auto ambient_display = companion.display().snapshot();
+                    ambient_display.mode = aura::DisplayMode::AlwaysOn;
+                    ambient_display.sequence += 1000;
+                    ui.apply_display(ambient_display);
+                    // A runtime pump reapplies the real Active snapshot. Inspect
+                    // the injected ambient state before returning to the runtime.
+                    lv_obj_update_layout(ui.root());
+                    const bool ambient = ui.view() == aura::UiView::AlwaysOn;
+                    std::vector<lv_obj_t*> lines;
+                    collect_labels(view_content(), lines);
+                    const bool hero = label_in_font(view_content(), graphite_fonts.hero) != nullptr;
+                    std::string problem;
+                    for (std::size_t index = 0; index < lines.size(); ++index) {
+                        lv_area_t area{};
+                        lv_obj_get_coords(lines[index], &area);
+                        const std::string text = lv_label_get_text(lines[index]);
+                        if (font_of(lines[index]) == graphite_fonts.caption) problem += "small [" + text + "];";
+                        if (area.x1 < 0 || area.y1 < 0 || area.x2 >= 480 || area.y2 >= 480) problem += "off [" + text + "];";
+                        for (std::size_t other = index + 1; other < lines.size(); ++other) {
+                            lv_area_t next{};
+                            lv_obj_get_coords(lines[other], &next);
+                            if (areas_meet(area, next)) {
+                                problem += "overlap [" + text + "|" + lv_label_get_text(lines[other]) + "];";
+                            }
+                        }
+                    }
+                    ambient_display.mode = aura::DisplayMode::Active;
+                    ambient_display.sequence += 1;
+                    ui.apply_display(ambient_display);
+                    companion.clock().remove_alarm(alarm_id);
+                    pump(2);
+                    record("graphite.ambient", "hero-clock-body-text", ambient && hero && problem.empty(),
+                           std::to_string(ambient) + std::to_string(hero) + " " + problem);
+                }
+
                 // System in every look and language: no row title is cut (LVGL ends a
                 // cut label's text in dots); the factory reset title was cut in all four.
                 {
@@ -5036,6 +5394,518 @@ int main(int argc, char** argv) {
                     ui.set_language(aura::InterfaceLanguage::Greek);
                     record("system.titles_whole", "four-looks-two-languages", titles_ok, titles_detail);
                 }
+
+                const aura::Appearance looks[] = {aura::Appearance::Halo, aura::Appearance::Marble,
+                                                  aura::Appearance::Aurora, aura::Appearance::Graphite};
+
+                // Weather in every look: no line starts above the top of the area that
+                // holds it, which clips it (Γραφίτης's temperature lost its top there).
+                {
+                    std::function<std::string(lv_obj_t*)> above_top = [&](lv_obj_t* object) {
+                        std::string cut;
+                        lv_area_t own{};
+                        lv_obj_get_coords(object, &own);
+                        const auto count = lv_obj_get_child_count(object);
+                        for (std::uint32_t index = 0; index < count; ++index) {
+                            auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                            if (lv_obj_is_hidden(child)) continue;
+                            if (lv_obj_check_type(child, &lv_label_class) && lv_obj_get_scroll_y(object) == 0) {
+                                lv_area_t area{};
+                                lv_obj_get_coords(child, &area);
+                                if (area.y1 < own.y1) cut += "[" + std::string(lv_label_get_text(child)) + "]";
+                            }
+                            cut += above_top(child);
+                        }
+                        return cut;
+                    };
+                    bool weather_ok = true;
+                    std::string weather_detail;
+                    for (const auto look : looks) {
+                        ui.set_appearance(look);
+                        reset_to(aura::UiView::Weather);
+                        pump(2);
+                        const std::string cut = above_top(view_content());
+                        weather_ok = weather_ok && cut.empty();
+                        if (!cut.empty()) weather_detail += std::string(aura::appearance_id(look)) + ":" + cut + " ";
+                    }
+                    record("weather.top_whole", "four-looks", weather_ok, weather_detail);
+                }
+
+                // The organiser in every look and language: the tabs sit clear of the
+                // header's buttons, and an empty list says so in the middle.
+                {
+                    companion.organizer().clear();
+                    bool organizer_ok = true;
+                    std::string organizer_detail;
+                    for (const auto look : looks) {
+                        ui.set_appearance(look);
+                        for (const auto language : languages) {
+                            ui.set_language(language);
+                            const auto& extra = language == aura::InterfaceLanguage::English ?
+                                aura::l10n::companion_en_us() : aura::l10n::companion_el_gr();
+                            reset_to(aura::UiView::Calendar);
+                            ui.open_organizer(aura::OrganizerKind::Shopping);
+                            pump(2);
+                            lv_obj_update_layout(ui.root());
+                            bool tabs_clear = true;
+                            for (const char* title : {extra.organizer_events, extra.organizer_tasks,
+                                                      extra.organizer_shopping}) {
+                                auto* title_label = find_text(view_content(), title);
+                                auto* tab = title_label ? lv_obj_get_parent(title_label) : nullptr;
+                                lv_area_t area{};
+                                if (tab) lv_obj_get_coords(tab, &area);
+                                tabs_clear = tabs_clear && tab && !runs_into_control(view_content(), tab, area);
+                            }
+                            auto* empty = find_text(view_content(), extra.organizer_shopping_empty);
+                            if (!empty && organizer_detail.empty()) {
+                                std::vector<lv_obj_t*> shown;
+                                collect_labels(view_content(), shown);
+                                organizer_detail += "labels:";
+                                for (auto* item : shown) organizer_detail += "[" + std::string(lv_label_get_text(item)) + "]";
+                            }
+                            lv_area_t empty_area{};
+                            if (empty) lv_obj_get_coords(empty, &empty_area);
+                            const int middle = (empty_area.x1 + empty_area.x2 + 1) / 2;
+                            const bool centred = empty &&
+                                lv_obj_get_style_text_align(empty, LV_PART_MAIN) == LV_TEXT_ALIGN_CENTER &&
+                                std::abs(middle - 240) <= 2;
+                            organizer_ok = organizer_ok && tabs_clear && centred;
+                            if (!tabs_clear || !centred) {
+                                organizer_detail += std::string(aura::appearance_id(look)) + ":" +
+                                    std::to_string(tabs_clear) + std::to_string(centred) + "@" +
+                                    std::to_string(middle) + " ";
+                            }
+                        }
+                    }
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    record("organizer.layout", "tabs-clear-empty-centred", organizer_ok, organizer_detail);
+                }
+
+                {
+                    bool settings_ok = true;
+                    for (const auto look : looks) {
+                        ui.set_appearance(look);
+                        for (const auto language : {aura::InterfaceLanguage::Greek, aura::InterfaceLanguage::English}) {
+                            ui.set_language(language);
+                            account_snapshot(aura::AoratonPairingState::Paired);
+                            auto account = *aoraton_capture_override;
+                            account.realtime_active = true;
+                            ++account.sequence;
+                            aoraton_capture_override = account;
+                            ui.apply_aoraton(account);
+                            reset_to(aura::UiView::AoratonPair);
+                            const auto& strings = language == aura::InterfaceLanguage::Greek ?
+                                aura::l10n::companion_el_gr() : aura::l10n::companion_en_us();
+                            settings_ok = settings_ok && find_text(ui.root(), strings.aoraton_realtime_ready);
+                            // The settings row is visible above the sign-out action.
+                            tap(240, 440);
+                            const bool opened = ui.view() == aura::UiView::AoratonSyncSettings;
+                            tap(240, 140);
+                            settings_ok = settings_ok && opened && !aoraton.snapshot().sync_settings.polling_enabled;
+                            tap(240, 140);
+                            const struct { int x, y; std::uint32_t seconds; } choices[]{
+                                {130, 268, 10}, {350, 268, 30}, {130, 344, 60}, {350, 344, 300}
+                            };
+                            for (const auto& choice : choices) {
+                                tap(choice.x, choice.y);
+                                settings_ok = settings_ok && aoraton.snapshot().sync_settings == aura::AoratonSyncSettings{true, choice.seconds};
+                            }
+                            aoraton.set_sync_settings({});
+                        }
+                    }
+                    aoraton_capture_override.reset();
+                    ui.apply_aoraton(aoraton.snapshot());
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    record("aoraton.sync_settings", "four-looks-two-languages", settings_ok, "on/off, 10s, 30s, 1m, 5m");
+                }
+
+                {
+                    bool transfer_ok = true;
+                    std::string transfer_detail;
+                    for (const auto look : looks) {
+                        ui.set_appearance(look);
+                        for (const auto language : languages) {
+                            ui.set_language(language);
+                            const auto check_transfer = [&](bool value, const char* stage) {
+                                transfer_ok = transfer_ok && value;
+                                if (!value) transfer_detail += std::string(aura::appearance_id(look)) + "/" +
+                                    (language == aura::InterfaceLanguage::Greek ? "el:" : "en:") + stage + " ";
+                            };
+                            companion.transfer().stop(); companion.photos().reset();
+                            ui.apply_photos(companion.photos().snapshot());
+                            ui.apply_transfer(companion.transfer().session().snapshot());
+                            reset_to(aura::UiView::Photos);
+                            tap(180, 428);
+                            check_transfer(ui.view() == aura::UiView::FileTransfer, "photo-entry");
+                            tap(240, 424);
+                            check_transfer(companion.transfer().session().snapshot().state == aura::TransferState::Ready,
+                                           "enable");
+                            check_transfer(find_text(ui.root(), "123 456") != nullptr, "visible-demo-code");
+                            // The QR is a plain 216 x 216 image: LVGL 9.6's canvas destructor drops
+                            // the wrong image-cache key (the address of its buffer pointer), so no
+                            // screen may use an lv_canvas.
+                            std::function<unsigned(lv_obj_t*)> qr_count = [&](lv_obj_t* parent) {
+                                unsigned count = 0;
+                                if (lv_obj_check_type(parent, &lv_image_class)) {
+                                    const void* source = lv_image_get_src(parent);
+                                    const auto* image = source && lv_image_src_get_type(source) == LV_IMAGE_SRC_VARIABLE ?
+                                        static_cast<const lv_image_dsc_t*>(source) : nullptr;
+                                    count = image && image->header.w == 216 && image->header.h == 216 ? 1U : 0U;
+                                }
+                                for (std::uint32_t i = 0; i < lv_obj_get_child_count(parent); ++i)
+                                    count += qr_count(lv_obj_get_child(parent, static_cast<std::int32_t>(i)));
+                                return count;
+                            };
+                            std::function<unsigned(lv_obj_t*)> canvas_count = [&](lv_obj_t* parent) {
+                                unsigned count = lv_obj_check_type(parent, &lv_canvas_class) ? 1U : 0U;
+                                for (std::uint32_t i = 0; i < lv_obj_get_child_count(parent); ++i)
+                                    count += canvas_count(lv_obj_get_child(parent, static_cast<std::int32_t>(i)));
+                                return count;
+                            };
+                            check_transfer(qr_count(view_content()) == 1, "qr-image");
+                            check_transfer(canvas_count(ui.root()) == 0, "no-canvas");
+                            companion.transfer().session().tick(aura::kTransferLeaseMs);
+                            companion.apply(); pump(2);
+                            check_transfer(companion.transfer().session().snapshot().state == aura::TransferState::Expired &&
+                                companion.transfer().session().snapshot().pin.empty() && qr_count(view_content()) == 0, "expiry-clears-code");
+                            tap(240, 424); tap(240, 440);
+                            check_transfer(companion.transfer().session().snapshot().state == aura::TransferState::Off &&
+                                companion.transfer().session().snapshot().pin.empty(), "stop");
+                            reset_to(aura::UiView::Settings);
+                            auto* entry = find_target(view_content(), aura::UiView::FileTransfer);
+                            if (entry) { lv_obj_scroll_to_view(entry, LV_ANIM_OFF); pump(2); }
+                            lv_area_t area{}; if (entry) lv_obj_get_coords(entry, &area);
+                            if (entry) tap((area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2);
+                            check_transfer(entry && ui.view() == aura::UiView::FileTransfer, "settings-entry");
+                        }
+                    }
+                    companion.transfer().stop(); ui.apply_transfer(companion.transfer().session().snapshot());
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    record("file_transfer.controls", "four-looks-two-languages", transfer_ok, transfer_detail);
+                }
+                {
+                    bool photos_ok = true;
+                    std::string photo_trace;
+                    for (const auto look : looks) {
+                        ui.set_appearance(look);
+                        for (const auto language : languages) {
+                            ui.set_language(language);
+                            companion.photos().seed_demo();
+                            ui.apply_photos(companion.photos().snapshot());
+                            reset_to(aura::UiView::Launcher); pump(2);
+                            auto* cell = find_target(view_content(), aura::UiView::Photos);
+                            if (cell) { lv_obj_scroll_to_view(cell, LV_ANIM_OFF); pump(2); }
+                            lv_area_t area{}; if (cell) lv_obj_get_coords(cell, &area);
+                            if (cell) tap((area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2);
+                            photo_trace += std::string(aura::appearance_id(look)) + "/" + (language == aura::InterfaceLanguage::Greek ? "el" : "en") + ":L" + std::to_string(static_cast<int>(ui.view()));
+                            photos_ok = photos_ok && cell && ui.view() == aura::UiView::Photos;
+                            tap(240, 140);
+                            photo_trace += " O" + std::to_string(static_cast<int>(ui.view()));
+                            photos_ok = photos_ok && ui.view() == aura::UiView::PhotoViewer;
+                            tap(430, 436);
+                            photo_trace += " N" + std::to_string(companion.photos().snapshot().selected);
+                            photos_ok = photos_ok && companion.photos().snapshot().selected == 1;
+                            swipe(380, 220, 80, 220);
+                            photo_trace += " S" + std::to_string(companion.photos().snapshot().selected);
+                            photos_ok = photos_ok && companion.photos().snapshot().selected == 2;
+                            tap(240, 436);
+                            photo_trace += " P" + std::to_string(companion.photos().snapshot().playing);
+                            photos_ok = photos_ok && companion.photos().snapshot().playing;
+                            tap(240, 210); // Full screen, then restore controls.
+                            photos_ok = photos_ok && ui.view() == aura::UiView::PhotoViewer;
+                            tap(240, 210);
+                            tap(430, 48);
+                            photo_trace += " G" + std::to_string(static_cast<int>(ui.view()));
+                            photos_ok = photos_ok && ui.view() == aura::UiView::PhotoSettings && !companion.photos().snapshot().playing;
+                            tap(130, 170); photos_ok = photos_ok && companion.photos().snapshot().settings.interval_seconds == 5;
+                            tap(350, 170); photos_ok = photos_ok && companion.photos().snapshot().settings.interval_seconds == 10;
+                            tap(130, 246); photos_ok = photos_ok && companion.photos().snapshot().settings.interval_seconds == 30;
+                            tap(350, 246); photos_ok = photos_ok && companion.photos().snapshot().settings.interval_seconds == 60;
+                            tap(240, 342);
+                            photo_trace += " A" + std::to_string(companion.photos().snapshot().ambient != nullptr) + "; ";
+                            photos_ok = photos_ok && static_cast<bool>(companion.photos().snapshot().ambient);
+                            reset_to(aura::UiView::AlwaysOn); pump(2);
+                            photos_ok = photos_ok && companion.photos().snapshot().ambient != nullptr;
+                            reset_to(aura::UiView::Photos);
+                        }
+                    }
+                    companion.photos().reset(); ui.apply_photos(companion.photos().snapshot());
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    record("photos.controls", "four-looks-two-languages", photos_ok, photo_trace);
+                }
+                {
+                    bool delete_ok = true; std::string detail;
+                    for (const auto look : looks) {
+                        ui.set_appearance(look);
+                        for (const auto language : languages) {
+                            ui.set_language(language); companion.photos().seed_demo();
+                            ui.apply_photos(companion.photos().snapshot());
+                            const auto& words = aura::l10n::photo_strings(language);
+                            const auto original_name = companion.photos().snapshot().names.front();
+                            auto open_confirmation = [&] {
+                                reset_to(aura::UiView::PhotoViewer); pump(2);
+                                tap(340, 436);
+                                return ui.view() == aura::UiView::PhotoDelete && find_text(ui.root(), original_name.c_str());
+                            };
+                            const bool opened = open_confirmation();
+                            tap(120, 430);
+                            const bool cancelled = companion.photos().snapshot().names.size() == 3 && ui.view() == aura::UiView::PhotoViewer;
+                            tap(48, 48);
+                            const bool cancel_back = ui.view() != aura::UiView::PhotoDelete;
+                            reset_to(aura::UiView::PhotoSettings); pump(2);
+                            auto* remove_label = find_text(view_content(), words.delete_photo);
+                            lv_area_t remove_area{}; if (remove_label) lv_obj_get_coords(remove_label, &remove_area);
+                            const bool visible = remove_label && remove_area.y1 >= 96 && remove_area.y2 < 480;
+                            if (visible) tap_center(remove_label); // Must work without scrolling settings.
+                            const bool settings_opened = visible && ui.view() == aura::UiView::PhotoDelete && find_text(ui.root(), original_name.c_str());
+                            tap(120, 430);
+                            const bool settings_cancelled = companion.photos().snapshot().names.size() == 3 && ui.view() == aura::UiView::PhotoSettings;
+                            const bool reopened = open_confirmation();
+                            tap(348, 430); pump(2);
+                            const auto& names = companion.photos().snapshot().names;
+                            const bool removed = ui.view() == aura::UiView::Photos && names.size() == 2 && std::find(names.begin(), names.end(), original_name) == names.end();
+                            tap(48, 48);
+                            const bool confirm_back = ui.view() != aura::UiView::PhotoDelete;
+                            delete_ok = delete_ok && opened && cancelled && reopened && removed && cancel_back && confirm_back && settings_opened && settings_cancelled;
+                            detail += std::string(aura::appearance_id(look)) + (language == aura::InterfaceLanguage::Greek ? "/el:" : "/en:") +
+                                      std::to_string(opened) + std::to_string(cancelled) + std::to_string(reopened) + std::to_string(removed) + std::to_string(cancel_back) + std::to_string(confirm_back) + std::to_string(settings_opened) + std::to_string(settings_cancelled) + " ";
+                        }
+                    }
+                    companion.photos().reset(); ui.apply_photos(companion.photos().snapshot()); ui.set_language(aura::InterfaceLanguage::Greek);
+                    record("photos.delete-confirmation", "four-looks-two-languages", delete_ok, detail);
+                }
+
+                // Message inspection and consent use actual SDL taps in both languages
+                // and every look. No real account or assistant endpoint is involved.
+                {
+                    bool messages_ok = true;
+                    std::string detail;
+                    aoraton.reset_mock();
+                    aoraton.select_room("demo-family");
+                    for (const auto look : looks) {
+                        ui.set_appearance(look);
+                        for (const auto language : {aura::InterfaceLanguage::Greek, aura::InterfaceLanguage::English}) {
+                            ui.set_language(language);
+                            auto state = aoraton.snapshot();
+                            state.messages.resize(1);
+                            auto& message = state.messages.front();
+                            message.received_at = "2026-10-31T07:05:00Z";
+                            message.local_display_text = text().capture_message;
+                            for (int repeat = 0; repeat < 8; ++repeat) message.local_display_text += "\n" + std::string(text().capture_message);
+                            const std::string approved = message.local_display_text;
+                            state.sequence += 90000 + (++account_serial);
+                            aoraton_capture_override = state;
+                            ui.apply_aoraton(state);
+                            reset_to(aura::UiView::AoratonConversation);
+                            auto* thread = find_sized_clickable(ui.root(), 432, 240);
+                            if (thread) lv_obj_scroll_to_y(thread, 0, LV_ANIM_OFF);
+                            ++state.sequence;
+                            aoraton_capture_override = state;
+                            ui.apply_aoraton(state);
+                            pump(2);
+                            thread = find_sized_clickable(ui.root(), 432, 240);
+                            const bool scroll_kept = thread && lv_obj_get_scroll_y(thread) == 0;
+                            tap(240, 220);
+                            const auto local = aura::simulator::windows_local_time(1793430300);
+                            char message_clock[8]{};
+                            if (local) std::snprintf(message_clock, sizeof(message_clock), "%02d:%02d", local->hour, local->minute);
+                            const bool full = ui.view() == aura::UiView::AoratonMessage && find_text(ui.root(), approved.c_str()) &&
+                                local && find_text(ui.root(), message_clock);
+                            const int prepared_before = interaction_counts.aoraton_prepare;
+                            const auto turns_before = companion.memory().recent(companion.now_ms()).size();
+                            tap(240, 420);
+                            const bool consent = ui.view() == aura::UiView::AoratonAssist && find_text(ui.root(), approved.c_str()) &&
+                                controller.snapshot().state != aura::AssistantState::Thinking;
+                            // Cancelling shares nothing and returns to the selected message.
+                            tap(96, 420);
+                            const bool cancelled = ui.view() == aura::UiView::AoratonMessage;
+                            tap(240, 420);
+                            tap(330, 420);
+                            const bool asked = ui.view() == aura::UiView::Assistant && private_message_turn &&
+                                controller.snapshot().user_text == approved;
+                            const auto request = companion.turn_request(approved, true);
+                            const bool isolated = request.history.empty() && request.context.empty() && !request.web_search &&
+                                request.prompt.find(approved) != std::string::npos;
+                            companion.deliver_reply("DEMO\nACTION: {\"type\":\"message\",\"room\":\"demo-family\",\"text\":\"DEMO\"}");
+                            const bool read_only = !companion.extras().pending_action && !aoraton.snapshot().awaiting_confirmation &&
+                                interaction_counts.aoraton_prepare == prepared_before &&
+                                companion.memory().recent(companion.now_ms()).size() == turns_before;
+                            const bool ok = scroll_kept && full && consent && cancelled && asked && isolated && read_only;
+                            messages_ok = messages_ok && ok;
+                            if (!ok) detail += std::string(aura::appearance_id(look)) + ":" + std::to_string(scroll_kept) +
+                                std::to_string(full) + std::to_string(consent) + std::to_string(cancelled) +
+                                std::to_string(asked) + std::to_string(isolated) + std::to_string(read_only) + " ";
+                            cancel();
+                            controller.dispatch({aura::EventType::Reset});
+                            apply();
+                        }
+                    }
+                    aoraton_capture_override.reset();
+                    companion.turn_request("DEMO");
+                    ui.apply_aoraton(aoraton.snapshot());
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    record("aoraton.message_ui", "full-text-consent-isolation-scroll", messages_ok, detail);
+                }
+
+                // The Greek keyboard in every look: ς shows on its key even while the
+                // first letter is a capital, the tonos key looks like a letter key,
+                // and ΄ before a vowel types it with its accent.
+                {
+                    std::function<lv_obj_t*(lv_obj_t*)> keyboard_in = [&](lv_obj_t* object) -> lv_obj_t* {
+                        const auto count = lv_obj_get_child_count(object);
+                        for (std::uint32_t index = 0; index < count; ++index) {
+                            auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                            if (lv_obj_check_type(child, &lv_keyboard_class)) return child;
+                            if (auto* found = keyboard_in(child)) return found;
+                        }
+                        return nullptr;
+                    };
+                    bool keys_ok = true;
+                    std::string keys_detail;
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    for (const auto look : looks) {
+                        ui.set_appearance(look);
+                        reset_to(aura::UiView::Calendar);
+                        // The real new-item action clears the previous draft and
+                        // creates a keyboard with the initial capital enabled.
+                        tap(428, 44);
+                        pump(2);
+                        auto* keyboard = keyboard_in(view_content());
+                        auto* area = keyboard ? lv_keyboard_get_textarea(keyboard) : nullptr;
+                        const auto key_id = [&](const char* legend) -> std::uint32_t {
+                            const char* const* map = keyboard ? lv_buttonmatrix_get_map(keyboard) : nullptr;
+                            std::uint32_t id = 0;
+                            for (std::size_t index = 0; map && map[index][0] != '\0'; ++index) {
+                                if (std::strcmp(map[index], "\n") == 0) continue;
+                                if (std::strcmp(map[index], legend) == 0) return id;
+                                ++id;
+                            }
+                            return LV_BUTTONMATRIX_BUTTON_NONE;
+                        };
+                        const auto press = [&](const char* legend) {
+                            const std::uint32_t id = key_id(legend);
+                            if (id == LV_BUTTONMATRIX_BUTTON_NONE) return false;
+                            lv_buttonmatrix_set_selected_button(keyboard, id);
+                            lv_obj_send_event(keyboard, LV_EVENT_VALUE_CHANGED, nullptr);
+                            return true;
+                        };
+                        const char* tonos = "\xCE\x84";
+                        if (area) lv_textarea_set_text(area, "");
+                        const bool final_sigma = key_id("ς") != LV_BUTTONMATRIX_BUTTON_NONE;
+                        const std::uint32_t accent = key_id(tonos);
+                        const bool letter_like = accent != LV_BUTTONMATRIX_BUTTON_NONE &&
+                            !lv_buttonmatrix_has_button_ctrl(keyboard, accent, LV_BUTTONMATRIX_CTRL_CHECKED);
+                        const bool pressed = press(tonos) && press("Ά") && press(tonos) && press("ή") && press("ς");
+                        const std::string typed = area ? lv_textarea_get_text(area) : "";
+                        const bool ok = keyboard && final_sigma && letter_like && pressed && typed == "Άής";
+                        keys_ok = keys_ok && ok;
+                        if (!ok) {
+                            keys_detail += std::string(aura::appearance_id(look)) + ":" + std::to_string(keyboard != nullptr) +
+                                std::to_string(final_sigma) + std::to_string(letter_like) + std::to_string(pressed) +
+                                "[" + typed + "] ";
+                        }
+                    }
+                    record("keyboard.greek", "final-sigma-and-tonos", keys_ok, keys_detail);
+                    // Physical hold/release/tap uses LVGL's input timer, rather
+                    // than only synthetic VALUE_CHANGED events above.
+                    reset_to(aura::UiView::Calendar);
+                    tap(428, 44);
+                    auto* keyboard = keyboard_in(view_content());
+                    auto* area = keyboard ? lv_keyboard_get_textarea(keyboard) : nullptr;
+                    long_press(24, 310); // initial capital Α
+                    auto* option = find_text(view_content(), "Ά");
+                    const bool no_plain = area && std::string(lv_textarea_get_text(area)).empty();
+                    tap_center(option);
+                    const bool accented = area && std::string(lv_textarea_get_text(area)) == "Ά";
+                    record("keyboard.long_press", "accent-without-duplicate", no_plain && option && accented,
+                           area ? lv_textarea_get_text(area) : "missing keyboard");
+                    // Hold the lower-case ι, slide to ΐ and release without
+                    // tapping a second time (the phone-style interaction).
+                    push_motion(358, 242);
+                    push_button(SDL_MOUSEBUTTONDOWN, 358, 242);
+                    pump(70);
+                    option = find_text(view_content(), "ΐ");
+                    lv_area_t variant_area{};
+                    if (option) lv_obj_get_coords(option, &variant_area);
+                    const int target_x = (variant_area.x1 + variant_area.x2) / 2;
+                    const int target_y = (variant_area.y1 + variant_area.y2) / 2;
+                    push_motion(target_x, target_y, SDL_BUTTON_LMASK);
+                    pump(3);
+                    push_button(SDL_MOUSEBUTTONUP, target_x, target_y);
+                    pump(8);
+                    record("keyboard.long_press", "slide-to-tonos-diaeresis", option && area &&
+                           std::string(lv_textarea_get_text(area)) == "Άΐ", area ? lv_textarea_get_text(area) : "missing keyboard");
+                }
+
+                // A read-aloud button speaks on the first tap and stops on the next,
+                // on Today and on the answer, in every look.
+                {
+                    aura::CompanionCapabilities speaking_capabilities;
+                    speaking_capabilities.imu = true;
+                    speaking_capabilities.phone_link = true;
+                    speaking_capabilities.speech_output = true;
+                    companion.set_capabilities(speaking_capabilities);
+                    std::function<lv_obj_t*(lv_obj_t*, const void*)> image_of =
+                        [&](lv_obj_t* object, const void* source) -> lv_obj_t* {
+                        const auto count = lv_obj_get_child_count(object);
+                        for (std::uint32_t index = 0; index < count; ++index) {
+                            auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                            if (lv_obj_check_type(child, &lv_image_class) && lv_image_get_src(child) == source) return child;
+                            if (auto* found = image_of(child, source)) return found;
+                        }
+                        return nullptr;
+                    };
+                    bool read_ok = true;
+                    std::string read_detail;
+                    std::uint64_t reported = 1000000;
+                    for (const auto look : looks) {
+                        ui.set_appearance(look);
+                        for (const bool today : {true, false}) {
+                            if (today) {
+                                reset_to(aura::UiView::Briefing);
+                            } else {
+                                controller.dispatch({aura::EventType::Reset});
+                                controller.dispatch({aura::EventType::TurnStarted, aura::l10n::el_gr().capture_short_prompt});
+                                controller.dispatch({aura::EventType::FinalResult, aura::l10n::el_gr().capture_short_answer});
+                                apply();
+                            }
+                            pump(3);
+                            const void* speaker = aura::ui::icon_asset(aura::ui::IconRole::VolumeUp, look);
+                            const void* stop = aura::ui::icon_asset(aura::ui::IconRole::Stop, look);
+                            auto* speaker_icon = image_of(view_content(), speaker);
+                            const int speak_before = interaction_counts.speak;
+                            const int stop_before = interaction_counts.speak_stop;
+                            tap_center(speaker_icon ? lv_obj_get_parent(speaker_icon) : nullptr);
+                            const bool started = interaction_counts.speak == speak_before + 1;
+                            pump(10);  // past the 75 ms the UI leaves between two actions
+                            // The platform reports that it is speaking; the next tap stops it.
+                            aura::AssistantExtras speaking;
+                            speaking.speaking = true;
+                            speaking.sequence = ++reported;
+                            ui.apply_assistant_extras(speaking);
+                            auto* stop_icon = image_of(view_content(), stop);
+                            if (stop_icon) lv_obj_send_event(lv_obj_get_parent(stop_icon), LV_EVENT_CLICKED, nullptr);
+                            const bool stopped = stop_icon && interaction_counts.speak_stop == stop_before + 1 &&
+                                                 interaction_counts.speak == speak_before + 1;
+                            const bool speaker_back = image_of(view_content(), speaker) != nullptr;
+                            pump(2);
+                            const bool ok = started && stopped && speaker_back;
+                            read_ok = read_ok && ok;
+                            if (!ok) {
+                                read_detail += std::string(aura::appearance_id(look)) + (today ? "/today:" : "/answer:") +
+                                    std::to_string(started) + std::to_string(stopped) + std::to_string(speaker_back) + " ";
+                            }
+                        }
+                    }
+                    controller.dispatch({aura::EventType::Reset});
+                    apply();
+                    aura::CompanionCapabilities plain_again;
+                    plain_again.imu = true;
+                    plain_again.phone_link = true;
+                    companion.set_capabilities(plain_again);
+                    pump(2);
+                    record("read_aloud.toggle", "today-and-answer", read_ok, read_detail);
+                }
                 ui.set_appearance(aura::Appearance::Halo);
             }
 
@@ -5050,7 +5920,7 @@ int main(int argc, char** argv) {
                 aura::UiView::AlarmNew, aura::UiView::ReminderNew, aura::UiView::Notes, aura::UiView::NoteNew,
                 aura::UiView::Briefing, aura::UiView::Translate, aura::UiView::PhoneLink,
                 aura::UiView::DisplaySettings, aura::UiView::Update, aura::UiView::Radio,
-                aura::UiView::RadioSearch, aura::UiView::System,
+                aura::UiView::RadioSearch, aura::UiView::System, aura::UiView::Credits,
             };
             bool sweep_ok = true;
             std::string sweep_detail;
@@ -5276,8 +6146,8 @@ int main(int argc, char** argv) {
                    std::to_string(device_view) + "/" + std::to_string(simulator_view));
 
         {
-            // The always-on clock lights as little of the AMOLED as it can: its
-            // sky halo stays within the clock block, not the whole screen.
+            // The larger ambient halo frames the information block while
+            // keeping a black margin around the screen in every appearance.
             auto settings = companion.display().snapshot().settings;
             const bool always_on_before = settings.always_on;
             settings.always_on = true;
@@ -5302,7 +6172,7 @@ int main(int argc, char** argv) {
             pump(3);
             settings.always_on = always_on_before;
             companion.display().set_settings(settings);
-            record("display.aod_glow", "lit-area", asleep && widest > 0 && widest <= 280, std::to_string(widest));
+            record("display.aod_glow", "lit-area", asleep && widest >= 360 && widest <= 416, std::to_string(widest));
         }
         {
             // Demo data leads with DEMO: a chip or row that cuts its text short
@@ -5362,8 +6232,8 @@ int main(int argc, char** argv) {
             pump(3);
             const bool marble = ui.appearance() == aura::Appearance::Marble;
             reset_to(aura::UiView::System);
-            scroll_view_to(120);
-            tap(220, 452);
+            scroll_view_to(216);
+            tap(220, 444);
             const bool asks = ui.view() == aura::UiView::SystemConfirm;
             tap(352, 420);
             wait_for_home();
@@ -5374,6 +6244,7 @@ int main(int argc, char** argv) {
                    aura::appearance_id(ui.appearance()));
         }
 
+        record("lvgl.log", "no-errors", lvgl_errors == 0, std::to_string(lvgl_errors) + " errors");
         const std::size_t passed = static_cast<std::size_t>(std::count_if(results.begin(), results.end(),
             [](const InteractionResult& result) { return result.passed; }));
         std::filesystem::create_directories(std::filesystem::path(interaction_report).parent_path());

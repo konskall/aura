@@ -219,7 +219,8 @@ void AuraUi::apply_assistant_extras(const AssistantExtras& extras) {
     if (extras.sequence == self.extras.sequence) return;
     self.extras = extras;
     if (self.current_view == UiView::Assistant || self.current_view == UiView::ConversationHistory ||
-        self.current_view == UiView::Launcher || self.current_view == UiView::Battery) {
+        self.current_view == UiView::Launcher || self.current_view == UiView::Battery ||
+        self.current_view == UiView::Briefing) {
         self.render(self.current_view);
     }
 }

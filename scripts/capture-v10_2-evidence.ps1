@@ -57,4 +57,4 @@ foreach ($value in 0..15) {
 
 python (Join-Path $repo 'scripts\make-v10_2-evidence.py')
 if ($LASTEXITCODE -ne 0) { throw "V10.2 evidence validation failed with exit code $LASTEXITCODE" }
-Write-Host 'Captured and verified AURA v10.2 screens, typography, pointer routes, status matrix and Mercury motion.'
+Write-Host 'Captured and verified AURA v10.2 screens, typography, pointer routes, status matrix and Synapse motion.'

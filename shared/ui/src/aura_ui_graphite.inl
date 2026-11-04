@@ -78,7 +78,6 @@
         if (!live.active) {
             lv_obj_set_style_bg_color(well, ui::color(ui::tokens::surface_high), 0);
             lv_obj_set_style_bg_opa(well, LV_OPA_COVER, 0);
-            lv_obj_set_style_image_recolor(lv_obj_get_child(well, 0), ui::color(ui::tokens::text_secondary), 0);
         }
         lv_obj_set_pos(well, 12, 20 - inset);
         constexpr int kTextX = 66;
@@ -121,11 +120,13 @@
         if (status.clock_valid) {
             home_clock = label(content, "", 20, 36, 260, ui::font_hero(), ui::tokens::text);
         } else {
-            auto* brand = label(content, t().aura_name, kGutter, 80, 300, ui::font_brand(), ui::tokens::text);
-            lv_obj_set_style_text_letter_space(brand, 10, 0);
+            aura_wordmark(content, kGutter, 72);
         }
-        home_date = label(content, "", 296, 128, 160, ui::font_headline(), ui::tokens::text_secondary,
-                          LV_TEXT_ALIGN_RIGHT);
+        // As in the reference: the weekday, and under it the day and month in a
+        // quieter line («Παρασκευή» / «28 Φεβρουαρίου»), clear of Apps and the tiles.
+        home_date = line(content, "", 280, 124, 176, ui::font_headline(), ui::tokens::text, LV_TEXT_ALIGN_RIGHT);
+        home_date_detail = label(content, "", 280, 160, 176, ui::font_caption(), ui::tokens::text_secondary,
+                                 LV_TEXT_ALIGN_RIGHT);
         update_home_text();
         attach_briefing_target();
         auto* apps = nav_round_button(content, 392, 46, ui::tokens::HEADER_BUTTON, ui::IconRole::Apps,
@@ -207,7 +208,7 @@
     // answer as text and today's actions. (No device signal says a turn was
     // answered from the loaded forecast, so there is no weather card.)
     void render_answer_graphite() {
-        if (can_speak_answer()) make_header("", ui::IconRole::VolumeUp, speak_answer_event, ui::tokens::mint);
+        if (can_speak_answer()) make_header("", read_aloud_icon(), speak_answer_event, ui::tokens::mint);
         else make_header("");
         auto* mark = make_dot(content, 32, ui::tokens::lilac, LV_OPA_20);
         lv_obj_set_pos(mark, 100, 32);
@@ -250,7 +251,7 @@
         char degrees[16];
         std::snprintf(degrees, sizeof(degrees), "%d°", whole);
         const bool wide = whole <= -10 || whole >= 100;
-        label(weather_scroll, degrees, kGutter - 4, -4, 128, wide ? ui::font_numerals_small() : ui::font_numerals_large(),
+        label(weather_scroll, degrees, kGutter - 4, 0, 128, wide ? ui::font_numerals_small() : ui::font_numerals_large(),
               ui::tokens::text);
         constexpr int kSideX = 148;
         constexpr int kSideWidth = ui::tokens::display_width - kSideX - kGutter;
@@ -495,7 +496,7 @@
     void render_briefing_graphite() {
         const auto briefing = current_briefing();
         if (capabilities.speech_output && callbacks.on_speak) {
-            make_header(c().app_today, ui::IconRole::VolumeUp, briefing_speak_event, ui::tokens::mint);
+            make_header(c().app_today, read_aloud_icon(), briefing_speak_event, ui::tokens::mint);
         } else {
             make_header(c().app_today);
         }

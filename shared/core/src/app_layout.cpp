@@ -11,7 +11,7 @@ namespace {
 constexpr std::string_view kHeader{"AURA_APP_LAYOUT_V1"};
 constexpr std::array<std::string_view, kLauncherAppCount> kCodes{
     "conversation", "weather", "messages", "clock", "notes", "translate",
-    "today", "radio", "notifications", "settings", "organizer",
+    "today", "radio", "notifications", "settings", "organizer", "photos",
 };
 
 std::string_view trim_line(std::string_view value) noexcept {
@@ -83,7 +83,15 @@ bool LauncherLayoutModel::restore(std::string_view data) noexcept {
     std::array<bool, kLauncherAppCount> seen{};
     for (std::size_t index = 0; index < parsed.size(); ++index) {
         const auto line = next_line(remaining);
-        if (!line) return false;
+        if (!line) {
+            // V1 orders saved before Photos existed keep their owner's order.
+            if (index == kLauncherAppCount - 1 && !seen[static_cast<std::size_t>(LauncherApp::Photos)]) {
+                parsed[index] = LauncherApp::Photos;
+                seen[static_cast<std::size_t>(LauncherApp::Photos)] = true;
+                break;
+            }
+            return false;
+        }
         const auto app = parse_launcher_app(*line);
         if (!app) return false;
         const auto app_index = static_cast<std::size_t>(*app);

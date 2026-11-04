@@ -2,7 +2,7 @@
 
 **A Greek-first AI companion for a 480 × 480 AMOLED ESP32-S3 device.** One shared C++17 core and LVGL interface run in two places: a native Windows simulator you can use today, and ESP-IDF firmware for the Waveshare ESP32-S3-Touch-AMOLED-2.16 board.
 
-> **Status (October 2026).** The simulator is feature-complete for the v13 "Companion" release and passes the full automated suite. The firmware compiles cleanly with ESP-IDF 5.5.5 but **has not been flashed**: nothing that depends on the physical board is claimed to work yet. See [docs/VERIFICATION.md](docs/VERIFICATION.md) for every result.
+> **Status (November 2026).** The simulator is feature-complete for the v13 "Companion" release, now with photos, local file transfer and realtime messages, and passes the full automated suite. The firmware compiles cleanly with ESP-IDF 5.5.5 but **has not been flashed**: nothing that depends on the physical board is claimed to work yet. See [docs/VERIFICATION.md](docs/VERIFICATION.md) for every result.
 
 ![AURA production screens: home, listening, thinking, speaking, answers, apps, settings, sound, messages, Wi-Fi and system](docs/images/aura-production-screens.png)
 
@@ -12,7 +12,7 @@ All names, rooms, messages and data in the screenshots are fictional `DEMO` cont
 
 ## Σύντομα στα ελληνικά
 
-Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, μετάφραση πρόσωπο με πρόσωπο, μηνύματα Aoraton με κρυπτογράφηση και ειδοποιήσεις από το iPhone. Έχει τέσσερις εμφανίσεις (Άλως, Μάρμαρο, Σέλας, Γραφίτης) που επιλέγεις από τις Ρυθμίσεις → Εμφάνιση. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Ο προσομοιωτής δουλεύει σήμερα· το firmware χτίζεται, αλλά δεν έχει δοκιμαστεί ακόμα σε πραγματική πλακέτα.
+Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, μετάφραση πρόσωπο με πρόσωπο, φωτογραφίες από την κάρτα microSD, μεταφορά αρχείων από το κινητό ή τον υπολογιστή μέσα από το τοπικό Wi-Fi, μηνύματα Aoraton με κρυπτογράφηση που φτάνουν αμέσως και ειδοποιήσεις από το iPhone. Έχει τέσσερις εμφανίσεις (Άλως, Μάρμαρο, Σέλας, Γραφίτης) που επιλέγεις από τις Ρυθμίσεις → Εμφάνιση. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Ο προσομοιωτής δουλεύει σήμερα· το firmware χτίζεται, αλλά δεν έχει δοκιμαστεί ακόμα σε πραγματική πλακέτα.
 
 ## Contents
 
@@ -50,22 +50,24 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 |---|---|
 | Conversation | The assistant, with recent history, follow-up and new-topic actions |
 | Weather | Open-Meteo forecast for any city, hourly and daily views, animated conditions, offline cache |
-| Messages | Aoraton end-to-end-encrypted rooms: sign-in through the PC browser, read and send with confirmation, optional `@inco` AI answers |
+| Messages | Aoraton end-to-end-encrypted rooms: sign-in through the PC browser, read and send with confirmation, optional `@inco` AI answers. In the simulator new messages arrive at once over a realtime connection; a periodic check (10 s to 5 min, or off) remains as a fallback |
 | Clock | Timers, alarms (once or daily) and reminders, with a full-screen alert that rings even when muted |
 | Notes | Typed and voice notes; a voice note is dictated (up to 30 s, past short pauses) and transcribed |
 | Translate | Face-to-face translation with one card turned towards the other person |
 | Today | Greeting, namedays, next public holiday, weather, average Greek fuel prices, alarms, reminders, timers and unread messages |
 | Radio | Greek stations, a station directory search (worldwide when no Greek station matches), favourites with your own order, now-playing titles, automatic reconnection; "βάλε ραδιόφωνο" plays the last station again |
+| Photos | JPG and PNG photos from the microSD card: gallery, full screen, swipes, a slideshow, deletion with confirmation, and an optional dimmed photo behind the always-on clock |
 | Notifications | AURA and phone notifications in one place |
 | Organizer | Agenda, tasks and shopping list |
-| Settings | Wi-Fi, language, appearance, AI provider, reduced motion, sound, display, voice, weather and system |
+| Settings | Wi-Fi, language, appearance, AI provider, reduced motion, sound, display, voice, weather, file transfer and system |
 
 ### Device
 
-- **Always-on clock and power saving.** The screen dims, then shows an always-on clock. Dimming is always relative to your chosen brightness.
+- **Always-on clock and power saving.** The screen dims, then shows an always-on clock, optionally over a dimmed photo you choose. Dimming is always relative to your chosen brightness.
 - **Gestures.** Raise to wake, and flip face down to mute.
-- **Sound settings.** Volume, mute, message chime, spoken answers and continuous conversation.
-- **System.** Updates (OTA with rollback), diagnostics, restart, power off, and a factory reset that erases everything.
+- **Sound settings.** Volume, mute, message chime, spoken answers and continuous conversation. A second tap on a read-aloud button stops the reading.
+- **Local file transfer.** Settings → Μεταφορά αρχείων shows a QR code and a six-digit code. From a phone or PC on the same Wi-Fi you send photos (prepared for the 480 × 480 screen in the browser) or other files, and you can list or delete them. Access lasts ten minutes and ends when you stop it. See [docs/FILE_TRANSFER.md](docs/FILE_TRANSFER.md).
+- **System.** Updates (OTA with rollback), diagnostics, credits, restart, power off, and a factory reset that erases settings and data but keeps your photos and files.
 - **Phone link.** Notifications and calls from a paired iPhone over Bluetooth LE (ANCS). In the simulator this uses the PC's Bluetooth adapter and is experimental.
 
 ### Appearances
@@ -74,7 +76,7 @@ Settings → Εμφάνιση offers four looks. A look sets the colours, typefa
 
 | Look | Character | Type | Icons | Presence |
 |---|---|---|---|---|
-| Άλως (Halo) | The original look | IBM Plex Sans | Lucide | Mercury, a liquid-metal orb |
+| Άλως (Halo) | The original look | IBM Plex Sans | Lucide | Σύναψη, a centred reactor with kinetic light paths |
 | Μάρμαρο (Marble) | Quiet luxury: ivory and champagne on black, hairlines | Noto Serif Display, Commissioner | Phosphor Light | Μαργαριτάρι, a pearl |
 | Σέλας (Aurora) | Living light: glass surfaces and soft light fields | Manrope | Solar Bold Duotone | Σέλας, three ribbons of light |
 | Γραφίτης (Graphite) | A precision instrument: live tiles and gauges | Roboto Flex | Material Symbols Rounded | Αστερισμός, a sphere of points |
@@ -108,10 +110,11 @@ The device itself never holds an AI provider key. Production AI will go through 
 
 | Path | Contents |
 |---|---|
-| `shared/core` | Assistant state machine, streaming, offline commands, organizer, clock, notes, radio, weather, Greek calendar, fuel, Aoraton, voice front end and echo cancellation, display power |
+| `shared/core` | Assistant state machine, streaming, offline commands, organizer, clock, notes, radio, weather, Greek calendar, fuel, Aoraton and its realtime protocol, photos and their decoding, local file transfer, voice front end and echo cancellation, display power |
 | `shared/ui` | Every screen, the keyboard, motion and the design tokens |
-| `shared/localization` | All Greek and English text |
-| `shared/assets` | Fonts (IBM Plex, Space Grotesk, Noto Serif Display, Commissioner, Manrope, Roboto Flex), icons (Lucide, Phosphor, Solar, Material Symbols) and images, with their licenses |
+| `shared/localization` | All Greek and English text, including the file transfer page |
+| `shared/assets` | Fonts (IBM Plex, Space Grotesk, Noto Serif Display, Commissioner, Manrope, Roboto Flex), icons (Lucide, Phosphor, Solar, Material Symbols), the Aura wordmark and the Aoraton and Google sign-in marks, with their licenses |
+| `shared/third_party` | minimp3, the photo decoders (tjpgd, stb_image) and the QR encoder (qrcodegen) |
 | `simulator/app` | The Windows simulator and its platform services |
 | `simulator/controls` | A loopback control page for simulated events |
 | `bridge` | The loopback bridge: Codex CLI and Groq runners, speech (Groq Whisper, Azure, Windows voices), fuel prices |
@@ -189,11 +192,11 @@ The authoritative suite runs everything that can be checked on a PC. It contacts
   - A native Release build.
   - An ESP-IDF-compatible compile of every shared source (`-Wall -Wextra -Werror`, no exceptions or RTTI).
 - **Tests.**
-  - 29 CTest suites, including loopback tests for streaming and for Shoutcast radio.
+  - 39 CTest suites, including loopback tests for streaming, Shoutcast radio, the realtime WebSocket and file transfer.
   - Bridge and control-page tests (`node --test`).
   - A smoke run and a 380-transition UI stress run.
 - **Evidence.**
-  - Real SDL/LVGL pointer checks of every route at 1× and 2× scale (200 checks each).
+  - Real SDL/LVGL pointer checks of every route at 1× and 2× scale (272 checks each); the run also fails on any LVGL error.
   - Screenshot and motion evidence of every screen, written to the ignored `artifacts/` folder.
 
 Single test programs can be built and run from `build/native`, for example `ninja -C build/native aura_radio_tests`. Bridge tests run with `node --test` inside `bridge/`.
@@ -218,11 +221,11 @@ See [docs/HARDWARE.md](docs/HARDWARE.md).
 .\scripts\build-firmware-production.ps1      # Secure Boot V2 + flash encryption profile
 ```
 
-**What the firmware has today.** The shared UI and models, weather, sound, display power, the organizer, clock and notes, OTA with rollback, and iPhone ANCS through NimBLE.
+**What the firmware has today.** The shared UI and models, weather, sound, display power, the organizer, clock and notes, photos from the microSD card, local file transfer over Wi-Fi (`esp_http_server`), OTA with rollback, and iPhone ANCS through NimBLE.
 
 **What is not available on the device yet.**
 
-- **Needs an external service.** The assistant, speech, radio playback and real Aoraton messaging need the production gateway or other backends; until then they stay disabled or clearly labelled.
+- **Needs an external service.** The assistant, speech, radio playback and real Aoraton messaging need the production gateway or other backends; until then they stay disabled or clearly labelled. Realtime Aoraton delivery has no ESP32 adapter yet.
 - **Needs the board.** Everything physical still has to be validated: display, touch, audio, battery and Wi-Fi/TLS behaviour.
 
 The production signing keys are never stored in the repository.
@@ -233,13 +236,14 @@ The production signing keys are never stored in the repository.
 - **The bridge is local.** It listens only on `127.0.0.1` and requires a fresh bearer token for each run.
 - **Untrusted text is data.** Device facts, conversation history and web pages go to the model as data, never as instructions. Model output cannot act without typed validation and your confirmation.
 - **Messages and audio stay private.** Message text, transcripts and audio are not written to logs. Aoraton messages are end-to-end encrypted.
+- **File transfer is opt-in and local.** It is off after every start, opens only when you enable it, and lasts ten minutes. It needs the six-digit code shown on the screen (five wrong codes lock it) and accepts only devices on the local network. It can only add, list and delete files in the photos and files folders; there are no downloads. It is plain HTTP, so use it on trusted Wi-Fi.
 - **Demo data is labelled.** Fictional or simulated data is always marked `DEMO`.
 
 Details: [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md) and the [Aoraton security boundaries](docs/aoraton/SECURITY_BOUNDARIES.md).
 
 ## Known limitations
 
-- **The firmware has not run on hardware.** Heap and stack peaks, frame rate, power use and touch accuracy are unmeasured.
+- **The firmware has not run on hardware.** Heap and stack peaks, frame rate, power use and touch accuracy are unmeasured. Halo's Σύναψη slows itself down when frames take longer, but its cost has only been measured on a PC. Photos on the card and transfers from a phone have only run in the simulator.
 - **There is no wake word.** No trained and measured Greek "Αύρα" model exists yet, so listening starts with a tap.
 - **Echo cancellation is untuned.** It works in tests, but still needs tuning in a real room and on the device's microphones.
 - **iPhone disconnect handling is untested live.** Detecting that the phone has gone, and reconnecting, needs a session with a paired iPhone.
@@ -255,7 +259,10 @@ Details: [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md) and the [Aoraton s
 | Verification ledger | [docs/VERIFICATION.md](docs/VERIFICATION.md) |
 | Weather | [docs/WEATHER_ARCHITECTURE.md](docs/WEATHER_ARCHITECTURE.md) |
 | Audio | [docs/audio/AUDIO_ARCHITECTURE.md](docs/audio/AUDIO_ARCHITECTURE.md) |
-| Aoraton messaging | [docs/aoraton/LIVE_ARCHITECTURE.md](docs/aoraton/LIVE_ARCHITECTURE.md) |
+| Aoraton messaging | [docs/aoraton/LIVE_ARCHITECTURE.md](docs/aoraton/LIVE_ARCHITECTURE.md), [ADR 0007](docs/ADR/0007-aoraton-client-realtime.md) (realtime) |
+| Photos | [docs/PHOTOS.md](docs/PHOTOS.md) |
+| File transfer | [docs/FILE_TRANSFER.md](docs/FILE_TRANSFER.md), [ADR 0008](docs/ADR/0008-local-file-transfer.md) |
+| Branding | [docs/BRANDING.md](docs/BRANDING.md) |
 | v13 Companion design | [docs/design/AURA_V13_COMPANION_DESIGN.md](docs/design/AURA_V13_COMPANION_DESIGN.md) |
 | Screens and routes | [docs/ui/FEATURE_AND_ROUTE_PARITY.md](docs/ui/FEATURE_AND_ROUTE_PARITY.md) |
 | Roadmap | [docs/ROADMAP.md](docs/ROADMAP.md) |
@@ -275,6 +282,10 @@ No license file has been added yet. Until one is, the AURA source code is not li
 
 Third-party components keep their own licenses:
 
-- fonts, icons and images: [shared/assets/THIRD_PARTY.md](shared/assets/THIRD_PARTY.md);
+- fonts, icons, images and the Aoraton and Google sign-in marks: [shared/assets/THIRD_PARTY.md](shared/assets/THIRD_PARTY.md);
 - the Σέλας icons are the Solar icon set by 480 Design, under [CC BY 4.0](shared/assets/licenses/SOLAR_CC_BY_4.0.txt);
-- the minimp3 decoder: [shared/third_party/minimp3/LICENSE](shared/third_party/minimp3/LICENSE).
+- the minimp3 decoder: [shared/third_party/minimp3/LICENSE](shared/third_party/minimp3/LICENSE);
+- the photo decoders, stb_image and tjpgd: [shared/third_party/PHOTOS.md](shared/third_party/PHOTOS.md);
+- the QR encoder, qrcodegen: [shared/third_party/FILE_TRANSFER.md](shared/third_party/FILE_TRANSFER.md).
+
+The Aura wordmark is the project owner's own artwork ([docs/BRANDING.md](docs/BRANDING.md)).

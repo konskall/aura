@@ -49,7 +49,7 @@ AoratonCommand::AoratonCommand(AoratonCommand&& other) noexcept
     : type(other.type),
       room_id(std::move(other.room_id)),
       client_message_id(std::move(other.client_message_id)),
-      plaintext(std::move(other.plaintext)) {
+      plaintext(std::move(other.plaintext)), sync_settings(other.sync_settings) {
     other.clear_plaintext();
 }
 
@@ -60,6 +60,7 @@ AoratonCommand& AoratonCommand::operator=(AoratonCommand&& other) noexcept {
     room_id = std::move(other.room_id);
     client_message_id = std::move(other.client_message_id);
     plaintext = std::move(other.plaintext);
+    sync_settings = other.sync_settings;
     other.clear_plaintext();
     return *this;
 }
@@ -128,6 +129,18 @@ RealAoratonService::~RealAoratonService() {
 }
 
 void RealAoratonService::touch() { ++snapshot_.sequence; }
+
+bool RealAoratonService::set_sync_settings(const AoratonSyncSettings& settings) {
+    if (!aoraton_sync_settings_valid(settings)) return false;
+    if (settings == snapshot_.sync_settings) return true;
+    AoratonCommand command;
+    command.type = AoratonCommandType::ConfigureSync;
+    command.sync_settings = settings;
+    if (!enqueue(std::move(command))) return false;
+    snapshot_.sync_settings = settings;
+    touch();
+    return true;
+}
 
 AoratonRoom* RealAoratonService::find_room(const std::string& room_id) {
     const auto found = std::find_if(snapshot_.rooms.begin(), snapshot_.rooms.end(),
@@ -412,16 +425,18 @@ void RealAoratonService::process(AoratonEvent event) {
             snapshot_.connection = AoratonConnectionState::Disconnected;
             snapshot_.last_error.clear();
             break;
-        case AoratonEventType::ConnectionChanged:
+        case AoratonEventType::ConnectionChanged: {
+            const bool newly_connected = snapshot_.connection != AoratonConnectionState::Connected;
             snapshot_.connection = event.connection;
             snapshot_.realtime_active = event.realtime_active;
             if (event.connection == AoratonConnectionState::Connected) {
                 snapshot_.last_error.clear();
                 AoratonCommand refresh;
                 refresh.type = AoratonCommandType::RefreshRooms;
-                enqueue(std::move(refresh));
+                if (newly_connected) enqueue(std::move(refresh));
             }
             break;
+        }
         case AoratonEventType::AuthorizedRooms:
             snapshot_.rooms.clear();
             for (auto& room : event.rooms) {

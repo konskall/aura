@@ -53,7 +53,7 @@
     // Answer: a small pearl in place of the title, the question as a serif
     // quote (up to two lines), the answer, then today's actions.
     void render_answer_marble() {
-        if (can_speak_answer()) make_header("", ui::IconRole::VolumeUp, speak_answer_event, ui::tokens::mint);
+        if (can_speak_answer()) make_header("", read_aloud_icon(), speak_answer_event, ui::tokens::mint);
         else make_header("");
         marble_pearl(content, kHaloCenterX, 48, 40);
         constexpr int kQuoteY = 104;
@@ -364,9 +364,7 @@
             home_clock = label(content, "", 0, kClockY, ui::tokens::display_width, ui::font_numerals_large(),
                                ui::tokens::text, LV_TEXT_ALIGN_CENTER);
         } else {
-            auto* brand = label(content, t().aura_name, 0, 64, ui::tokens::display_width, ui::font_brand(),
-                                ui::tokens::text, LV_TEXT_ALIGN_CENTER);
-            lv_obj_set_style_text_letter_space(brand, 10, 0);
+            aura_wordmark(content, (ui::tokens::display_width - 144) / 2, 46);
         }
         home_date = line(content, "", kGutter, kClockY + lv_font_get_line_height(ui::font_numerals_large()) - 8,
                          kWidth, ui::font_body(), ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
@@ -376,16 +374,16 @@
         create_presence(ui::MercuryState::Idle, ui::tokens::indigo);
         auto* talk = lv_button_create(content);
         ui::reset(talk);
-        lv_obj_set_size(talk, ui::tokens::MERCURY_RECT.width, ui::tokens::MERCURY_RECT.height);
-        lv_obj_set_pos(talk, kHaloCenterX - ui::tokens::MERCURY_RECT.width / 2,
-                       hero_y() - ui::tokens::MERCURY_RECT.height / 2);
+        lv_obj_set_size(talk, ui::tokens::COMPACT_PRESENCE_TARGET, ui::tokens::COMPACT_PRESENCE_TARGET);
+        lv_obj_set_pos(talk, kHaloCenterX - ui::tokens::COMPACT_PRESENCE_TARGET / 2,
+                       hero_y() - ui::tokens::COMPACT_PRESENCE_TARGET / 2);
         lv_obj_set_style_radius(talk, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(talk, ui::color(ui::tokens::text), LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(talk, LV_OPA_10, LV_STATE_PRESSED);
         lv_obj_set_clickable(talk, static_cast<bool>(callbacks.on_ask));
         lv_obj_add_event_cb(talk, ask_event, LV_EVENT_CLICKED, this);
         line(content, callbacks.on_ask ? t().home_hint : t().provider_unavailable, kGutter,
-             hero_y() + ui::tokens::MERCURY_RECT.height / 2 + 4, kWidth, ui::font_caption(),
+             hero_y() + ui::tokens::COMPACT_PRESENCE_TARGET / 2 + 4, kWidth, ui::font_caption(),
              ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
 
         // The bottom row: one or two complications, then Apps. Side by side they

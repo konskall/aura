@@ -50,6 +50,26 @@ System power actions remain typed platform intents. Restart, power-off and facto
 
 Provider and future network text is untrusted display data. Typed cards are created by trusted code. Assistant side effects and Aoraton sends cannot execute directly from generated text: the user must see the destination and exact content and explicitly confirm.
 
+## Aoraton account realtime
+
+Aoraton account realtime uses the optional shared `IAoratonRealtime` boundary. The Windows WinHTTP adapter owns its socket and bounded invalidation state; the existing account worker performs immediate REST reconciliation and alone publishes mailbox events. JWT/room changes replace the subscription generation. A separately configurable periodic check (off, or 10/30/60/300 seconds) supplements realtime; token renewal and connection recovery remain independent of that timer. Preferences use shared typed validation and local platform storage. UI realtime state reflects acknowledged subscriptions, never merely an open socket. See [ADR 0007](ADR/0007-aoraton-client-realtime.md).
+
+## Message time formatting
+
+Message timestamps stay unchanged in the service model for ordering and deduplication. The shared formatter parses explicit ISO UTC offsets into absolute instants and calls the platform `on_local_time` converter for the message's date. Windows uses its dynamic timezone database; firmware uses the already configured local TZ rules. Both bubble metadata and the full-message reader use the same formatter. If conversion is unavailable, the localized UI labels the UTC fallback explicitly.
+
+## Local photos
+
+`PhotoModel` owns the catalog, selection, slideshow and ambient-photo preference in shared code. `PhotoWorker` reads, decodes and performs confirmed exact-name deletion only on a platform worker through bounded mailboxes; it never calls LVGL. The Windows adapter uses a local `photos` directory beside the companion stores, rejects redirected directories/files and reads Unicode filenames through Windows handles. Firmware uses `/sdcard/aura/photos` on its existing storage task. The separate authenticated transfer worker can add/delete files; the owner thread reconciles completed revisions. Accepted settings are flushed before normal shutdown, and reset preserves the photo directory. Deleting the selected ambient file clears both its cached image and persisted preference.
+
+The catalog is limited to 128 files (up to 2,048 directory entries examined), and the UI renders eight file rows per page. JPG/JPEG/PNG files are bounded to 4 MiB. Baseline JPEGs up to 40 megapixels decode in MCU blocks with integer downscaling into at most 480x480 RGB565. PNG and progressive JPEG expansion is capped at 1,048,576 pixels and uses a separate 4 MiB allocation budget; actual free memory can impose a smaller limit. Large input/output buffers allocate without exceptions and fail visibly when unavailable. The same pinned TJpgDec/stb_image code runs on both platforms. EXIF orientations 1-8 are applied locally; alpha is composited over black.
+
+One decoded image is displayed and at most one selected ambient image is retained independently while browsing. LVGL source/header caches are invalidated on the UI thread before source replacement. A slideshow runs only in the viewer, holds the display awake, and stops when another view opens. Ambient uses a static dimmed image, the existing clock and pixel shifting; it does no continuous SD reads. Photo names/pixels never enter assistant or bridge requests. Owner-initiated local uploads use the isolated temporary service below.
+
+## Local file transfer
+
+The shared `TransferSession` owns bounded, mutex-protected session state and exports snapshots; only the UI thread renders them. Enable creates a ten-minute memory-only PIN/bearer lease. Native Winsock and ESP-IDF HTTP adapters stream validated owner uploads through `TransferProtocol` into photos/files staging adapters. Neither the protocol nor platform workers call LVGL. Authenticated lists are bounded to 128 ordinary files per cursor page; exact-name deletion requires explicit confirmation. There is no download endpoint. Atomic non-replacing commits notify the photo catalog through a revision consumed by the owner thread. Uploads leave a visible viewer undisturbed; external photo deletion returns it to the refreshed gallery and reconciles the ambient preference. Windows uses an exclusive staging lock across app instances, a bounded graceful drain for rejected request bodies, and a separate explicit browser action. The localized browser prepares larger photos at 480x480 without changing the original. The AI bridge keeps its loopback-only listener. See [ADR 0008](ADR/0008-local-file-transfer.md).
+
 ## Memory policy
 
 The simulator renders at 480 × 480. Firmware uses partial LVGL draw buffers rather than assuming a permanent full RGB565 framebuffer. Text, history, diagnostics, Aoraton messages and audio input are bounded. Codec writes use fixed 512-sample chunks; see [architecture/MEMORY_BUDGET.md](architecture/MEMORY_BUDGET.md).

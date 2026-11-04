@@ -100,6 +100,15 @@ extern "C" void app_main(void) {
     // the loop below touches the same models only under that lock as well.
     if (bsp_display_lock(0)) {
         aura::AuraUiCallbacks callbacks;
+        callbacks.on_local_time = [network_started](std::int64_t timestamp) -> std::optional<aura::LocalDateTime> {
+            if (!network_started) return std::nullopt;
+            const auto when = static_cast<std::time_t>(timestamp);
+            if (static_cast<std::int64_t>(when) != timestamp) return std::nullopt;
+            std::tm local{};
+            if (!localtime_r(&when, &local)) return std::nullopt;
+            return aura::LocalDateTime{local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
+                                      local.tm_hour, local.tm_min, local.tm_sec, local.tm_wday};
+        };
         callbacks.on_home = [] { controller.dispatch({aura::EventType::Reset, {}, 0}); };
         callbacks.on_notifications_clear = [] { controller.dispatch({aura::EventType::NotificationsCleared, {}, 0}); };
         callbacks.on_audio_test = [] { audio.play_test_tone(); };
@@ -188,7 +197,7 @@ extern "C" void app_main(void) {
             network.forget();
             wifi.forget_saved_network();
         };
-        companion.install(callbacks);
+        companion.install(callbacks, &aoraton);
         ui.set_language(companion.language());
         ui.set_appearance(companion.appearance());
         ui.create(display, std::move(callbacks));

@@ -24,8 +24,8 @@ SCREENS = (
     ("28", "system-factory-reset"), ("29", "boot"), ("30", "power-off"),
 )
 MOTION_STATES = ("home", "listening", "thinking", "speaking")
-MERCURY_BOX = (145, 165, 335, 355)
-MERCURY_SOURCE_BOX = (152, 172, 328, 348)
+MERCURY_BOX = (114, 120, 366, 372)
+MERCURY_SOURCE_BOX = (114, 120, 366, 372)
 
 
 def require_480(path: Path) -> Image.Image:
@@ -104,15 +104,33 @@ def build_typography(root: Path, font: ImageFont.ImageFont) -> list[dict[str, ob
     return results
 
 
-def bright_border_pixels(frame: Image.Image) -> int:
-    crop = frame.crop(MERCURY_SOURCE_BOX)
-    width, height = crop.size
-    border = Image.new("L", (width, height), 0)
-    draw = ImageDraw.Draw(border)
-    draw.rectangle((0, 0, width - 1, height - 1), outline=255, width=4)
-    bright = crop.convert("L").point(lambda value: 255 if value > 145 else 0)
-    masked = ImageChops.multiply(bright, border)
-    return sum(masked.histogram()[1:])
+def animated_bright_border_pixels(frames: list[Image.Image]) -> list[int]:
+    """Count moving bright material on the composited image-source border.
+
+    The enlarged transparent Synapse source now overlaps the static date label.
+    Sampling brightness alone therefore mistakes the label visible through fully
+    transparent source pixels for clipped Synapse material.  A real boundary hit
+    remains visible across the captured animation, so require both brightness and
+    a per-channel change before counting it.
+    """
+    crops = [frame.crop(MERCURY_SOURCE_BOX) for frame in frames]
+    width, height = crops[0].size
+    pixels = [crop.load() for crop in crops]
+    counts = [0] * len(crops)
+    for y in range(height):
+        for x in range(width):
+            if x >= 4 and y >= 4 and x < width - 4 and y < height - 4:
+                continue
+            samples = [image[x, y] for image in pixels]
+            dynamic = max(max(sample[channel] for sample in samples) -
+                          min(sample[channel] for sample in samples)
+                          for channel in range(3))
+            if dynamic <= 8:
+                continue
+            for index, sample in enumerate(samples):
+                if sum(sample) / 3 > 145:
+                    counts[index] += 1
+    return counts
 
 
 def parse_performance(path: Path) -> dict[str, object]:
@@ -145,16 +163,16 @@ def build_motion(root: Path, font: ImageFont.ImageFont) -> dict[str, object]:
         hashes = {hashlib.sha256(frame.tobytes()).hexdigest() for frame in frames}
         adjacent = [changed_pixels(frames[index], frames[index + 1], MERCURY_BOX) for index in range(7)]
         first_last = changed_pixels(frames[0], frames[-1], MERCURY_BOX)
-        borders = [bright_border_pixels(frame) for frame in frames]
+        borders = animated_bright_border_pixels(frames)
         if len(hashes) != 8:
             raise ValueError(f"{state}: expected eight distinct rendered frames")
         if min(adjacent) < 1000 or first_last < 1000:
-            raise ValueError(f"{state}: Mercury material is too static: {adjacent}, {first_last}")
+            raise ValueError(f"{state}: Synapse material is too static: {adjacent}, {first_last}")
         if max(borders) != 0:
-            raise ValueError(f"{state}: bright Mercury pixels touch source bounds: {borders}")
+            raise ValueError(f"{state}: bright Synapse pixels touch source bounds: {borders}")
         first_frames[state] = frames[0]
         y = row * (thumb + header)
-        draw.text((8, y + 5), f"{state} · 8 frames / 2450 ms · Mercury Δ {first_last}",
+        draw.text((8, y + 5), f"{state} · 8 frames / 2450 ms · Synapse Δ {first_last}",
                   fill="#25D6FF", font=font)
         for index, frame in enumerate(frames):
             frame.save(motion_root / state / f"{state}-{index}.png", optimize=True)
@@ -177,7 +195,7 @@ def build_motion(root: Path, font: ImageFont.ImageFont) -> dict[str, object]:
         for right in MOTION_STATES[left_index + 1:]:
             delta = changed_pixels(first_frames[left], first_frames[right], MERCURY_BOX)
             if delta < 5000:
-                raise ValueError(f"Mercury states {left}/{right} are not visually distinct: {delta}")
+                raise ValueError(f"Synapse states {left}/{right} are not visually distinct: {delta}")
             cross_state[f"{left}_vs_{right}"] = delta
     summary["cross_state_changed_pixels"] = cross_state
     sheet.save(root / "AURA_V10_2_MERCURY_MOTION.png", optimize=True)

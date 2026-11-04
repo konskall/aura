@@ -88,18 +88,20 @@ AoratonAccountWorker::AoratonAccountWorker(AoratonMailbox& mailbox,
                                            IAoratonAccountCrypto& account_crypto,
                                            IAoratonCryptoV2& message_crypto,
                                            IAoratonSecretStore& store,
-                                           IAoratonSignInChannel& channel)
+                                           IAoratonSignInChannel& channel,
+                                           IAoratonRealtime* realtime)
     : mailbox_(mailbox),
       config_(std::move(config)),
       http_(http),
       account_crypto_(account_crypto),
       message_crypto_(message_crypto),
       store_(store),
-      channel_(channel) {
+      channel_(channel), realtime_(realtime) {
     config_.base_url = trim_base(config_.base_url);
 }
 
 AoratonAccountWorker::~AoratonAccountWorker() {
+    if (realtime_) realtime_->stop();
     if (signing_in_) channel_.close();
     wipe(verifier_);
 }
@@ -161,7 +163,25 @@ void AoratonAccountWorker::step(std::int64_t now_ms, std::int64_t now_unix) {
         start(now_ms, now_unix);
         return;
     }
-    if (signed_in_ && connected_ && now_ms_ >= next_poll_ms_) {
+    bool realtime_refresh = false;
+    // Token maintenance is independent of the optional overview poll. Turning
+    // polling off must never let a quiet realtime session expire an hour later.
+    if (signed_in_ && connected_ && session_.expires_at_unix - now_unix_ < 60 && now_ms_ >= next_auth_retry_ms_) {
+        const auto refreshed = refresh_session();
+        if (refreshed == RefreshResult::Revoked) { session_revoked(); return; }
+        next_auth_retry_ms_ = now_ms_ + kRetryIntervalMs;
+        if (refreshed == RefreshResult::Ok) configure_realtime();
+        else { connection_lost(); next_poll_ms_ = now_ms_ + kRetryIntervalMs; }
+    }
+    if (signed_in_ && connected_ && realtime_) {
+        const auto update = realtime_->poll();
+        realtime_status(update.active && !reconnecting_);
+        realtime_refresh = update.refresh_required;
+    }
+    const bool periodic_due = sync_settings_.polling_enabled && now_ms_ >= next_poll_ms_;
+    const bool recovery_due = reconnecting_ && now_ms_ >= next_poll_ms_;
+    if (signed_in_ && connected_ && (sync_requested_ || periodic_due || recovery_due || realtime_refresh)) {
+        sync_requested_ = false;
         if (refresh_rooms()) {
             if (reconnecting_) {
                 reconnecting_ = false;
@@ -171,7 +191,8 @@ void AoratonAccountWorker::step(std::int64_t now_ms, std::int64_t now_unix) {
                 emit(std::move(event));
             }
         }
-        next_poll_ms_ = now_ms_ + kPollIntervalMs;
+        next_poll_ms_ = now_ms_ + (reconnecting_ && !sync_settings_.polling_enabled ?
+                                  kRetryIntervalMs : sync_settings_.interval_seconds * 1000LL);
     }
 }
 
@@ -186,11 +207,16 @@ void AoratonAccountWorker::handle(AoratonCommand& command) {
         case AoratonCommandType::ConfirmPairingSas: break;
         case AoratonCommandType::Unpair: sign_out(); break;
         case AoratonCommandType::Connect: connect(); break;
-        case AoratonCommandType::Disconnect: connected_ = false; break;
+        case AoratonCommandType::Disconnect:
+            connected_ = false;
+            if (realtime_) realtime_->stop();
+            realtime_active_ = false;
+            break;
         case AoratonCommandType::RefreshRooms:
             if (signed_in_) {
                 refresh_rooms();
-                next_poll_ms_ = now_ms_ + kPollIntervalMs;
+                sync_requested_ = false;
+                next_poll_ms_ = now_ms_ + sync_settings_.interval_seconds * 1000LL;
             }
             break;
         case AoratonCommandType::FetchRecentMessages:
@@ -206,6 +232,13 @@ void AoratonAccountWorker::handle(AoratonCommand& command) {
         case AoratonCommandType::SendText: send_text(command); break;
         case AoratonCommandType::UnlockVault: unlock_vault(command.plaintext); break;
         case AoratonCommandType::AddInviteKey: add_invite(command.plaintext); break;
+        case AoratonCommandType::ConfigureSync:
+            if (aoraton_sync_settings_valid(command.sync_settings)) {
+                sync_requested_ = sync_requested_ || (!sync_settings_.polling_enabled && command.sync_settings.polling_enabled);
+                sync_settings_ = command.sync_settings;
+                next_poll_ms_ = now_ms_ + sync_settings_.interval_seconds * 1000LL;
+            }
+            break;
     }
     command.clear_plaintext();
 }
@@ -295,9 +328,30 @@ void AoratonAccountWorker::connect() {
     if (!signed_in_) return;
     connected_ = true;
     reconnecting_ = false;
+    next_poll_ms_ = 0;
+    sync_requested_ = true;
     AoratonEvent event;
     event.type = AoratonEventType::ConnectionChanged;
     event.connection = AoratonConnectionState::Connected;
+    emit(std::move(event));
+}
+
+void AoratonAccountWorker::configure_realtime() {
+    if (!realtime_ || !signed_in_ || !connected_) return;
+    std::vector<std::string> keys;
+    for (const auto& room : rooms_) keys.push_back(room.room_key);
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+    realtime_->configure(config_.base_url, config_.anon_key, session_.access_token, keys);
+}
+
+void AoratonAccountWorker::realtime_status(bool active) {
+    if (active == realtime_active_) return;
+    realtime_active_ = active;
+    AoratonEvent event;
+    event.type = AoratonEventType::ConnectionChanged;
+    event.connection = reconnecting_ ? AoratonConnectionState::Reconnecting : AoratonConnectionState::Connected;
+    event.realtime_active = active;
     emit(std::move(event));
 }
 
@@ -386,6 +440,8 @@ AoratonAccountWorker::RestResult AoratonAccountWorker::rest(const std::string& m
 }
 
 void AoratonAccountWorker::session_revoked() {
+    if (realtime_) realtime_->stop();
+    realtime_active_ = false;
     signed_in_ = false;
     connected_ = false;
     reconnecting_ = false;
@@ -399,6 +455,8 @@ void AoratonAccountWorker::session_revoked() {
 }
 
 void AoratonAccountWorker::connection_lost() {
+    if (realtime_) realtime_->stop();
+    realtime_active_ = false;
     if (reconnecting_) return;
     reconnecting_ = true;
     AoratonEvent event;
@@ -408,6 +466,8 @@ void AoratonAccountWorker::connection_lost() {
 }
 
 void AoratonAccountWorker::sign_out() {
+    if (realtime_) realtime_->stop();
+    realtime_active_ = false;
     if (signed_in_) auth_post("/auth/v1/logout?scope=local", {}, true);
     if (signing_in_) channel_.close();
     signing_in_ = false;
@@ -577,6 +637,7 @@ bool AoratonAccountWorker::refresh_rooms() {
         return left.latest_timestamp > right.latest_timestamp;
     });
     emit(std::move(event));
+    configure_realtime();
     return true;
 }
 

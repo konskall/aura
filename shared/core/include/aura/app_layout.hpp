@@ -21,6 +21,7 @@ enum class LauncherApp : std::uint8_t {
     Notifications,
     Settings,
     Organizer,
+    Photos,
     Count,
 };
 
@@ -30,7 +31,7 @@ constexpr std::array<LauncherApp, kLauncherAppCount> kDefaultLauncherOrder{
     LauncherApp::Conversation, LauncherApp::Weather, LauncherApp::Messages,
     LauncherApp::Clock, LauncherApp::Notes, LauncherApp::Translate,
     LauncherApp::Today, LauncherApp::Radio, LauncherApp::Notifications,
-    LauncherApp::Settings, LauncherApp::Organizer,
+    LauncherApp::Settings, LauncherApp::Organizer, LauncherApp::Photos,
 };
 
 struct LauncherLayoutSnapshot {

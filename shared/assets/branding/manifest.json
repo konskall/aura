@@ -1,0 +1,45 @@
+{
+  "schema": "aura.brand-assets.v2",
+  "format": "ARGB8888",
+  "reference": {
+    "file": "source/Aura_Selas_Transparent.png",
+    "width": 3408,
+    "height": 1260,
+    "sha256": "4b7d26de269503eba24203b7859efbda526058d5c83c044ecbe3ca0e98f4296b",
+    "compiled": false
+  },
+  "assets": [
+    {
+      "id": "aoraton",
+      "width": 96,
+      "height": 96,
+      "source": "https://aoraton.com/favicon-96x96.png",
+      "source_sha256": "48384768a51c5ee4d767b70b3668a0bdc661eb9be2c09e6d3aba3fa8690678bc",
+      "bytes": 36864
+    },
+    {
+      "id": "google",
+      "width": 32,
+      "height": 32,
+      "source": "https://developers.google.com/static/identity/images/g-logo.png",
+      "source_sha256": "d1ce9c2af0b10a7333abc99bc706f9a6a199e5b65bf3e3009624f076b8638e6a",
+      "bytes": 4096
+    },
+    {
+      "id": "aura-compact",
+      "width": 144,
+      "height": 53,
+      "source": "source/Aura_Selas.svg",
+      "source_sha256": "54052b36775a5010b91d6aada545da15e7a95a651e24e403e99b9cd980efc1da",
+      "bytes": 30528
+    },
+    {
+      "id": "aura-hero",
+      "width": 176,
+      "height": 65,
+      "source": "source/Aura_Selas.svg",
+      "source_sha256": "54052b36775a5010b91d6aada545da15e7a95a651e24e403e99b9cd980efc1da",
+      "bytes": 45760
+    }
+  ]
+}

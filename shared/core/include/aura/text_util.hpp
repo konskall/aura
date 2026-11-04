@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <optional>
 #include <string>
@@ -82,5 +83,19 @@ bool local_date_time_valid(const LocalDateTime& value) noexcept;
 std::int64_t days_from_civil(int year, int month, int day) noexcept;
 std::int64_t minute_index(const LocalDateTime& value) noexcept;
 LocalDateTime from_minute_index(std::int64_t index) noexcept;
+
+// An absolute server timestamp, with an explicit Z/numeric UTC offset. Accepts
+// fractional seconds and PostgreSQL offset forms; rejects impossible dates.
+// No implicit machine timezone is used while parsing.
+std::optional<std::int64_t> parse_iso_timestamp(std::string_view value) noexcept;
+
+using LocalTimeConverter = std::function<std::optional<LocalDateTime>(std::int64_t)>;
+struct MessageTimeLabel {
+    std::string clock;
+    bool utc{false};
+};
+// Plain HH:MM fixtures are already local. Absolute times are converted by the
+// platform; an unavailable conversion stays explicitly UTC rather than guessed.
+MessageTimeLabel message_time_label(std::string_view value, const LocalTimeConverter& to_local);
 
 }  // namespace aura

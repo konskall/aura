@@ -4,6 +4,7 @@
 #include "aura/aoraton_crypto.hpp"
 #include "aura/aoraton_inco.hpp"
 #include "aura/aoraton_real.hpp"
+#include "aura/aoraton_realtime.hpp"
 
 #include <cstdint>
 #include <map>
@@ -70,7 +71,8 @@ public:
 };
 
 // Runs on one platform thread: `step` handles bounded mailbox commands, the
-// pending sign-in and the 10 s poll, blocking on HTTP as it goes. It never puts
+// pending sign-in, realtime invalidations and a 10 s fallback poll. HTTP is
+// blocking on this worker only. It never puts
 // a token, passphrase or room key into an event. Its only log is inco's
 // outcome line (ids and codes) through AoratonIncoConfig::log.
 class AoratonAccountWorker final {
@@ -86,7 +88,8 @@ public:
                          IAoratonAccountCrypto& account_crypto,
                          IAoratonCryptoV2& message_crypto,
                          IAoratonSecretStore& store,
-                         IAoratonSignInChannel& channel);
+                         IAoratonSignInChannel& channel,
+                         IAoratonRealtime* realtime = nullptr);
     ~AoratonAccountWorker();
 
     AoratonAccountWorker(const AoratonAccountWorker&) = delete;
@@ -125,6 +128,8 @@ private:
     void session_revoked();
     void connection_lost();
     void connect();
+    void configure_realtime();
+    void realtime_status(bool active);
     void sign_out();
     bool refresh_rooms();
     bool fetch_history(const std::string& room_key);
@@ -156,6 +161,11 @@ private:
     IAoratonCryptoV2& message_crypto_;
     IAoratonSecretStore& store_;
     IAoratonSignInChannel& channel_;
+    IAoratonRealtime* realtime_{nullptr};
+    bool realtime_active_{false};
+    AoratonSyncSettings sync_settings_;
+    bool sync_requested_{false};
+    std::int64_t next_auth_retry_ms_{0};
 
     AoratonSession session_;
     AoratonStoredSecrets secrets_;

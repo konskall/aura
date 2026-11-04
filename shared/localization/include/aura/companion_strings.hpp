@@ -327,6 +327,20 @@ struct CompanionStrings {
     const char* aoraton_sign_in_network;
     const char* aoraton_sign_in_unavailable;
     const char* aoraton_live_polling;
+    const char* aoraton_live_realtime;
+    const char* aoraton_realtime_ready;
+    const char* aoraton_sync_title;
+    const char* aoraton_sync_periodic;
+    const char* aoraton_sync_switch;
+    const char* aoraton_sync_enabled;
+    const char* aoraton_sync_off;
+    const char* aoraton_sync_every;
+    const char* aoraton_sync_10;
+    const char* aoraton_sync_30;
+    const char* aoraton_sync_60;
+    const char* aoraton_sync_300;
+    const char* aoraton_sync_note;
+    const char* aoraton_sync_failed;
     const char* aoraton_room_locked;
     const char* aoraton_keys;
     const char* aoraton_keys_one;
@@ -377,6 +391,8 @@ struct CompanionStrings {
     const char* system_update;
     const char* system_diagnostics;
     const char* system_diagnostics_detail;
+    const char* system_credits;
+    const char* system_credits_detail;
     const char* system_power;
     const char* system_restart;
     const char* system_power_off;
@@ -399,6 +415,18 @@ struct CompanionStrings {
     const char* system_powering_on_detail;
     const char* system_power_off_hint;
     const char* system_power_off_hint_button;
+    const char* credits_intro;
+    const char* credits_platform_title;
+    const char* credits_platform_body;
+    const char* credits_icons_title;
+    const char* credits_icons_body;
+    const char* credits_fonts_title;
+    const char* credits_fonts_body;
+    const char* credits_media_title;
+    const char* credits_media_body;
+    const char* credits_design_title;
+    const char* credits_design_body;
+    const char* credits_license_note;
 
     // Interface language. Language names are endonyms; all explanatory copy
     // follows the currently selected interface language.
@@ -408,6 +436,14 @@ struct CompanionStrings {
     const char* language_greek_detail;
     const char* language_english_detail;
     const char* language_change_note;
+    const char* aoraton_message_title;
+    const char* aoraton_you;
+    const char* aoraton_time_utc_format; // %s; fallback when platform timezone is unavailable
+    const char* aoraton_ask_aura;
+    const char* aoraton_share_question;
+    const char* aoraton_share_hint;
+    const char* aoraton_share_action;
+    const char* aoraton_assist_instruction;
 };
 
 const CompanionStrings& companion_el_gr() noexcept;

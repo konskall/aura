@@ -9,8 +9,10 @@
 #include "aura/strings.hpp"
 #include "aura/visual_strings.hpp"
 #include "aura/companion_strings.hpp"
+#include "aura_brand_assets.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <initializer_list>
 #include <iostream>
@@ -22,6 +24,41 @@ void expect(bool value, const char* message) {
         std::cerr << "FAILED: " << message << '\n';
         std::exit(1);
     }
+}
+
+void check_aura_logo_asset(const lv_image_dsc_t& asset, int width, int height) {
+    expect(asset.header.magic == LV_IMAGE_HEADER_MAGIC && asset.header.cf == LV_COLOR_FORMAT_ARGB8888,
+           "Aura logo uses the project's full-colour LVGL format");
+    expect(asset.header.w == width && asset.header.h == height &&
+               asset.header.stride == static_cast<std::uint32_t>(width * 4),
+           "Aura logo keeps its approved aspect ratio at the required size");
+    expect(asset.data && asset.data_size == static_cast<std::uint32_t>(width * height * 4),
+           "Aura logo is a bounded native image asset");
+
+    bool transparent = false;
+    bool partial_alpha = false;
+    bool opaque = false;
+    bool cyan = false;
+    bool blue = false;
+    bool violet = false;
+    for (std::uint32_t offset = 0; offset < asset.data_size; offset += 4) {
+        const auto b = asset.data[offset];
+        const auto g = asset.data[offset + 1];
+        const auto r = asset.data[offset + 2];
+        const auto a = asset.data[offset + 3];
+        transparent = transparent || a == 0;
+        partial_alpha = partial_alpha || (a > 0 && a < 255);
+        opaque = opaque || a == 255;
+        if (a > 160) {
+            cyan = cyan || (g > r + 20 && b > r + 20);
+            blue = blue || (b > r + 20 && b > g + 10);
+            violet = violet || (r > g + 15 && b > g + 20);
+        }
+    }
+    const auto last_alpha = asset.data[asset.data_size - 1];
+    expect(asset.data[3] == 0 && last_alpha == 0 && transparent && partial_alpha && opaque,
+           "Aura logo background, corners and antialiasing preserve transparency");
+    expect(cyan && blue && violet, "Aura logo preserves the approved cyan-blue-violet gradient");
 }
 
 // Strings/VisualStrings are positional aggregates of `const char*`. Every
@@ -256,7 +293,7 @@ void check_appearance_registry() {
     ui::set_active_appearance(Appearance::Halo);
     expect(ui::metrics_for(Appearance::Halo).rows == ui::RowStyle::Platter &&
                ui::metrics_for(Appearance::Halo).platter_radius == 28 &&
-               ui::metrics_for(Appearance::Halo).hero_center_y == 260,
+               ui::metrics_for(Appearance::Halo).hero_center_y == 246,
            "Halo metrics describe today's components");
 }
 
@@ -391,11 +428,11 @@ void check_presences() {
         expect(presence->object() == nullptr, "a detached presence holds no object");
         lv_obj_clean(lv_screen_active());
     }
-    expect(aura::ui::make_presence(aura::Appearance::Halo)->buffer_bytes() == 92928U,
-           "Halo keeps Mercury's 92,928-byte buffer");
+    expect(aura::ui::make_presence(aura::Appearance::Halo)->buffer_bytes() == 190512U,
+           "Halo uses the bounded 252 x 252 Synapse buffer");
 }
 
-// Μάρμαρο's pearl: a sphere in Mercury's buffer size plus rings drawn by LVGL.
+// Μάρμαρο's pearl: a sphere in its historical buffer size plus LVGL rings.
 void check_pearl_presence() {
     using aura::ui::PresenceState;
     ensure_lvgl();
@@ -403,7 +440,7 @@ void check_pearl_presence() {
     {
         auto presence = aura::ui::make_presence(aura::Appearance::Marble);
         presence->attach(screen, 240, 272);
-        expect(lv_obj_get_child_count(screen) > 1, "Marble's presence is the pearl with its rings, not Mercury");
+        expect(lv_obj_get_child_count(screen) > 1, "Marble's presence is the pearl with its own rings");
         presence->detach();
         lv_obj_clean(screen);
     }
@@ -596,20 +633,25 @@ void check_stars_presence() {
 }
 
 int main() {
+    check_aura_logo_asset(aura_brand_aura_compact, 144, 53);
+    check_aura_logo_asset(aura_brand_aura_hero, 176, 65);
+
     expect(aura::ui::tokens::HEADER_HEIGHT == 96 && aura::ui::tokens::BUTTON_HEIGHT >= 80 &&
                aura::ui::tokens::ROW_HEIGHT >= 80 && aura::ui::tokens::HEADER_BUTTON >= 64,
            "watch-class header, rows and primary targets on the 12.4 px/mm panel");
     expect(aura::ui::tokens::CONTENT_SAFE_RECT.x >= aura::ui::tokens::GUTTER,
            "content safe rect respects horizontal gutters");
     expect(aura::ui::tokens::HERO_RECT.y >= aura::ui::tokens::STATUS_BAR_HEIGHT,
-           "Mercury hero begins below the status bar");
-    expect(aura::ui::tokens::MERCURY_RECT.x >= aura::ui::tokens::HERO_RECT.x &&
-           aura::ui::tokens::MERCURY_RECT.y >= aura::ui::tokens::HERO_RECT.y &&
-           aura::ui::tokens::MERCURY_RECT.x + aura::ui::tokens::MERCURY_RECT.width <=
+           "the presence hero begins below the status bar");
+    expect(aura::ui::tokens::SYNAPSE_RECT.x >= aura::ui::tokens::HERO_RECT.x &&
+           aura::ui::tokens::SYNAPSE_RECT.y >= aura::ui::tokens::HERO_RECT.y &&
+           aura::ui::tokens::SYNAPSE_RECT.x + aura::ui::tokens::SYNAPSE_RECT.width <=
                aura::ui::tokens::HERO_RECT.x + aura::ui::tokens::HERO_RECT.width &&
-           aura::ui::tokens::MERCURY_RECT.y + aura::ui::tokens::MERCURY_RECT.height <=
+           aura::ui::tokens::SYNAPSE_RECT.y + aura::ui::tokens::SYNAPSE_RECT.height <=
                aura::ui::tokens::HERO_RECT.y + aura::ui::tokens::HERO_RECT.height,
-           "Mercury pixels remain inside the hero safe rect");
+           "Synapse pixels remain inside the hero safe rect");
+    expect(aura::ui::tokens::COMPACT_PRESENCE_TARGET == 176,
+           "Marble and Aurora keep their compact Home presence target");
     expect(aura::ui::tokens::BOTTOM_ACTION_SAFE_RECT.y >=
                aura::ui::tokens::HERO_RECT.y + aura::ui::tokens::HERO_RECT.height,
            "bottom actions do not overlap the hero safe rect");
@@ -699,11 +741,121 @@ int main() {
     check_aurora_presence();
     check_stars_presence();
 
-    aura::ui::AuraMercuryView mercury;
-    expect(mercury.buffer_bytes() == static_cast<std::size_t>(176 * 176 * 3),
-           "Mercury uses bounded RGB565+A8 storage");
-    expect(aura::ui::AuraMercuryView::frame_interval_ms == 66,
-           "Mercury animation targets approximately 15 FPS");
+    aura::ui::AuraMercuryView synapse;
+    expect(aura::ui::AuraMercuryView::size == 252 &&
+               synapse.buffer_bytes() == static_cast<std::size_t>(252 * 252 * 3),
+           "Synapse uses bounded 252 x 252 RGB565+A8 storage");
+    expect(aura::ui::AuraMercuryView::frame_interval_ms == 50,
+           "Synapse animation targets 20 FPS for presentation-grade motion");
+    // A slow device renders Synapse less often instead of starving the UI: a
+    // frame takes at most a third of the time, and never slower than 5 FPS.
+    expect(aura::ui::AuraMercuryView::paced_interval(0) == 50 &&
+               aura::ui::AuraMercuryView::paced_interval(16) == 50,
+           "a fast frame keeps Synapse at 20 FPS");
+    expect(aura::ui::AuraMercuryView::paced_interval(30) == 90,
+           "a 30 ms frame waits three times its cost");
+    expect(aura::ui::AuraMercuryView::paced_interval(90) == 200,
+           "a very slow frame still leaves Synapse at 5 FPS");
+    auto* synapse_object = synapse.attach(lv_screen_active(), 240, 260);
+    const auto* synapse_source = static_cast<const lv_image_dsc_t*>(lv_image_get_src(synapse_object));
+    expect(synapse_object && synapse_source && synapse_source->header.w == 252 && synapse_source->header.h == 252,
+           "Synapse attaches the larger production canvas");
+    expect(synapse.reactor_x() == aura::ui::AuraMercuryView::size / 2 &&
+               synapse.reactor_y() == aura::ui::AuraMercuryView::size / 2 &&
+               synapse.lit_center_x() == synapse.reactor_x() && synapse.lit_center_y() == synapse.reactor_y(),
+           "the reactor and luminous geometry share the exact centre");
+    expect(synapse.lit_extent() <= aura::ui::AuraMercuryView::size - 12,
+           "Synapse keeps a transparent safety margin around its motion");
+
+    const auto composite_luminance = [synapse_source](int x, int y) {
+        constexpr int side = aura::ui::AuraMercuryView::size;
+        const auto index = static_cast<std::size_t>(y * side + x);
+        const auto packed = reinterpret_cast<const std::uint16_t*>(synapse_source->data)[index];
+        const float red = static_cast<float>((packed >> 11U) & 0x1FU) * 255.0F / 31.0F;
+        const float green = static_cast<float>((packed >> 5U) & 0x3FU) * 255.0F / 63.0F;
+        const float blue = static_cast<float>(packed & 0x1FU) * 255.0F / 31.0F;
+        const float alpha = static_cast<float>(synapse_source->data[side * side * 2 + index]) / 255.0F;
+        return (red * 0.2126F + green * 0.7152F + blue * 0.0722F) * alpha;
+    };
+    const auto radial_average = [&](float inner, float outer) {
+        float total = 0.0F;
+        int count = 0;
+        const int center = aura::ui::AuraMercuryView::size / 2;
+        const int reach = static_cast<int>(outer + 1.0F);
+        for (int y = center - reach; y <= center + reach; ++y) {
+            for (int x = center - reach; x <= center + reach; ++x) {
+                const float distance = std::hypot(static_cast<float>(x - center), static_cast<float>(y - center));
+                if (distance < inner || distance > outer) continue;
+                total += composite_luminance(x, y);
+                ++count;
+            }
+        }
+        return total / static_cast<float>(count);
+    };
+    const auto directional_range = [&](float inner, float outer) {
+        std::array<float, 8> totals{};
+        std::array<int, 8> counts{};
+        const int center = aura::ui::AuraMercuryView::size / 2;
+        const int reach = static_cast<int>(outer + 1.0F);
+        constexpr float tau = 6.28318530718F;
+        for (int y = center - reach; y <= center + reach; ++y) {
+            for (int x = center - reach; x <= center + reach; ++x) {
+                const float dx = static_cast<float>(x - center);
+                const float dy = static_cast<float>(y - center);
+                const float distance = std::hypot(dx, dy);
+                if (distance < inner || distance > outer) continue;
+                float angle = std::atan2(dy, dx);
+                if (angle < 0.0F) angle += tau;
+                const auto sector = std::min<std::size_t>(7, static_cast<std::size_t>(angle / tau * 8.0F));
+                totals[sector] += composite_luminance(x, y);
+                ++counts[sector];
+            }
+        }
+        float minimum = 255.0F;
+        float maximum = 0.0F;
+        for (std::size_t sector = 0; sector < totals.size(); ++sector) {
+            const float average = totals[sector] / static_cast<float>(counts[sector]);
+            minimum = std::min(minimum, average);
+            maximum = std::max(maximum, average);
+        }
+        return maximum - minimum;
+    };
+    expect(radial_average(0.0F, 6.0F) >= 220.0F,
+           "Synapse keeps the approved broad white nucleus instead of a pin light");
+    expect(radial_average(9.0F, 13.0F) >= 125.0F,
+           "Synapse keeps the approved cyan inner glow around the nucleus");
+    expect(radial_average(28.0F, 45.0F) >= 55.0F,
+           "Synapse keeps a visible cyan-violet corona outside the reactor");
+    float minimum_foreground_contrast = directional_range(7.0F, 18.0F);
+    for (int frame = 0; frame < 24; ++frame) {
+        synapse.tick(50);
+        minimum_foreground_contrast =
+            std::min(minimum_foreground_contrast, directional_range(7.0F, 18.0F));
+    }
+    expect(minimum_foreground_contrast >= 9.25F,
+           "foreground fibres visibly cross the reactor so it remains embedded in the network");
+
+    std::array<std::uint32_t, 4> signatures{};
+    for (const auto state : {aura::ui::PresenceState::Idle, aura::ui::PresenceState::Listening,
+                             aura::ui::PresenceState::Thinking, aura::ui::PresenceState::Speaking}) {
+        synapse.set_state(state);
+        synapse.set_level(0.72F);
+        for (int step = 0; step < 8; ++step) synapse.tick(50);
+        signatures[static_cast<std::size_t>(state)] = synapse.frame_signature();
+    }
+    expect(signatures[0] != signatures[1] && signatures[1] != signatures[2] &&
+               signatures[2] != signatures[3] && signatures[0] != signatures[3],
+           "every assistant state has a distinct Synapse frame");
+
+    synapse.set_state(aura::ui::PresenceState::Listening);
+    synapse.set_level(0.0F);
+    for (int step = 0; step < 7; ++step) synapse.tick(50);
+    const auto quiet_signature = synapse.frame_signature();
+    synapse.set_level(1.0F);
+    for (int step = 0; step < 7; ++step) synapse.tick(50);
+    expect(synapse.frame_signature() != quiet_signature, "the listening lattice follows the voice level");
+    synapse.detach();
+    lv_obj_clean(lv_screen_active());
 
     std::cout << "ui_assets_test: PASS\n";
     return 0;

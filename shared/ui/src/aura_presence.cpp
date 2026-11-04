@@ -7,7 +7,7 @@
 
 namespace aura::ui {
 
-// Each appearance's own presence: Mercury (Άλως), the pearl (Μάρμαρο), the
+// Each appearance's own presence: Synapse (Άλως), the pearl (Μάρμαρο), the
 // ribbons (Σέλας) and the constellation (Γραφίτης).
 std::unique_ptr<PresenceView> make_presence(Appearance appearance) {
     if (appearance == Appearance::Marble) return std::make_unique<AuraPearlView>();
