@@ -19,14 +19,17 @@
 
 ## Pending gates
 
-- [ ] Choose the cloud AI provider and build the gateway; enable device voice/translation/spoken replies through it.
+- [x] The device's own assistant (the owner's choice, 2026-11-05; ADR 0009): Groq listens and answers, Azure speaks, keys sent from the PC into encrypted NVS (`scripts/send-device-keys.ps1`). Spoken questions and replies are wired; translation on the device and confirming the model's actions on the device are still to do.
+- [ ] Translation on the device through the same services, and confirming the model's proposed actions on the device.
 - [ ] Build the AURA Link Android app and the device-side GATT server (`docs/phone/ANDROID_COMPANION.md`).
 - [ ] Train and license a Greek wake-word model for «Αύρα» (ESP-SR WakeNet, openWakeWord or microWakeWord); measure false accepts/rejects and battery cost before enabling the existing capability.
-- [ ] Decide the OTA hosting and signing (secure boot or signed images) before the first field update.
+- [x] Signed updates in code (2026-11-05): the manifest carries the owner's ECDSA P-256 signature (`scripts/update-signing.mjs`); production adds Secure Boot V2.
+- [ ] Generate the owner's update signing key, put its public key in `sdkconfig.defaults`, and decide where updates are hosted.
 
 - [x] Install/activate ESP-IDF 5.5.5 and compile the firmware; resolve only evidence-backed BSP/API drift (2026-10-24: clean build; see VERIFICATION).
 - [ ] Flash the board and validate display, touch, audio, Wi‑Fi, IMU, BLE and microSD on hardware.
-- [ ] On board arrival, execute display/touch/PMIC/SD/RTC/IMU/audio/heap/frame-time validation.
+- [ ] On board arrival, execute display/touch/PMIC/SD/RTC/IMU/audio/heap/frame-time validation. The firmware prints frame, loop, Synapse and memory numbers every 10 s for the first two minutes (`metrics ...` on the serial console); the AXP2101 and PCF85063 drivers are written but unverified.
+- [ ] Measure power on the board, then decide on automatic light sleep (dynamic frequency scaling is on: 240 MHz with the screen lit, 80 MHz dark).
 - [ ] Confirm safe GPIO46 mute/boot behavior and run rapid-cycle/long-play audio tests.
 - [ ] Add bounded streaming audio and optional Greek TTS without bypassing PCM diagnostics.
 - [ ] Build and test an independent Aoraton adapter against an isolated test backend and known-answer crypto vectors.

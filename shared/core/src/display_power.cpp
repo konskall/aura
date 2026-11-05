@@ -228,6 +228,20 @@ void DisplayPowerModel::set_minute(std::int64_t minute_index) {
 
 // Dimming never brightens: the dimmed screen is 40% of the owner's level (at
 // most 30%) and the always-on clock 20% of it (at most 12%).
+std::uint32_t host_loop_interval_ms(DisplayMode mode) noexcept {
+    switch (mode) {
+        case DisplayMode::Active:
+        case DisplayMode::Dimmed: return 33U;
+        case DisplayMode::AlwaysOn: return 100U;
+        case DisplayMode::Off: return 250U;
+    }
+    return 33U;
+}
+
+bool needs_full_speed(DisplayMode mode) noexcept {
+    return mode == DisplayMode::Active || mode == DisplayMode::Dimmed;
+}
+
 int DisplayPowerModel::brightness_for(DisplayMode mode) const noexcept {
     const int active = snapshot_.settings.active_brightness_percent;
     switch (mode) {

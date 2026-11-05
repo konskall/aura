@@ -415,6 +415,7 @@ struct CompanionStrings {
     const char* system_powering_on_detail;
     const char* system_power_off_hint;
     const char* system_power_off_hint_button;
+    const char* credits_creator;
     const char* credits_intro;
     const char* credits_platform_title;
     const char* credits_platform_body;

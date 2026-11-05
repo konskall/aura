@@ -26,6 +26,13 @@ works at desktop/mobile widths without external assets or an installed app.
 - A completed photo appears in the gallery automatically. An open viewer is
   not interrupted; reopening the gallery refreshes it.
 
+The same session also gives the device its assistant's keys (ADR 0009): with File
+transfer open, run `scripts/send-device-keys.ps1 -Address <address> -Code <code>` on the
+PC. It reads `GROQ_API_KEY`, `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` from the
+ignored `.env`, signs in with the code and posts them to `POST /api/keys`. The device
+checks their format and keeps them in encrypted NVS; no response echoes them and
+nothing logs them. The simulator has no such endpoint (it reads `.env` itself).
+
 After code login, **Αποθηκευμένα στη συσκευή / Saved on the device** lists photos
 or other files, 128 per page. Select the destination, refresh or use Next page.
 Press Delete beside an exact filename, then confirm it in the dialog. Cancel

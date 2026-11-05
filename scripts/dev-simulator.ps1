@@ -13,10 +13,17 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'aura-env.ps1')
 Import-AuraLocalEnv -Path (Join-Path $repo '.env')
-$exe = Join-Path $repo 'build\native\aura_simulator.exe'
-if (-not (Test-Path -LiteralPath $exe)) {
+$built = Join-Path $repo 'build\native\aura_simulator.exe'
+if (-not (Test-Path -LiteralPath $built)) {
     & (Join-Path $PSScriptRoot 'build-simulator.ps1')
 }
+# AURA runs from a copy, so a build can replace build\native\aura_simulator.exe
+# while it is open (Windows locks a running program's file). The copy needs no
+# other files: the simulator links statically and reads its data from the repo.
+$runDirectory = Join-Path $repo 'build\native\run'
+New-Item -ItemType Directory -Force -Path $runDirectory | Out-Null
+$exe = Join-Path $runDirectory 'aura_simulator.exe'
+Copy-Item -LiteralPath $built -Destination $exe -Force
 
 $runtime = Join-Path $repo 'simulator\runtime'
 New-Item -ItemType Directory -Force -Path $runtime | Out-Null

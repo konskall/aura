@@ -6,6 +6,7 @@
 #include "aura/notes.hpp"
 #include "aura/ota_update.hpp"
 #include "aura/phone_link.hpp"
+#include "aura/runtime_metrics.hpp"
 #include "aura/sounds.hpp"
 #include "aura/text_util.hpp"
 #include "aura/translation.hpp"
@@ -182,6 +183,61 @@ void clock_tests() {
     sleepy.set_clock(at(2026, 10, 22, 1, 0));
     sleepy.set_clock(at(2026, 10, 22, 9, 0));
     expect(!sleepy.snapshot().alert, "an alarm missed hours ago does not ring late");
+
+    // Daylight saving time in Athens. With the real (UTC) minute beside the wall
+    // clock, the model tells a time change from real time passing.
+    // 2027-03-28: 03:00 EET becomes 04:00 EEST, so 03:00-03:59 never happen; an
+    // alarm in that hour rings as the clock jumps.
+    ClockServicesModel spring;
+    spring.add_alarm(3, 0, false, "");
+    std::int64_t utc = minute_index(at(2027, 3, 28, 0, 59));  // 02:59 EET
+    spring.set_clock(at(2027, 3, 28, 2, 59), utc);
+    expect(!spring.snapshot().alert, "nothing rings before the clocks go forward");
+    spring.set_clock(at(2027, 3, 28, 4, 0), ++utc);
+    expect(spring.snapshot().alert && spring.snapshot().alert->hour == 3 && spring.snapshot().alert->minute == 0,
+           "an alarm in the hour the clocks skip rings when they go forward");
+    // 2026-10-25: 04:00 EEST becomes 03:00 EET, so 03:00-03:59 happen twice; a
+    // daily alarm in that hour rings once.
+    ClockServicesModel autumn;
+    autumn.add_alarm(3, 30, true, "");
+    utc = minute_index(at(2026, 10, 25, 0, 29));  // 03:29 EEST
+    autumn.set_clock(at(2026, 10, 25, 3, 29), utc);
+    autumn.set_clock(at(2026, 10, 25, 3, 30), ++utc);
+    expect(autumn.snapshot().alert.has_value(), "the alarm rings the first time 03:30 comes");
+    autumn.dismiss_alert();
+    for (int minute = 31; minute <= 59; ++minute) autumn.set_clock(at(2026, 10, 25, 3, minute), ++utc);
+    for (int minute = 0; minute <= 59; ++minute) autumn.set_clock(at(2026, 10, 25, 3, minute), ++utc);
+    expect(!autumn.snapshot().alert, "the hour the clocks repeat does not ring the alarm again");
+    for (int minute = 0; minute <= 59; ++minute) autumn.set_clock(at(2026, 10, 25, 4, minute), ++utc);
+    expect(!autumn.snapshot().alert, "after the repeated hour the day goes on as usual");
+    utc += 22 * 60 + 30;  // 03:29 the next day
+    autumn.set_clock(at(2026, 10, 26, 3, 29), utc);
+    autumn.set_clock(at(2026, 10, 26, 3, 30), ++utc);
+    expect(autumn.snapshot().alert.has_value(), "the daily alarm rings the next day");
+    // A time zone three hours to the west repeats three hours of the wall clock:
+    // a daily alarm rings at the new 07:00 as well, but not at the change itself.
+    ClockServicesModel west;
+    west.add_alarm(7, 0, true, "");
+    utc = minute_index(at(2026, 11, 2, 4, 59));
+    west.set_clock(at(2026, 11, 2, 6, 59), utc);
+    west.set_clock(at(2026, 11, 2, 7, 0), ++utc);
+    expect(west.snapshot().alert.has_value(), "the alarm rings before the journey");
+    west.dismiss_alert();
+    west.set_clock(at(2026, 11, 2, 4, 1), ++utc);
+    expect(!west.snapshot().alert, "changing the time zone rings nothing at once");
+    for (int minute = 2; minute <= 180; ++minute) {  // 04:02 to 07:00
+        west.set_clock(at(2026, 11, 2, 4 + minute / 60, minute % 60), ++utc);
+    }
+    expect(west.snapshot().alert.has_value(), "the daily alarm rings at 07:00 in the new time zone");
+    // A real clock correction backwards (the real minute goes back too) still
+    // rings the alarm when its time comes again.
+    ClockServicesModel corrected;
+    corrected.add_alarm(8, 0, true, "");
+    utc = minute_index(at(2026, 10, 22, 6, 5));
+    corrected.set_clock(at(2026, 10, 22, 8, 5), utc);
+    corrected.set_clock(at(2026, 10, 22, 7, 59), utc - 6);
+    corrected.set_clock(at(2026, 10, 22, 8, 0), utc - 5);
+    expect(corrected.snapshot().alert.has_value(), "after a correction of the real clock the alarm rings at its time");
 }
 
 void notes_tests() {
@@ -659,20 +715,62 @@ void phone_tests() {
     expect(phone.snapshot().notifications.empty(), "unpairing forgets the phone's notifications");
 }
 
+// Stands in for the platform's ECDSA check: it records what it was asked to
+// verify and answers as told.
+struct FakeUpdateVerifier final : aura::IUpdateSignatureVerifier {
+    bool key{true};
+    bool valid{true};
+    mutable std::string message;
+    mutable std::uint8_t first_byte{};
+    bool configured() const override { return key; }
+    bool verify(const std::string& signed_message, const std::array<std::uint8_t, 64>& signature) const override {
+        message = signed_message;
+        first_byte = signature[0];
+        return key && valid;
+    }
+};
+
 void ota_tests() {
     using namespace aura;
     expect(compare_versions("1.10.0", "1.9.9") > 0 && compare_versions("1.0.0", "1.0.0") == 0 &&
            compare_versions("bad", "1.0.0") < 0 && !version_valid("1.0") && version_valid("13.0.0"), "versions");
     const std::string hash(64, 'a');
+    const std::string signature = "ab" + std::string(126, '0');
     std::string error;
+    FakeUpdateVerifier verifier;
     auto manifest = parse_update_manifest(
         "{\"version\":\"13.1.0\",\"url\":\"https://updates.example/aura.bin\",\"size\":1234567,\"sha256\":\"" + hash +
-        "\",\"notes\":\"Νέα\"}", &error);
+        "\",\"notes\":\"Νέα\",\"signature\":\"" + signature + "\"}", verifier, &error);
     expect(manifest && manifest->size_bytes == 1234567 && manifest->notes == "Νέα", "a valid manifest");
+    expect(verifier.message == "AURA-OTA-1\n13.1.0\n1234567\n" + hash + "\n" && verifier.first_byte == 0xAB,
+           "the owner's signature is checked over the version, the size and the SHA-256");
     expect(!parse_update_manifest("{\"version\":\"13.1.0\",\"url\":\"http://x/a.bin\",\"size\":1,\"sha256\":\"" + hash +
-                                  "\"}", &error) && error == "MANIFEST_BAD_URL", "plain HTTP is refused");
+                                  "\",\"signature\":\"" + signature + "\"}", verifier, &error) &&
+           error == "MANIFEST_BAD_URL", "plain HTTP is refused");
     expect(!parse_update_manifest("{\"version\":\"13.1.0\",\"url\":\"https://x/a.bin\",\"size\":99999999,\"sha256\":\"" +
-                                  hash + "\"}", &error) && error == "MANIFEST_BAD_SIZE", "oversized images are refused");
+                                  hash + "\",\"signature\":\"" + signature + "\"}", verifier, &error) &&
+           error == "MANIFEST_BAD_SIZE", "oversized images are refused");
+    const std::string unsigned_manifest = "{\"version\":\"13.1.0\",\"url\":\"https://x/a.bin\",\"size\":1,\"sha256\":\"" +
+                                          hash + "\"}";
+    expect(!parse_update_manifest(unsigned_manifest, verifier, &error) && error == "MANIFEST_UNSIGNED",
+           "an update without the owner's signature is refused");
+    expect(!parse_update_manifest("{\"version\":\"13.1.0\",\"url\":\"https://x/a.bin\",\"size\":1,\"sha256\":\"" +
+                                  hash + "\",\"signature\":\"xyz\"}", verifier, &error) && error == "MANIFEST_UNSIGNED",
+           "a malformed signature is no signature");
+    verifier.valid = false;
+    expect(!parse_update_manifest("{\"version\":\"13.1.0\",\"url\":\"https://x/a.bin\",\"size\":1,\"sha256\":\"" +
+                                  hash + "\",\"signature\":\"" + signature + "\"}", verifier, &error) &&
+           error == "MANIFEST_BAD_SIGNATURE", "a signature by another key, or for other bytes, is refused");
+    verifier.key = false;
+    expect(!parse_update_manifest("{\"version\":\"13.1.0\",\"url\":\"https://x/a.bin\",\"size\":1,\"sha256\":\"" +
+                                  hash + "\",\"signature\":\"" + signature + "\"}", verifier, &error) &&
+           error == "UPDATE_KEY_MISSING", "a build without the owner's public key installs nothing");
+    verifier.key = true;
+    verifier.valid = true;
+    const std::string upper_hash(64, 'A');
+    expect(parse_update_manifest("{\"version\":\"13.1.0\",\"url\":\"https://x/a.bin\",\"size\":1,\"sha256\":\"" +
+                                 upper_hash + "\",\"signature\":\"" + signature + "\"}", verifier, &error) &&
+           verifier.message == "AURA-OTA-1\n13.1.0\n1\n" + hash + "\n", "the signed SHA-256 is in lower case");
 
     OtaUpdateModel ota("13.0.0");
     expect(!ota.begin_check(), "no source, no check");
@@ -944,8 +1042,57 @@ void sound_tests() {
     expect(foreign.volume == defaults.volume && foreign.message_chime, "a file without the header is ignored");
 }
 
+// The device's main loop and processor follow the screen: full speed while it
+// is lit, slower and at a lower clock once it is dark.
+// The numbers the first boot on a board prints: frame and loop times, Synapse,
+// internal RAM and PSRAM.
+void metrics_tests() {
+    using namespace aura;
+    DurationStats stats;
+    expect(stats.count() == 0 && stats.mean_us() == 0 && stats.max_us() == 0, "no samples, no numbers");
+    stats.add(10000);
+    stats.add(30000);
+    stats.add(20000);
+    expect(stats.count() == 3 && stats.mean_us() == 20000 && stats.max_us() == 30000, "count, mean and maximum");
+    stats.reset();
+    expect(stats.count() == 0 && stats.max_us() == 0, "a new window starts empty");
+    RuntimeMetrics metrics;
+    metrics.uptime_ms = 12345;
+    metrics.frame.add(12300);
+    metrics.frame.add(40000);
+    metrics.loop.add(1200);
+    metrics.presence_frame_ms = 180;
+    metrics.presence_reduced = true;
+    metrics.presence_fps = 1.84;
+    metrics.internal_free = 120 * 1024;
+    metrics.internal_min_free = 95 * 1024;
+    metrics.internal_largest = 60 * 1024;
+    metrics.psram_free = 6100 * 1024;
+    metrics.psram_min_free = 5900 * 1024;
+    metrics.psram_largest = 4000 * 1024;
+    const auto line = format_runtime_metrics(metrics);
+    expect(line == "t=12.3 s | frame avg 26.1 max 40.0 ms n=2 | loop avg 1.2 max 1.2 ms n=1 | "
+                   "synapse 180 ms reduced 1.8 fps | internal free 120 min 95 largest 60 KiB | "
+                   "psram free 6100 min 5900 largest 4000 KiB",
+           "one readable line per report");
+}
+
+void power_tests() {
+    using namespace aura;
+    expect(host_loop_interval_ms(DisplayMode::Active) == 33 && host_loop_interval_ms(DisplayMode::Dimmed) == 33,
+           "a lit screen keeps the 30 Hz loop");
+    expect(host_loop_interval_ms(DisplayMode::AlwaysOn) == 100, "the always-on clock needs the loop at 10 Hz");
+    expect(host_loop_interval_ms(DisplayMode::Off) == 250, "a dark screen needs the loop at 4 Hz");
+    expect(needs_full_speed(DisplayMode::Active) && needs_full_speed(DisplayMode::Dimmed),
+           "a lit screen keeps the processor at full speed");
+    expect(!needs_full_speed(DisplayMode::AlwaysOn) && !needs_full_speed(DisplayMode::Off),
+           "a dark screen lets the processor slow down");
+}
+
 int main() {
     sound_tests();
+    power_tests();
+    metrics_tests();
     text_tests();
     clock_tests();
     notes_tests();

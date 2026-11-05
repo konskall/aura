@@ -4,7 +4,6 @@
 
 static_assert(aura_board::Display::width == 480);
 static_assert(aura_board::Display::height == 480);
-static_assert(aura_board::Display::partial_buffer_lines < aura_board::Display::height);
 static_assert(aura_board::Pins::i2c_scl == BSP_I2C_SCL);
 static_assert(aura_board::Pins::i2c_sda == BSP_I2C_SDA);
 static_assert(aura_board::Pins::i2s_master_clock == BSP_I2S_MCLK);

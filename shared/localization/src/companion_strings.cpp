@@ -421,6 +421,7 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.system_powering_on_detail = "Το AURA προετοιμάζεται.";
         s.system_power_off_hint = "Κράτησε πατημένη την οθόνη για ενεργοποίηση";
         s.system_power_off_hint_button = "Πάτα το πλαϊνό κουμπί για ενεργοποίηση";
+        s.credits_creator = "Δημιουργός · KonsKall";
         s.credits_intro = "Η AURA δημιουργήθηκε με έργα ανοιχτού κώδικα και την ταυτότητα που παραχώρησε ο ιδιοκτήτης του έργου.";
         s.credits_platform_title = "Πλατφόρμα και διεπαφή";
         s.credits_platform_body = "LVGL 9.6.0 · MIT\nESP-IDF 5.5.5 · Apache 2.0\nWaveshare BSP 2.0.1 · Apache 2.0\nSDL2 2.32.10 · zlib";
@@ -842,6 +843,7 @@ const CompanionStrings& companion_en_us() noexcept {
         s.system_powering_on_detail = "AURA is getting ready.";
         s.system_power_off_hint = "Press and hold the screen to power on";
         s.system_power_off_hint_button = "Press the side button to power on";
+        s.credits_creator = "Created by KonsKall";
         s.credits_intro = "AURA was created with open-source work and the project identity supplied by its owner.";
         s.credits_platform_title = "Platform and interface";
         s.credits_platform_body = "LVGL 9.6.0 · MIT\nESP-IDF 5.5.5 · Apache 2.0\nWaveshare BSP 2.0.1 · Apache 2.0\nSDL2 2.32.10 · zlib";

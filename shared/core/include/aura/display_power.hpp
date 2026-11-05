@@ -72,6 +72,13 @@ struct DisplaySnapshot {
     std::uint64_t sequence{0};
 };
 
+// How often the host's main loop runs for the screen's mode: 30 Hz while it is
+// lit, 10 Hz for the always-on clock (a touch or a raise still wakes it within
+// a tenth of a second), 4 Hz while it is dark.
+std::uint32_t host_loop_interval_ms(DisplayMode mode) noexcept;
+// Whether the processor stays at full speed: while the screen is lit.
+bool needs_full_speed(DisplayMode mode) noexcept;
+
 // Screen power: active -> dimmed -> always-on clock (or off). Touch, the
 // button and a raise wake it; face-down turns it off and silences the device.
 class DisplayPowerModel {

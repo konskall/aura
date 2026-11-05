@@ -320,6 +320,9 @@ public:
     std::uint64_t weather_forecast_interaction_count() const noexcept;
     std::uint64_t mercury_frame_count() const noexcept;
     std::size_t mercury_buffer_bytes() const noexcept;
+    // The presence's last frame: how long it took to draw, and whether it was a lighter one.
+    std::uint32_t mercury_frame_ms() const noexcept;
+    bool mercury_reduced() const noexcept;
     bool reduced_motion() const noexcept;
     UiView view() const noexcept;
     void apply_photos(const PhotoSnapshot& snapshot);

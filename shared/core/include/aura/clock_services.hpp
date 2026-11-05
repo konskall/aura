@@ -82,7 +82,12 @@ public:
 
     void tick(std::uint32_t elapsed_ms);
     // Call at least once per minute (the platforms call it every second).
+    // The wall clock, with the real (UTC) minute when the platform knows it: then
+    // a time change (daylight saving, a new time zone) is told apart from real
+    // time passing, so no alarm is skipped or rung twice. Without it the wall
+    // clock stands in for real time.
     void set_clock(const LocalDateTime& now);
+    void set_clock(const LocalDateTime& now, std::int64_t utc_minute);
     void set_clock_unavailable();
 
     // The ringing alert: dismiss it, or snooze (alarm/reminder: again in
@@ -104,7 +109,7 @@ public:
 private:
     void changed() noexcept { ++snapshot_.sequence; }
     void queue_alert(ClockAlert alert);
-    void evaluate_minute(std::int64_t previous, std::int64_t now);
+    void evaluate_minute(std::int64_t previous, std::int64_t now, std::int64_t window);
     void sort_lists();
 
     struct Snooze {
@@ -116,7 +121,8 @@ private:
     std::vector<ClockAlert> queue_;
     std::vector<Snooze> snoozes_;
     std::uint32_t next_id_{1};
-    std::int64_t evaluated_minute_{-1};
+    std::int64_t evaluated_minute_{-1};      // the latest wall-clock minute alarms were checked for
+    std::int64_t evaluated_utc_minute_{-1};  // the real minute of that check
 };
 
 // The next enabled alarm from the snapshot's clock, if the clock is valid.

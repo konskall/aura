@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -14,6 +15,26 @@ struct UpdateManifest {
     std::uint32_t size_bytes{0};
     std::string sha256;
     std::string notes;
+    // The owner's ECDSA P-256 signature (r || s) of update_signing_message().
+    std::array<std::uint8_t, 64> signature{};
+};
+
+// What the owner's key signs for an update: its version, size and SHA-256
+// (lower case). HTTPS and the image's SHA-256 show where the bytes came from
+// and that they arrived whole; the signature shows the owner released them,
+// so an update server someone else controls cannot install its own firmware.
+// A newer version is required as well, so an old signed image cannot return.
+std::string update_signing_message(const UpdateManifest& manifest);
+
+// Checks the owner's signature with the public key the build was made with
+// (firmware: mbedTLS; simulator: Windows BCrypt).
+class IUpdateSignatureVerifier {
+public:
+    virtual ~IUpdateSignatureVerifier() = default;
+    // Whether the build has the owner's public key; without it nothing installs.
+    virtual bool configured() const = 0;
+    // Whether `signature` signs SHA-256(`message`) with the owner's key.
+    virtual bool verify(const std::string& message, const std::array<std::uint8_t, 64>& signature) const = 0;
 };
 
 struct UpdateSnapshot {
@@ -65,8 +86,10 @@ UpdateBlock update_block(const UpdateSnapshot& snapshot, bool online, int batter
                          bool charging) noexcept;
 
 // Strict manifest: {"version":"1.4.0","url":"https://...","size":123,
-// "sha256":"<64 hex>","notes":"..."}; anything else is rejected.
-std::optional<UpdateManifest> parse_update_manifest(const std::string& json, std::string* error = nullptr);
+// "sha256":"<64 hex>","notes":"...","signature":"<128 hex>"}, signed by the
+// owner's key; anything else is rejected (scripts/update-signing.mjs signs).
+std::optional<UpdateManifest> parse_update_manifest(const std::string& json, const IUpdateSignatureVerifier& verifier,
+                                                    std::string* error = nullptr);
 bool version_valid(const std::string& version) noexcept;
 // <0, 0, >0 like strcmp; invalid versions compare as older.
 int compare_versions(const std::string& left, const std::string& right) noexcept;

@@ -362,6 +362,44 @@ bool parse_transfer_headers(std::string_view text, TransferRequest& request) {
     request = std::move(r);
     return true;
 }
+// The assistant's keys from the owner's PC (scripts/send-device-keys.ps1):
+// three strings in Groq's and Azure's formats, within the signed-in session.
+// They go to the platform's sink (the device: encrypted NVS) and are wiped
+// here; nothing echoes them.
+TransferResponse TransferProtocol::store_keys(const TransferRequest& r, ITransferReader& reader) {
+    const auto ticket = session_.authorize(r.authorization, clock_());
+    if (!ticket) return error_response(401, TransferError::Auth);
+    if (r.length < 2 || r.length > 1024 || r.content_type.substr(0, 16) != "application/json")
+        return error_response(400, TransferError::Name);
+    std::string body(static_cast<std::size_t>(r.length), '\0');
+    std::size_t done = 0;
+    while (done < body.size()) {
+        const int n = reader.read(reinterpret_cast<std::uint8_t*>(&body[done]), body.size() - done);
+        if (n <= 0 || static_cast<std::size_t>(n) > body.size() - done) {
+            wipe(body);
+            return error_response(400, TransferError::Interrupted);
+        }
+        done += static_cast<std::size_t>(n);
+    }
+    const auto json = parse_flat_json(body, 1024);
+    wipe(body);
+    CloudKeys keys;
+    if (json && json->size() == 3) {
+        keys.groq_api_key = json->string("groq_api_key").value_or("");
+        keys.azure_speech_key = json->string("azure_speech_key").value_or("");
+        keys.azure_speech_region = json->string("azure_speech_region").value_or("");
+    }
+    const bool valid = json && json->size() == 3 && json->string("groq_api_key") && json->string("azure_speech_key") &&
+                       json->string("azure_speech_region") && cloud_keys_valid(keys);
+    if (!valid || !session_.valid(ticket, clock_())) {
+        wipe_cloud_keys(keys);
+        return error_response(400, TransferError::Name);
+    }
+    const bool stored = keys_->store(keys);
+    wipe_cloud_keys(keys);
+    return stored ? TransferResponse{200, "{\"ok\":true}", false} : error_response(507, TransferError::Storage);
+}
+
 TransferResponse TransferProtocol::handle(const TransferRequest& r, ITransferReader& reader) {
     if (!r.local_peer) return error_response(403, TransferError::Auth);
     session_.tick(clock_());
@@ -391,6 +429,7 @@ TransferResponse TransferProtocol::handle(const TransferRequest& r, ITransferRea
         return token.empty() ? error_response(401, TransferError::Auth)
                              : TransferResponse{200, "{\"token\":\"" + token + "\"}", false};
     }
+    if (r.path == "/api/keys" && keys_) return store_keys(r, reader);
     if (r.path != "/api/upload" && r.path != "/api/files" && r.path != "/api/delete")
         return error_response(404, TransferError::Name);
     const auto ticket = session_.authorize(r.authorization, clock_());

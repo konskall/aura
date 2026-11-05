@@ -1,6 +1,9 @@
 #pragma once
 
 #include "aura/ota_update.hpp"
+#include "esp32_update_signature.hpp"
+
+#include "sdkconfig.h"
 
 #include <atomic>
 #include <cstdint>
@@ -20,11 +23,12 @@ struct OtaEvent {
 };
 
 // Over-the-air updates: an HTTPS manifest (NVS "aura_ota"/"manifest_url",
-// empty by default), then a streamed download into the inactive OTA slot
-// with a SHA-256 check against the manifest before the boot partition
-// changes. Rollback is on: a new image that does not confirm itself after
-// boot (confirm_running_image) is reverted by the bootloader.
-// NOT COMPILED, NOT VERIFIED ON HARDWARE.
+// empty by default) that must carry the owner's signature for the build's key,
+// then a streamed download into the inactive OTA slot with a SHA-256 check
+// against the signed manifest before the boot partition changes. Rollback is
+// on: a new image that does not confirm itself after boot
+// (confirm_running_image) is reverted by the bootloader.
+// NOT VERIFIED ON HARDWARE.
 class Esp32Ota {
 public:
     bool initialize();
@@ -44,6 +48,8 @@ private:
     void push(OtaEvent event);
 
     std::string manifest_url_;
+    // Only an update the owner signed installs (CONFIG_AURA_OTA_PUBLIC_KEY).
+    Esp32UpdateSignatureVerifier verifier_{CONFIG_AURA_OTA_PUBLIC_KEY};
     UpdateManifest pending_;
     std::atomic<bool> busy_{false};
     std::mutex mutex_;

@@ -96,7 +96,7 @@ void Esp32Ota::check_task(void* argument) {
         } else {
             body.resize(static_cast<std::size_t>(read));
             std::string error;
-            event.manifest = parse_update_manifest(body, &error);
+            event.manifest = parse_update_manifest(body, self->verifier_, &error);
             if (event.manifest) event.kind = OtaEvent::Kind::CheckDone;
             else event.error_code = error;
         }

@@ -5,6 +5,7 @@
 #include "aura/app_layout.hpp"
 #include "aura/aura_ui.hpp"
 #include "aura/clock_services.hpp"
+#include "aura/cloud_keys.hpp"
 #include "aura/device_status.hpp"
 #include "aura/display_power.hpp"
 #include "aura/notes.hpp"
@@ -21,6 +22,7 @@
 #include <cstdint>
 #include <ctime>
 #include <atomic>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -37,8 +39,10 @@ namespace aura::firmware {
 // The v13 "Companion" features on the device: clock services, notes (voice
 // notes on microSD), display power with the QMI8658, the iPhone link and OTA.
 // Every method runs on the UI loop under the BSP display lock. The assistant's
-// voice, translation and spoken replies need the AI gateway (not yet chosen),
-// so their capabilities stay off. Compiles with ESP-IDF 5.5.5; NOT VERIFIED ON HARDWARE.
+// spoken questions are recorded here (the microphone is shared with notes) and
+// handed to app_main's VoiceAssistantTurn; speech recognition and spoken
+// replies are on once the device has its cloud keys. Translation stays off.
+// Compiles with ESP-IDF 5.5.5; NOT VERIFIED ON HARDWARE.
 class Esp32Companion {
 public:
     explicit Esp32Companion(IAudioService& audio, DeviceStatusModel& status);
@@ -49,7 +53,26 @@ public:
     InterfaceLanguage language() const noexcept { return language_; }
     // The stored look (display.txt), restored by start() before the UI exists.
     Appearance appearance() const noexcept { return display_.snapshot().settings.appearance; }
-    void set_clock(const std::tm& local);
+    // The wall clock and the real time it was read from (alarms tell a time
+    // change from time passing by the real minute).
+    void set_clock(const std::tm& local, std::time_t utc);
+    // The screen's power mode (the main loop and the processor follow it).
+    DisplayMode display_mode() const noexcept { return display_.snapshot().mode; }
+    // A spoken question: recorded until the speaker stops or end_question(),
+    // then handed to the sink as a WAV. False: no microphone, or it is busy.
+    bool begin_question();
+    void end_question();
+    void cancel_question();
+    void set_question_sink(std::function<void(std::vector<std::uint8_t>)> sink) { question_sink_ = std::move(sink); }
+    // Speech recognition and spoken replies, once the cloud keys are there.
+    void set_speech_available(bool recognition, bool output);
+    // Where the transfer session's POST /api/keys puts the assistant's keys.
+    void set_cloud_key_sink(ICloudKeySink* sink) { transfer_.set_key_sink(sink); }
+    // The models the assistant's device facts come from.
+    const ClockServicesModel& clock() const noexcept { return clock_; }
+    const NotesModel& notes() const noexcept { return notes_; }
+    const OrganizerModel& organizer() const noexcept { return organizer_; }
+    const PhoneNotificationModel& phone() const noexcept { return phone_; }
     // Seconds of healthy running confirm a freshly installed image.
     void confirm_image_after(std::uint32_t uptime_ms);
     // Executes confirmed restart/power/factory actions outside the LVGL lock.
@@ -88,6 +111,8 @@ private:
     DisplayPowerModel display_;
     ImuGestureDetector imu_;
     VoiceRecorder recorder_;
+    bool recording_question_{false};
+    std::function<void(std::vector<std::uint8_t>)> question_sink_;
     VoiceSnapshot voice_{};
     CompanionCapabilities capabilities_{};
     bool capabilities_dirty_{true};

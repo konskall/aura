@@ -1,14 +1,28 @@
+#include "aura/assistant_companion.hpp"
 #include "aura/assistant_state.hpp"
 #include "aura/aoraton.hpp"
+#include "aura/aura_frame_worker.hpp"
+#include "aura/aura_theme.hpp"
 #include "aura/aura_ui.hpp"
+#include "aura/cloud_assistant.hpp"
+#include "aura/companion_strings.hpp"
+#include "aura/voice_turn.hpp"
+#include "aura/runtime_metrics.hpp"
+#include "aura_board_chips.hpp"
 #include "aura_board_profile.h"
+#include "aura_display.h"
 #include "esp32_audio_backend.hpp"
+#include "esp32_cloud_keys.hpp"
+#include "esp32_https_client.hpp"
 #include "esp32_companion.hpp"
 #include "esp32_network.hpp"
 #include "esp32_weather_backend.hpp"
 
 #include "bsp/esp-bsp.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_pm.h"
+#include "esp_pthread.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -18,11 +32,102 @@
 #include <algorithm>
 #include <cstdint>
 #include <ctime>
+#include <memory>
+#include <sys/time.h>
 #include <string>
 #include <utility>
 
 namespace {
 constexpr const char* kTag = "aura";
+
+// Synapse draws its frames on the second core, below LVGL's priority, so the UI
+// never waits for one (the LVGL task floats; Wi-Fi, BLE and this task use core 0).
+// The first boot on a board must report what the simulator cannot: frame and
+// loop times, Synapse's cost and the free memory, on the serial console every
+// 10 s for two minutes and every minute after. Touched under the display lock
+// only (LVGL's render events fire in its task while it holds the lock).
+aura::RuntimeMetrics metrics;
+std::int64_t render_started_us = 0;
+
+void on_render_start(lv_event_t*) { render_started_us = esp_timer_get_time(); }
+
+void on_render_ready(lv_event_t*) {
+    if (render_started_us > 0) metrics.frame.add(static_cast<std::uint32_t>(esp_timer_get_time() - render_started_us));
+}
+
+void report_metrics(const aura::AuraUi& ui, std::uint64_t& presence_frames, std::uint32_t window_ms) {
+    metrics.uptime_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
+    const std::uint64_t frames = ui.mercury_frame_count();
+    metrics.presence_fps = window_ms == 0 || frames < presence_frames ? 0.0 :
+        static_cast<double>(frames - presence_frames) * 1000.0 / static_cast<double>(window_ms);
+    presence_frames = frames;
+    metrics.presence_frame_ms = ui.mercury_frame_ms();
+    metrics.presence_reduced = ui.mercury_reduced();
+    constexpr std::uint32_t internal = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    metrics.internal_free = heap_caps_get_free_size(internal);
+    metrics.internal_min_free = heap_caps_get_minimum_free_size(internal);
+    metrics.internal_largest = heap_caps_get_largest_free_block(internal);
+    metrics.psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    metrics.psram_min_free = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
+    metrics.psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    ESP_LOGI(kTag, "metrics %s", aura::format_runtime_metrics(metrics).c_str());
+    metrics.frame.reset();
+    metrics.loop.reset();
+}
+
+// The processor runs at 240 MHz only while the screen is lit (a held lock) and
+// at 80 MHz otherwise; drivers hold their own locks while they transfer.
+esp_pm_lock_handle_t start_power_management() {
+    const esp_pm_config_t config = {.max_freq_mhz = 240, .min_freq_mhz = 80, .light_sleep_enable = false};
+    if (esp_pm_configure(&config) != ESP_OK) {
+        ESP_LOGW(kTag, "Dynamic frequency scaling unavailable; staying at full speed");
+        return nullptr;
+    }
+    esp_pm_lock_handle_t lock = nullptr;
+    if (esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "aura_screen", &lock) != ESP_OK) return nullptr;
+    esp_pm_lock_acquire(lock);
+    return lock;
+}
+
+// The cloud requests (Groq, Azure) block for seconds on one worker thread with
+// room for a TLS handshake on its stack.
+std::unique_ptr<aura::CloudWorker> start_cloud_worker() {
+    esp_pthread_cfg_t worker = esp_pthread_get_default_config();
+    worker.thread_name = "aura_cloud";
+    worker.stack_size = 12288;
+    worker.prio = 4;
+    esp_pthread_set_cfg(&worker);
+    auto started = std::make_unique<aura::CloudWorker>();
+    const esp_pthread_cfg_t defaults = esp_pthread_get_default_config();
+    esp_pthread_set_cfg(&defaults);
+    return started;
+}
+
+// The device's own assistant (the owner's choice, 2026-11-05): Groq listens and
+// answers, Azure speaks, straight from the device, once the owner's keys are in
+// NVS (sent from the PC: scripts/send-device-keys.ps1). Restarted with new keys.
+struct CloudAssistant {
+    std::unique_ptr<aura::CloudAssistantProvider> provider;
+    std::unique_ptr<aura::CloudSpeechService> speech;
+    std::unique_ptr<aura::VoiceAssistantTurn> turn;
+};
+
+const aura::l10n::CompanionStrings& companion_strings(aura::InterfaceLanguage language) {
+    return language == aura::InterfaceLanguage::English ? aura::l10n::companion_en_us() :
+                                                          aura::l10n::companion_el_gr();
+}
+
+void start_frame_worker() {
+    esp_pthread_cfg_t worker = esp_pthread_get_default_config();
+    worker.thread_name = "synapse";
+    worker.pin_to_core = 1;
+    worker.prio = 2;
+    worker.stack_size = 4096;
+    esp_pthread_set_cfg(&worker);
+    aura::ui::FrameWorker::start_shared();
+    const esp_pthread_cfg_t defaults = esp_pthread_get_default_config();
+    esp_pthread_set_cfg(&defaults);
+}
 
 }
 
@@ -41,11 +146,30 @@ extern "C" void app_main(void) {
     }
     if (nvs != ESP_OK) ESP_LOGE(kTag, "NVS unavailable: %s", esp_err_to_name(nvs));
 
-    lv_display_t* display = bsp_display_start();
+    // As bsp_display_start(), but LVGL draws bands tall enough for the header's glass.
+    lv_display_t* display = aura_board_display_start(aura::ui::tokens::DEVICE_DRAW_ROWS);
     if (display == nullptr) {
         ESP_LOGE(kTag, "BSP display initialization failed");
         return;
     }
+
+    // The board's clock keeps UTC across restarts, so the time is known before
+    // Wi-Fi; SNTP corrects it once connected (the clock is written after each sync).
+    static aura::firmware::Pcf85063Clock board_clock;
+    static aura::firmware::Axp2101Power board_power;
+    const bool board_clock_ready = board_clock.start();
+    if (board_clock_ready) {
+        if (const auto utc = board_clock.read_utc()) {
+            const timeval now{static_cast<time_t>(*utc), 0};
+            settimeofday(&now, nullptr);
+            ESP_LOGI(kTag, "Time from the board clock");
+        } else {
+            ESP_LOGW(kTag, "The board clock lost its time; waiting for the network clock");
+        }
+    }
+    const bool board_power_ready = board_power.start();
+    ESP_LOGI(kTag, "Board clock %s, power manager %s", board_clock_ready ? "ready" : "unavailable",
+             board_power_ready ? "ready" : "unavailable");
 
     static aura::AssistantController controller;
     static aura::DeviceStatusModel device_status;
@@ -57,6 +181,12 @@ extern "C" void app_main(void) {
     static aura::WifiModel wifi;
     static aura::AuraUi ui;
     static aura::firmware::Esp32Companion companion(audio, device_status);
+    static aura::firmware::Esp32HttpsClient cloud_https;
+    static aura::firmware::Esp32CloudKeyStore cloud_keys;
+    static std::unique_ptr<aura::CloudWorker> cloud_worker = start_cloud_worker();
+    static CloudAssistant assistant;
+    static aura::InterfaceLanguage assistant_language = aura::InterfaceLanguage::Greek;
+    companion.set_cloud_key_sink(&cloud_keys);
     const bool audio_ready = audio.initialize();
     const bool weather_backend_ready = weather_backend.initialize();
     if (weather_backend_ready) weather.set_refresh_interval(weather_backend.refresh_interval());
@@ -95,6 +225,8 @@ extern "C" void app_main(void) {
             boot_weather_pending = true;
         }
     }
+
+    start_frame_worker();
 
     // LVGL callbacks run in the BSP's LVGL task while it holds the display lock;
     // the loop below touches the same models only under that lock as well.
@@ -198,6 +330,34 @@ extern "C" void app_main(void) {
             wifi.forget_saved_network();
         };
         companion.install(callbacks, &aoraton);
+        // The assistant's spoken question: the companion records it with the
+        // microphone it shares with notes; the turn transcribes, asks and speaks.
+        callbacks.on_ask = [] {
+            if (!assistant.turn) {
+                controller.dispatch({aura::EventType::ProviderUnavailable, "PROVIDER_NOT_CONFIGURED", 0});
+                return;
+            }
+            assistant.turn->begin_listening();
+            if (!companion.begin_question()) {
+                assistant.turn->cancel();
+                controller.dispatch({aura::EventType::Fail, "MICROPHONE_UNAVAILABLE", 0});
+            }
+        };
+        callbacks.on_end_listening = [] { companion.end_question(); };
+        callbacks.on_cancel = [] {
+            companion.cancel_question();
+            if (assistant.turn) assistant.turn->cancel();
+            audio.stop();
+            controller.dispatch({aura::EventType::Cancel, {}, 0});
+        };
+        callbacks.on_retry = [] {
+            const std::string prompt = controller.snapshot().user_text;
+            controller.dispatch({aura::EventType::Retry, {}, 0});
+            if (assistant.turn && !prompt.empty()) assistant.turn->ask(prompt);
+        };
+        companion.set_question_sink([](std::vector<std::uint8_t> wav) {
+            if (assistant.turn) assistant.turn->finish_listening(std::move(wav));
+        });
         ui.set_language(companion.language());
         ui.set_appearance(companion.appearance());
         ui.create(display, std::move(callbacks));
@@ -208,9 +368,61 @@ extern "C" void app_main(void) {
         ui.apply_aoraton(aoraton.snapshot());
         ui.apply_weather(weather.snapshot());
         ui.apply_wifi(wifi.snapshot());
+        lv_display_add_event_cb(display, on_render_start, LV_EVENT_RENDER_START, nullptr);
+        lv_display_add_event_cb(display, on_render_ready, LV_EVENT_RENDER_READY, nullptr);
+        ESP_LOGI(kTag, "UI ready %lu ms after boot", static_cast<unsigned long>(esp_timer_get_time() / 1000));
         bsp_display_unlock();
     }
 
+    // Starts, or restarts with new keys, the assistant. Under the display lock.
+    const auto start_assistant = [] {
+        if (assistant.turn) assistant.turn->cancel();
+        assistant.turn.reset();
+        assistant.speech.reset();
+        assistant.provider.reset();
+        auto keys = cloud_keys.load();
+        if (keys.groq_api_key.empty() || !cloud_worker) {
+            companion.set_speech_available(false, false);
+            ESP_LOGI(kTag, "Assistant: no cloud keys yet (send them from the PC over the file transfer session)");
+            return;
+        }
+        assistant.provider = std::make_unique<aura::CloudAssistantProvider>(cloud_https, *cloud_worker,
+                                                                            keys.groq_api_key);
+        assistant.speech = std::make_unique<aura::CloudSpeechService>(cloud_https, *cloud_worker, keys);
+        aura::wipe_cloud_keys(keys);
+        assistant.turn = std::make_unique<aura::VoiceAssistantTurn>(controller, *assistant.speech,
+                                                                    *assistant.provider, audio);
+        assistant_language = companion.language();
+        const auto& strings = companion_strings(assistant_language);
+        assistant.turn->set_language(assistant_language);
+        assistant.turn->set_answer_copy(strings.action_question, strings.action_refused, strings.empty_answer);
+        assistant.turn->set_context([](const std::string& question) {
+            aura::DeviceContextInput input;
+            input.status = &device_status.snapshot();
+            input.weather = &weather.snapshot();
+            input.clock = &companion.clock();
+            input.notes = &companion.notes();
+            input.organizer = &companion.organizer();
+            input.phone = &companion.phone();
+            input.question = question;
+            return aura::build_device_context(input);
+        });
+        companion.set_speech_available(
+            true, assistant.speech->tts_available(aura::interface_language_code(assistant_language)));
+        ESP_LOGI(kTag, "Assistant: Groq answers%s", assistant.speech->tts_available("el") ? ", Azure speaks" : "");
+    };
+    std::uint32_t assistant_keys = cloud_keys.generation();
+    if (bsp_display_lock(0)) {
+        start_assistant();
+        bsp_display_unlock();
+    }
+
+    esp_pm_lock_handle_t full_speed = start_power_management();
+    std::uint32_t metrics_ms = 0;
+    std::uint64_t presence_frames = 0;
+    std::uint32_t clock_written_syncs = 0;
+    std::uint32_t power_ms = 5000;
+    bool at_full_speed = full_speed != nullptr;
     TickType_t previous = xTaskGetTickCount();
     std::uint32_t unapplied_ms = 0;
     std::uint32_t status_ms = 1000;
@@ -219,11 +431,29 @@ extern "C" void app_main(void) {
         unapplied_ms += static_cast<std::uint32_t>((now - previous) * portTICK_PERIOD_MS);
         previous = now;
         if (bsp_display_lock(pdMS_TO_TICKS(25))) {
+            const std::int64_t pass_started_us = esp_timer_get_time();
             const std::uint32_t elapsed_ms = std::min<std::uint32_t>(unapplied_ms, 1000);
             unapplied_ms = 0;
             audio.tick(elapsed_ms);
             aoraton.tick(elapsed_ms);
             companion.poll(elapsed_ms);
+            // New keys from the PC start the assistant again.
+            if (cloud_keys.generation() != assistant_keys) {
+                assistant_keys = cloud_keys.generation();
+                start_assistant();
+            }
+            if (assistant.turn) {
+                if (companion.language() != assistant_language) {
+                    assistant_language = companion.language();
+                    const auto& strings = companion_strings(assistant_language);
+                    assistant.turn->set_language(assistant_language);
+                    assistant.turn->set_answer_copy(strings.action_question, strings.action_refused,
+                                                    strings.empty_answer);
+                    companion.set_speech_available(
+                        true, assistant.speech->tts_available(aura::interface_language_code(assistant_language)));
+                }
+                assistant.turn->poll();
+            }
             aura::WeatherFetchResult weather_result;
             if (weather_backend.poll(weather_result)) {
                 if (weather_result.ok) weather.fetch_succeeded(weather_result.data);
@@ -256,6 +486,23 @@ extern "C" void app_main(void) {
                 }
             }
             status_ms += elapsed_ms;
+            power_ms += elapsed_ms;
+            // The battery, every five seconds (the OTA rule and the status bar use it).
+            if (board_power_ready && power_ms >= 5000) {
+                power_ms = 0;
+                if (const auto reading = board_power.read(); reading && reading->percent) {
+                    device_status.set_power(*reading->percent, reading->charging, aura::StatusOrigin::Live);
+                } else {
+                    device_status.set_power_unavailable();
+                }
+            }
+            // A new network time goes to the board clock, in UTC.
+            if (board_clock_ready && network.time_sync_count() != clock_written_syncs) {
+                clock_written_syncs = network.time_sync_count();
+                if (!board_clock.write_utc(static_cast<std::int64_t>(std::time(nullptr)))) {
+                    ESP_LOGW(kTag, "Could not write the board clock");
+                }
+            }
             weather_refresh_ms = std::min<std::uint32_t>(weather_refresh_ms + elapsed_ms, 24U * 60U * 60U * 1000U);
             if (status_ms >= 1000) {
                 status_ms = 0;
@@ -290,7 +537,7 @@ extern "C" void app_main(void) {
                     device_status.set_clock(local_time.tm_hour, local_time.tm_min, aura::StatusOrigin::Live);
                     device_status.set_date(local_time.tm_year + 1900, local_time.tm_mon + 1, local_time.tm_mday,
                                            local_time.tm_wday, aura::StatusOrigin::Live);
-                    companion.set_clock(local_time);
+                    companion.set_clock(local_time, now_time);
                 }
             }
             ui.tick(elapsed_ms);
@@ -302,11 +549,25 @@ extern "C" void app_main(void) {
             ui.apply_wifi(wifi.snapshot());
             companion.apply(ui);
             companion.confirm_image_after(static_cast<std::uint32_t>(esp_timer_get_time() / 1000));
+            metrics.loop.add(static_cast<std::uint32_t>(esp_timer_get_time() - pass_started_us));
+            metrics_ms += elapsed_ms;
+            const std::uint32_t report_every_ms = esp_timer_get_time() < 120LL * 1000 * 1000 ? 10000U : 60000U;
+            if (metrics_ms >= report_every_ms) {
+                report_metrics(ui, presence_frames, metrics_ms);
+                metrics_ms = 0;
+            }
             bsp_display_unlock();
         }
         // Confirmed power actions can block, restart or enter deep sleep. They
         // must never execute while the single LVGL/BSP display lock is held.
         companion.run_deferred_system_action();
-        vTaskDelay(pdMS_TO_TICKS(33));
+        // A dark screen lets the loop slow down and the processor drop its clock.
+        const aura::DisplayMode mode = companion.display_mode();
+        if (full_speed && aura::needs_full_speed(mode) != at_full_speed) {
+            at_full_speed = !at_full_speed;
+            if (at_full_speed) esp_pm_lock_acquire(full_speed);
+            else esp_pm_lock_release(full_speed);
+        }
+        vTaskDelay(pdMS_TO_TICKS(aura::host_loop_interval_ms(mode)));
     }
 }

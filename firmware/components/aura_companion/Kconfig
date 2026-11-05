@@ -1,0 +1,13 @@
+menu "AURA updates"
+
+    config AURA_OTA_PUBLIC_KEY
+        string "The owner's update public key (P-256, 130 hex characters)"
+        default ""
+        help
+            The public half of the owner's update signing key, as
+            `node scripts/update-signing.mjs keygen <private key file>` prints it
+            (04, then X and Y). An update installs only if its manifest carries
+            the owner's signature for this key; with no key, nothing installs.
+            The private key never enters the repository.
+
+endmenu

@@ -51,6 +51,9 @@ public:
     bool poll(WifiEvent& event);
     // True once SNTP has set a plausible wall-clock time.
     bool time_valid() const;
+    // How many times SNTP has set the clock since boot (the board's real-time
+    // clock is written after each).
+    std::uint32_t time_sync_count() const noexcept;
 
 private:
     static void on_event(void* context, esp_event_base_t base, std::int32_t id, void* data);

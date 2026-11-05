@@ -8,6 +8,13 @@ Verified from the current official Waveshare documentation on 2026-10-17:
 - 480 × 480 2.16-inch AMOLED, CO5300 QSPI controller.
 - CST9220 touch over shared I2C; the current BSP registry dependency names a compatible `cst9217` driver and must be validated on hardware.
 - AXP2101 PMIC, QMI8658 IMU, PCF85063 RTC.
+  - Drivers since 2026-11-05 (`firmware/components/aura_board/src/aura_board_chips.cpp`, register formats in `shared/core/src/board_chips.cpp`, both NOT VERIFIED ON HARDWARE):
+    - **PCF85063 at 0x51.** It keeps UTC and sets the system clock at boot. Each SNTP sync writes it again.
+    - **AXP2101 at 0x34.** It is read every 5 s: battery percent, voltage, USB and charging.
+  - The AXP2101 setup does what Waveshare's ESP-IDF example `01_AXP2101` does with its bundled XPowersLib:
+    - ADC control 0x30: battery, VBUS and system voltage and the temperature on, TS-pin detection off ("necessary on the board");
+    - battery detection 0x68 bit 0 on;
+    - nothing else: no rail, charger or power-key writes.
 - ES7210 microphone ADC and ES8311 playback codec/amplifier path. A physical speaker is not assumed.
 - TF slot, native USB-C, 2.4 GHz Wi-Fi, Bluetooth 5 LE. Bluetooth Classic A2DP/HFP is not promised.
 

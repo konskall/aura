@@ -10,6 +10,9 @@ constexpr std::int64_t kMinutesPerDay = 24 * 60;
 // After a long sleep the device does not ring every alarm it missed; only the
 // last hour is caught up. Reminders, which are one-off, always fire late.
 constexpr std::int64_t kAlarmCatchUpMinutes = 60;
+// Daylight saving moves the wall clock by at most an hour; a bigger change is a
+// new time zone.
+constexpr std::int64_t kClockChangeMinutes = 60;
 
 std::int64_t time_of_day(std::int64_t minute) {
     return ((minute % kMinutesPerDay) + kMinutesPerDay) % kMinutesPerDay;
@@ -187,37 +190,74 @@ void ClockServicesModel::set_clock(const LocalDateTime& now) {
         set_clock_unavailable();
         return;
     }
+    set_clock(now, minute_index(now));
+}
+
+void ClockServicesModel::set_clock(const LocalDateTime& now, std::int64_t utc_minute) {
+    if (!local_date_time_valid(now)) {
+        set_clock_unavailable();
+        return;
+    }
     const auto minute = minute_index(now);
     const bool became_valid = !snapshot_.clock_valid;
     snapshot_.clock_valid = true;
     if (evaluated_minute_ < 0) {
         snapshot_.now_minute = minute;
-        evaluate_minute(minute - 1, minute);
+        evaluate_minute(minute - 1, minute, 1);
         evaluated_minute_ = minute;
+        evaluated_utc_minute_ = utc_minute;
         changed();
         return;
     }
-    if (minute != evaluated_minute_) {
-        snapshot_.now_minute = minute;
-        evaluate_minute(evaluated_minute_, minute);
-        evaluated_minute_ = minute;
-        changed();
-    } else if (became_valid) {
-        changed();
+    const std::int64_t real = utc_minute - evaluated_utc_minute_;
+    const std::int64_t wall = minute - evaluated_minute_;
+    if (real == 0 && wall == 0) {
+        if (became_valid) changed();
+        return;
     }
+    snapshot_.now_minute = minute;
+    evaluated_utc_minute_ = utc_minute;
+    // How far the wall clock moved beyond real time: +60 when the clocks go
+    // forward an hour, -60 when they go back.
+    const std::int64_t shift = wall - real;
+    if (real < 0) {
+        // The real clock was corrected backwards: nothing rings now, and each
+        // alarm rings when its time comes again.
+        evaluated_minute_ = minute;
+    } else if (shift < 0) {
+        if (shift < -kClockChangeMinutes) {
+            // A time zone to the west: its repeated hours are a new day's hours
+            // there, so the alarms ring at them; nothing rings at the change.
+            evaluated_minute_ = minute;
+        } else if (wall > 0) {
+            evaluate_minute(evaluated_minute_, minute, std::min(real, kAlarmCatchUpMinutes));
+            evaluated_minute_ = minute;
+        }
+        // Otherwise the clocks went back: the repeated wall-clock minutes have
+        // rung already, so the latest minute checked stays where it was.
+    } else {
+        // Minutes the clocks skipped going forward ring now, as if they had
+        // passed; a jump to a time zone further east rings nothing it skipped.
+        const std::int64_t skipped = shift <= kClockChangeMinutes ? shift : 0;
+        evaluate_minute(evaluated_minute_, minute, std::min(real, kAlarmCatchUpMinutes) + skipped);
+        evaluated_minute_ = minute;
+    }
+    changed();
 }
 
 void ClockServicesModel::set_clock_unavailable() {
     if (!snapshot_.clock_valid) return;
     snapshot_.clock_valid = false;
     evaluated_minute_ = -1;
+    evaluated_utc_minute_ = -1;
     changed();
 }
 
-void ClockServicesModel::evaluate_minute(std::int64_t previous, std::int64_t now) {
-    // A clock that moved backwards (time zone or NTP correction) rings nothing.
+void ClockServicesModel::evaluate_minute(std::int64_t previous, std::int64_t now, std::int64_t window) {
     if (now <= previous) return;
-    const std::int64_t first = std::max(previous + 1, now - kAlarmCatchUpMinutes + 1);
+    // Alarms ring for the wall-clock minutes after `previous`, up to `window` of
+    // them: one that passed hours ago (the device was off) stays silent.
+    const std::int64_t first = std::max(previous + 1, now - window + 1);
     for (auto& alarm : snapshot_.alarms) {
         if (!alarm.enabled) continue;
         const std::int64_t target = alarm.hour * 60 + alarm.minute;

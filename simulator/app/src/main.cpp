@@ -344,6 +344,7 @@ int main(int argc, char** argv) {
     std::optional<aura::Appearance> appearance_override;
     bool capture_weather_forecast = false;
     int capture_weather_scroll_y = 340;
+    int capture_scroll_y = 0;  // --capture-scroll: the captured screen's list, scrolled by this much
     float window_scale = 1.0F;
     const auto arguments = utf8_command_line_arguments(argc, argv);
     for (std::size_t index = 1; index < arguments.size(); ++index) {
@@ -377,6 +378,10 @@ int main(int argc, char** argv) {
         if (argument == "--scale" && index + 1 < arguments.size()) {
             try { window_scale = std::clamp(std::stof(arguments[++index]), 1.0F, 3.0F); }
             catch (...) { window_scale = 1.0F; }
+        }
+        if (argument == "--capture-scroll" && index + 1 < arguments.size()) {
+            try { capture_scroll_y = std::clamp(std::stoi(arguments[++index]), 0, 2000); }
+            catch (...) { capture_scroll_y = 0; }
         }
     }
 
@@ -1924,6 +1929,22 @@ int main(int argc, char** argv) {
         }
     }
 
+    // --capture-scroll: what a list looks like as it passes under the header's glass.
+    if (capture_scroll_y > 0 && !capture_scenario.empty()) {
+        lv_obj_update_layout(ui.root());
+        std::function<lv_obj_t*(lv_obj_t*)> scroller = [&](lv_obj_t* object) -> lv_obj_t* {
+            for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                auto* child = lv_obj_get_child(object, static_cast<int32_t>(index));
+                if (lv_obj_is_scrollable(child) && lv_obj_get_scroll_bottom(child) > 0) {
+                    return child;
+                }
+                if (auto* found = scroller(child)) return found;
+            }
+            return nullptr;
+        };
+        if (auto* list = scroller(ui.root())) lv_obj_scroll_to_y(list, capture_scroll_y, LV_ANIM_OFF);
+    }
+
     if (capture_weather_forecast) {
         lv_obj_update_layout(ui.root());
         lv_obj_t* weather_scroller = nullptr;
@@ -2886,6 +2907,153 @@ int main(int argc, char** argv) {
         record("system.credits", "row-and-back",
                credits_opened && credits_copy && ui.view() == aura::UiView::System,
                std::to_string(static_cast<int>(ui.view())));
+        // Credits name the project's creator under the wordmark, above the intro:
+        // whole, on one line and in view without scrolling, in every look and language.
+        {
+            std::function<lv_obj_t*(lv_obj_t*, const char*)> label_with = [&](lv_obj_t* object,
+                                                                              const char* text) -> lv_obj_t* {
+                if (lv_obj_check_type(object, &lv_label_class) &&
+                    std::strcmp(lv_label_get_text(object), text) == 0) return object;
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    if (auto* found = label_with(lv_obj_get_child(object, static_cast<int32_t>(index)), text)) {
+                        return found;
+                    }
+                }
+                return nullptr;
+            };
+            const auto look_before = ui.appearance();
+            const auto language_before = ui.language();
+            bool creator_ok = true;
+            std::string creator_detail;
+            for (const auto look : aura::kAppearances) {
+                ui.set_appearance(look);
+                for (const auto language : {aura::InterfaceLanguage::Greek, aura::InterfaceLanguage::English}) {
+                    ui.set_language(language);
+                    const bool english = language == aura::InterfaceLanguage::English;
+                    const auto& strings = english ? aura::l10n::companion_en_us() : aura::l10n::companion_el_gr();
+                    ui.show(aura::UiView::Credits);
+                    lv_obj_update_layout(ui.root());
+                    auto* creator = label_with(ui.root(), english ? "Created by KonsKall" : "Δημιουργός · KonsKall");
+                    auto* intro = label_with(ui.root(), strings.credits_intro);
+                    lv_area_t own{}, next{};
+                    if (creator) lv_obj_get_coords(creator, &own);
+                    if (intro) lv_obj_get_coords(intro, &next);
+                    const bool one_line = creator && lv_obj_get_height(creator) <=
+                        lv_font_get_line_height(lv_obj_get_style_text_font(creator, LV_PART_MAIN)) + 1;
+                    const bool placed = creator && intro && one_line && own.y1 >= 96 && own.y2 < next.y1 &&
+                                        own.y2 < 480 && own.x1 >= 0 && own.x2 < 480;
+                    creator_ok = creator_ok && placed;
+                    if (!placed && creator_detail.size() < 300) {
+                        creator_detail += std::string(aura::appearance_id(look)) + (english ? ":en" : ":el") +
+                                          (creator ? (one_line ? ":place " : ":lines ") : ":missing ");
+                    }
+                }
+            }
+            ui.set_appearance(look_before);
+            ui.set_language(language_before);
+            record("system.credits_creator", "every-look-and-language", creator_ok, creator_detail);
+        }
+        // Headers float on a glass capsule: one per screen, over the screen's list and
+        // under the header's own controls, which sit inside it, in every look.
+        {
+            namespace tokens = aura::ui::tokens;
+            const auto& rect = tokens::HEADER_GLASS_RECT;
+            const auto look_before = ui.appearance();
+            const auto screen_content = [&]() {
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(ui.root()); ++index) {
+                    auto* child = lv_obj_get_child(ui.root(), static_cast<std::int32_t>(index));
+                    if (!lv_obj_is_hidden(child) && lv_obj_get_height(child) == 480 &&
+                        lv_obj_get_child_count(child) > 0) {
+                        return child;
+                    }
+                }
+                return ui.root();
+            };
+            bool layered = true;
+            std::string layered_detail;
+            for (const auto look : aura::kAppearances) {
+                ui.set_appearance(look);
+                for (const auto view : {aura::UiView::Settings, aura::UiView::System, aura::UiView::Credits,
+                                        aura::UiView::Launcher}) {
+                    reset_to(view);
+                    lv_obj_update_layout(ui.root());
+                    auto* screen = screen_content();
+                    const auto count = static_cast<int>(lv_obj_get_child_count(screen));
+                    int glasses = 0;
+                    int glass_index = -1;
+                    for (int index = 0; index < count; ++index) {
+                        if (aura::ui::is_header_glass(lv_obj_get_child(screen, index))) {
+                            ++glasses;
+                            glass_index = index;
+                        }
+                    }
+                    std::string problem;
+                    if (glasses != 1) problem += "glasses=" + std::to_string(glasses) + ";";
+                    if (glass_index >= 0) {
+                        lv_area_t glass{};
+                        lv_obj_get_coords(lv_obj_get_child(screen, glass_index), &glass);
+                        if (glass.x1 != rect.x || glass.y1 != rect.y || lv_area_get_width(&glass) != rect.width ||
+                            lv_area_get_height(&glass) != rect.height) {
+                            problem += "rect;";
+                        }
+                    }
+                    for (int index = 0; index < count && glass_index >= 0; ++index) {
+                        auto* child = lv_obj_get_child(screen, index);
+                        if (index == glass_index || lv_obj_is_hidden(child)) continue;
+                        lv_area_t area{};
+                        lv_obj_get_coords(child, &area);
+                        // A list that reaches up under the header (every object can scroll in
+                        // LVGL, so only one that also runs on below the band counts).
+                        const bool list_under = lv_obj_is_scrollable(child) && area.y1 < tokens::HEADER_HEIGHT &&
+                                                area.y2 >= tokens::HEADER_HEIGHT;
+                        const bool in_header = area.y1 >= 0 && area.y2 < tokens::HEADER_HEIGHT;
+                        if (list_under && index > glass_index) problem += "list-over;";
+                        if (in_header && index < glass_index) problem += "control-under;";
+                        if (in_header && lv_obj_is_clickable(child) &&
+                            (area.x1 < rect.x || area.y1 < rect.y || area.x2 >= rect.x + rect.width ||
+                             area.y2 >= rect.y + rect.height)) {
+                            problem += "control-outside;";
+                        }
+                    }
+                    layered = layered && problem.empty();
+                    if (!problem.empty() && layered_detail.size() < 300) {
+                        layered_detail += std::string(aura::appearance_id(look)) + ":" +
+                                          std::to_string(static_cast<int>(view)) + ":" + problem + " ";
+                    }
+                }
+            }
+            ui.set_appearance(look_before);
+            record("header.glass", "every-look", layered, layered_detail);
+
+            // Settings' rows start where they did, scroll under the glass, and while one
+            // lies under the header band a tap there stops at the glass; Back still works.
+            reset_to(aura::UiView::Settings);
+            lv_obj_update_layout(ui.root());
+            auto* list = find_scrollable(ui.root());
+            auto* first = list && lv_obj_get_child_count(list) > 0 ? lv_obj_get_child(list, 0) : nullptr;
+            lv_area_t list_area{}, first_area{};
+            if (list) lv_obj_get_coords(list, &list_area);
+            if (first) lv_obj_get_coords(first, &first_area);
+            const bool starts_below = list && first && list_area.y1 == 0 && first_area.y1 >= tokens::HEADER_HEIGHT;
+            scroll_view_to(60);
+            if (first) lv_obj_get_coords(first, &first_area);
+            const bool passes_under = first && first_area.y1 < tokens::HEADER_HEIGHT - 40;
+            record("header.glass_scroll", "settings-scrolled-60", starts_below && passes_under,
+                   std::to_string(list_area.y1) + "/" + std::to_string(first_area.y1));
+            bool taps_stop = true;
+            for (const auto& [x, y] : {std::pair{240, 60}, std::pair{240, 92}, std::pair{440, 92}}) {
+                tap(x, y);
+                taps_stop = taps_stop && ui.view() == aura::UiView::Settings;
+                if (ui.view() != aura::UiView::Settings) {
+                    reset_to(aura::UiView::Settings);
+                    scroll_view_to(60);
+                }
+            }
+            tap(48, 48);
+            const bool back_works = ui.view() == aura::UiView::Home;
+            record("header.glass_taps", "band-over-scrolled-row", taps_stop && back_works,
+                   std::to_string(taps_stop) + std::to_string(back_works));
+        }
         reset_to(aura::UiView::System);
         scroll_view_to(120);
         tap(220, 348);
@@ -6244,6 +6412,137 @@ int main(int argc, char** argv) {
                    aura::appearance_id(ui.appearance()));
         }
 
+        {
+            // Data that arrives while a finger drags a list must not rebuild the
+            // list under it: the refresh waits until the finger lifts and the list
+            // stops, then happens.
+            reset_to(aura::UiView::Settings);
+            lv_obj_update_layout(ui.root());
+            static int list_mark = 0;
+            auto* list = find_scrollable(ui.root());
+            if (list) lv_obj_set_user_data(list, &list_mark);  // a rebuilt list lacks the mark
+            const auto marked = [&] {
+                lv_obj_update_layout(ui.root());
+                auto* current = find_scrollable(ui.root());
+                return current != nullptr && lv_obj_get_user_data(current) == &list_mark;
+            };
+            push_motion(240, 380);
+            pump(3);
+            push_button(SDL_MOUSEBUTTONDOWN, 240, 380);
+            pump(5);
+            for (int step = 1; step <= 6; ++step) {
+                push_motion(240, 380 - step * 20, SDL_BUTTON_LMASK);
+                pump(3);
+            }
+            const bool dragging = lv_indev_get_scroll_obj(mouse) != nullptr;
+            // An assistant update (the Wi-Fi state) refreshes Settings.
+            const bool online = controller.snapshot().wifi_connected;
+            controller.dispatch({aura::EventType::WifiChanged, {}, online ? 0 : 1});
+            pump(4);
+            const bool kept = marked() && lv_indev_get_scroll_obj(mouse) != nullptr;
+            push_button(SDL_MOUSEBUTTONUP, 240, 260);
+            pump(60);
+            const bool refreshed = !marked() && ui.view() == aura::UiView::Settings;
+            controller.dispatch({aura::EventType::WifiChanged, {}, online ? 1 : 0});
+            pump(4);
+            record("ui.refresh_waits_for_drag", "settings", list && dragging && kept && refreshed,
+                   std::string(dragging ? "dragging" : "not-dragging") + (kept ? " kept" : " rebuilt-mid-drag") +
+                       (refreshed ? " refreshed" : " not-refreshed"));
+        }
+        {
+            // A long room name in a header with an action: the title takes a smaller
+            // size or a second line before it is ever cut short.
+            aoraton.reset_mock();
+            aoraton.select_room("demo-family");
+            ui.apply_aoraton(aoraton.snapshot());
+            reset_to(aura::UiView::AoratonConversation);
+            std::string expected;
+            for (const auto& room : aoraton.snapshot().rooms) {
+                if (room.id == "demo-family") expected = room.display_name;
+            }
+            lv_obj_update_layout(ui.root());
+            std::string shown;
+            int title_bottom = 0;
+            std::function<void(lv_obj_t*)> find_title = [&](lv_obj_t* object) {
+                if (lv_obj_check_type(object, &lv_label_class)) {
+                    lv_area_t area{};
+                    lv_obj_get_coords(object, &area);
+                    const std::string text = lv_label_get_text(object);
+                    // A cut title ends in dots LVGL writes into the label's text.
+                    if (area.y1 < 96 && !expected.empty() && text.rfind(expected.substr(0, 6), 0) == 0) {
+                        shown = text;
+                        title_bottom = area.y2;
+                    }
+                }
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    find_title(lv_obj_get_child(object, static_cast<std::int32_t>(index)));
+                }
+            };
+            find_title(ui.root());
+            const auto& glass = aura::ui::tokens::HEADER_GLASS_RECT;
+            record("header.long_title", "aoraton-room",
+                   !expected.empty() && shown == expected && title_bottom < glass.y + glass.height,
+                   shown + " bottom " + std::to_string(title_bottom));
+        }
+        {
+            // A widget whose style scales, rotates or skews it is drawn through a
+            // transform layer: an ARGB8888 copy of its whole area, redrawn and
+            // transformed in software on every frame. Animations move, resize or
+            // fade instead; the one exception is a static half-turn (the other
+            // person's side of face-to-face translation).
+            std::string transformed;
+            std::function<void(lv_obj_t*, const char*)> scan = [&](lv_obj_t* object, const char* where) {
+                const std::int32_t rotation = lv_obj_get_style_transform_rotation(object, LV_PART_MAIN);
+                const bool scaled = lv_obj_get_style_transform_scale_x(object, LV_PART_MAIN) != LV_SCALE_NONE ||
+                                    lv_obj_get_style_transform_scale_y(object, LV_PART_MAIN) != LV_SCALE_NONE;
+                const bool skewed = lv_obj_get_style_transform_skew_x(object, LV_PART_MAIN) != 0 ||
+                                    lv_obj_get_style_transform_skew_y(object, LV_PART_MAIN) != 0;
+                if (scaled || skewed || (rotation != 0 && rotation != 1800)) {
+                    const std::string item = std::string(where) + ':' + std::to_string(lv_obj_get_width(object)) +
+                                             'x' + std::to_string(lv_obj_get_height(object));
+                    if (transformed.find(item) == std::string::npos) {
+                        transformed += (transformed.empty() ? "" : " ") + item;
+                    }
+                }
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    scan(lv_obj_get_child(object, static_cast<std::int32_t>(index)), where);
+                }
+            };
+            // The pulses and turns animate, so each scene is sampled over several frames.
+            const auto sample = [&](const char* where) {
+                for (int frame = 0; frame < 8; ++frame) {
+                    pump(2);
+                    scan(ui.root(), where);
+                }
+            };
+            weather_model.fetch_succeeded(demo_weather_data(aura::WeatherCondition::Clear));
+            apply_weather();
+            reset_to(aura::UiView::Weather);
+            sample("weather");
+            reset_to(aura::UiView::System);
+            scroll_view_to(216);
+            tap(220, 348);
+            sample("power-confirm");
+            tap(352, 420);
+            sample("power-off");
+            long_press(240, 240);
+            sample("boot");
+            wait_for_home();
+            reset_to(aura::UiView::Translate);
+            sample("translate");
+            record("lvgl.transform_layers", "static-half-turns-only", transformed.empty(),
+                   transformed.empty() ? "none" : transformed);
+        }
+        {
+            // On the device LVGL's heap holds every widget and the layers it draws
+            // through (docs/architecture/MEMORY_BUDGET.md). The simulator draws the
+            // whole screen at once, so its peak bounds the device's band-by-band one.
+            constexpr std::size_t kDeviceLvglHeapBudget = 512U * 1024U;
+            lv_mem_monitor_t memory{};
+            lv_mem_monitor(&memory);
+            record("lvgl.device_memory", "peak-within-budget", memory.max_used <= kDeviceLvglHeapBudget,
+                   std::to_string(memory.max_used) + " of " + std::to_string(kDeviceLvglHeapBudget));
+        }
         record("lvgl.log", "no-errors", lvgl_errors == 0, std::to_string(lvgl_errors) + " errors");
         const std::size_t passed = static_cast<std::size_t>(std::count_if(results.begin(), results.end(),
             [](const InteractionResult& result) { return result.passed; }));
@@ -6593,7 +6892,8 @@ int main(int argc, char** argv) {
             device_status.set_date(local_time.tm_year + 1900, local_time.tm_mon + 1, local_time.tm_mday,
                                    local_time.tm_wday, aura::StatusOrigin::Live);
             companion.set_clock({local_time.tm_year + 1900, local_time.tm_mon + 1, local_time.tm_mday,
-                                 local_time.tm_hour, local_time.tm_min, local_time.tm_sec, local_time.tm_wday});
+                                 local_time.tm_hour, local_time.tm_min, local_time.tm_sec, local_time.tm_wday},
+                                static_cast<std::int64_t>(now_time) / 60);
         }
         apply();
         ui.apply_audio(audio.diagnostics());

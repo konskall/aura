@@ -56,10 +56,21 @@ constexpr int BUTTON_HEIGHT = 80;
 constexpr int CHIP_HEIGHT = 64;
 constexpr int HEADER_BUTTON = 64;
 constexpr Rect CONTENT_SAFE_RECT{GUTTER, HEADER_HEIGHT, CONTENT_WIDTH, display_height - HEADER_HEIGHT};
+// A header's controls float on a glass capsule 8 px inside the header band; lists
+// scroll under it.
+constexpr Rect HEADER_GLASS_RECT{8, 8, display_width - 16, HEADER_HEIGHT - 16};
+// The rows the device's LVGL draws at a time: the height of its two PSRAM draw
+// buffers (firmware: aura_board_display_start). The glass blurs only what one
+// band holds, so a band holds the whole capsule; the BSP's 50-row bands cut it
+// with a visible seam.
+constexpr int DEVICE_DRAW_ROWS = 100;
+static_assert(DEVICE_DRAW_ROWS >= HEADER_GLASS_RECT.y + HEADER_GLASS_RECT.height && DEVICE_DRAW_ROWS <= display_height,
+              "one band of the device's drawing holds the whole header glass");
 // The presence sits at the same place on Home and in every assistant state,
-// so starting to talk never moves it.
-constexpr Rect HERO_RECT{114, 120, 252, 252};
-constexpr Rect SYNAPSE_RECT{114, 120, 252, 252};
+// so starting to talk never moves it. Halo's Synapse spans the full width of
+// the band between the assistant captions and the controls.
+constexpr Rect HERO_RECT{0, 120, 480, 252};
+constexpr Rect SYNAPSE_RECT{0, 120, 480, 252};
 // Marble and Aurora retain their original compact Home target and spacing;
 // enlarging Halo's Synapse must not reshape the other appearances.
 constexpr int COMPACT_PRESENCE_TARGET = 176;
@@ -109,6 +120,12 @@ lv_obj_t* light_field(lv_obj_t* parent, int center_x, int center_y, int radius, 
                       lv_opa_t opacity);
 // Whether `object` is a light field (an image of the shared disc).
 bool is_light_field(lv_obj_t* object);
+// A header's glass (tokens::HEADER_GLASS_RECT): a translucent capsule in the look's
+// surfaces that blurs what scrolls under it, with a faint light edge. Taps anywhere
+// in the header band stop at it, so a row under the header never takes one.
+lv_obj_t* make_header_glass(lv_obj_t* parent);
+// Whether `object` is a header's glass. It is not a control: taps on it do nothing.
+bool is_header_glass(lv_obj_t* object);
 // A borderless graphite platter; `selected` adds an accent hairline.
 void style_platter(lv_obj_t* object, std::uint32_t accent = tokens::blue,
                    int radius = tokens::radius_large, bool selected = false);

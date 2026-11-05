@@ -1,4 +1,5 @@
 #pragma once
+#include "aura/cloud_keys.hpp"
 #include "aura/photos.hpp"
 #include <array>
 #include <functional>
@@ -106,13 +107,18 @@ struct TransferResponse {
 };
 class TransferProtocol {
 public:
-    TransferProtocol(TransferSession& session, ITransferStorage& storage, std::function<std::uint64_t()> clock)
-        : session_(session), storage_(storage), clock_(std::move(clock)) {}
+    // `keys`, when the platform keeps the assistant's keys (the device), takes
+    // them from POST /api/keys within the signed-in session.
+    TransferProtocol(TransferSession& session, ITransferStorage& storage, std::function<std::uint64_t()> clock,
+                     ICloudKeySink* keys = nullptr)
+        : session_(session), storage_(storage), clock_(std::move(clock)), keys_(keys) {}
     TransferResponse handle(const TransferRequest& request, ITransferReader& reader);
 
 private:
+    TransferResponse store_keys(const TransferRequest& request, ITransferReader& reader);
     TransferSession& session_;
     ITransferStorage& storage_;
     std::function<std::uint64_t()> clock_;
+    ICloudKeySink* keys_;
 };
 }  // namespace aura

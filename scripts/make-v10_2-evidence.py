@@ -24,8 +24,9 @@ SCREENS = (
     ("28", "system-factory-reset"), ("29", "boot"), ("30", "power-off"),
 )
 MOTION_STATES = ("home", "listening", "thinking", "speaking")
-MERCURY_BOX = (114, 120, 366, 372)
-MERCURY_SOURCE_BOX = (114, 120, 366, 372)
+# Halo's Synapse frame: the full width, between the captions and the controls.
+MERCURY_BOX = (0, 120, 480, 372)
+MERCURY_SOURCE_BOX = (0, 120, 480, 372)
 
 
 def require_480(path: Path) -> Image.Image:
@@ -107,11 +108,11 @@ def build_typography(root: Path, font: ImageFont.ImageFont) -> list[dict[str, ob
 def animated_bright_border_pixels(frames: list[Image.Image]) -> list[int]:
     """Count moving bright material on the composited image-source border.
 
-    The enlarged transparent Synapse source now overlaps the static date label.
-    Sampling brightness alone therefore mistakes the label visible through fully
-    transparent source pixels for clipped Synapse material.  A real boundary hit
-    remains visible across the captured animation, so require both brightness and
-    a per-channel change before counting it.
+    The Synapse frame lies behind the static date label, which is drawn over its
+    top rows.  Sampling brightness alone therefore mistakes the label for clipped
+    Synapse material.  A real boundary hit remains visible across the captured
+    animation, so require both brightness and a per-channel change before
+    counting it.
     """
     crops = [frame.crop(MERCURY_SOURCE_BOX) for frame in frames]
     width, height = crops[0].size

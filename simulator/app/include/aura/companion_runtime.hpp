@@ -103,6 +103,8 @@ public:
     void poll(std::uint32_t elapsed_ms);
     void apply();
     void set_clock(const LocalDateTime& now);
+    // With the real (UTC) minute, so alarms tell a time change from time passing.
+    void set_clock(const LocalDateTime& now, std::int64_t utc_minute);
     // Seeds deterministic DEMO data and shows the scenario's screen.
     bool capture(const std::string& scenario);
 

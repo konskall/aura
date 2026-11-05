@@ -63,7 +63,9 @@ Subset fonts fall back to the title font. The 14/17/18/20/24/40/64 px objects an
 
 - **Header** (inner screens, 0–96 px): 64 px round back button at (16,16) with a chevron; title (32 px) from
   x=96; time (26 px, secondary) right-aligned at the top right; long press on Back returns Home. An optional 64 px action button replaces
-  the time on screens that need one (Wi-Fi rescan, Weather refresh, compose).
+  the time on screens that need one (Wi-Fi rescan, Weather refresh, compose). Since 2026-11-05 (the owner's choice
+  among three glass headers) the controls float on a translucent glass capsule, 8 px inside the band, that blurs
+  what scrolls under it; lists start under it with the band as top padding, so their rows sit where they did.
 - **Row**: 432 × 88, radius 28, platter. Icon 30 px inside a 52 px tinted circle (accent at 22 %), title 28 px,
   optional subtitle 22 px, trailing chevron/switch/badge. Pitch 96 px.
 - **Button**: pill, 80 px high. Primary = `blue` fill + white text; Secondary = platter; Danger = `#3A141B` with
@@ -76,28 +78,32 @@ Subset fonts fall back to the title font. The 14/17/18/20/24/40/64 px objects an
 
 ## Halo (assistant presence)
 
-Synapse uses one bounded 252 × 252 RGB565+A8 frame at the same place on Home and in every assistant state
-(centre 240,246), so a tap changes to listening without a jump. Its luminous reactor is locked to the exact
-frame centre. Eight main paths are four point-reflected pairs with 168 samples per path, surrounded by five
-segmented orbital traces, 84 resonance ticks, three expanding wavefronts, a dense translucent chord web and
-18 moving particles (30 while Thinking). The reactor now follows the approved browser presentation's radial
-structure: a 112 px violet outer field, a 58 px cyan inner field, a dark 58–75 px aperture lens, a broad
-white-to-cyan nucleus and a smooth cyan/violet corona. The nucleus, aperture, rings and all path geometry use
-the same integer frame centre, so neither the apparent glow nor the bright core drifts off-axis. All elements
-are drawn by the shared renderer; the previous separate LVGL halo arc remains removed. Composition uses three
-depth layers: the complete rear lattice, the reactor lens/nucleus, and a final pass containing only z-positive
-strands plus two restrained front half-chords derived from the moving reflected path pairs. Those foreground
-fibres cross the cyan sphere at every phase, so the reactor reads as enclosed by the network instead of pasted
-over it.
+Synapse draws the approved browser presentation (`artifacts/halo-synapse.html`) natively at 1:1 scale: one
+presentation pixel is one screen pixel. Its frame is 480 × 252, the full width of the band between the assistant
+captions and the controls (y 120–371, centre 240,246), at the same place on Home and in every assistant state,
+so a tap changes to listening without a jump. The frame lies behind every label and control, so the Home clock,
+date and hint stay on top of it. The renderer repeats the presentation's drawing step by step: eight light paths
+(four and their point reflections, 168 samples each), each step a separate round-capped stroke drawn once wide
+and soft and once thin and bright, so the joints glow like beads; a translucent web between neighbouring paths;
+five dashed orbital ellipses; 84 resonance ticks that become a voice meter while listening and speaking; three
+dotted wavefronts; 18 particles (30 while Thinking) with trails and glows; and the reactor, made of a 112 px
+violet glow, a 58 px cyan glow, four dashed arcs and a white-to-cyan nucleus with a bright rim. Everything adds
+light, as the presentation's `lighter` canvas does. The presentation's dark lens is filled while that canvas adds
+light, so it leaves no mark there and has none here. The background tint and the vignette follow the
+presentation. Light beyond the band fades out over its top and bottom 18 rows, so the outer ring shows at the
+sides. Where the presentation multiplies its clock by the state's speed, the renderer uses that speed integrated
+over time: the same picture while a state lasts, without a sudden spin when the state changes.
+`aura_ui_assets_tests` compares every state with the presentation, band by band. A 16-bit display gets the light
+packed in place to RGB565 with a 4 × 4 ordered dither; the 32-bit simulator shows it as RGB888.
 
 Idle drifts slowly, Listening expands and brightens from the real microphone level, Thinking accelerates its
 violet wavefronts, and Speaking reacts to the real playback envelope in magenta. State changes ease over 200 ms,
 Reduced Motion freezes the animation, and the renderer targets one update every 50 ms (20 FPS; measured at
 21.22 FPS in the Windows evidence run). On slower hardware the wait after each frame grows to three times that
 frame's drawing time, so the presence never takes more than a third of the UI thread, down to 5 FPS at most
-(`AuraMercuryView::paced_interval`). The source keeps a soft transparent border and ends at y=371,
-immediately above controls that begin at y=372. Its non-interactive atmosphere may overlap the date visually;
-the separate 224 × 224 talk target begins at y=148 so it does not steal taps from the date line.
+(`AuraMercuryView::paced_interval`). The frame ends at y=371, immediately above controls that begin at y=372.
+The date line is drawn over its top; the separate 224 × 224 talk target begins at y=148 so it does not steal
+taps from the date line.
 
 ## Screens
 

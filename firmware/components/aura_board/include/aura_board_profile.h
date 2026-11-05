@@ -36,7 +36,6 @@ struct Pins {
 struct Display {
     static constexpr int width = 480;
     static constexpr int height = 480;
-    static constexpr int partial_buffer_lines = 48;
 };
 
 }  // namespace aura_board

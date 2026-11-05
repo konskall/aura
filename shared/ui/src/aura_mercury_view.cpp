@@ -1,36 +1,36 @@
 #include "aura/aura_mercury_view.hpp"
 
 #include <algorithm>
-#include <array>
+#include <chrono>
 #include <cmath>
-
-#include "aura/aura_theme.hpp"
+#include <cstring>
 
 namespace aura::ui {
 
+// Every formula below follows artifacts/halo-synapse.html at its own scale (one
+// presentation pixel is one screen pixel). Where the presentation multiplies its
+// clock by the state's speed, this renderer uses phase_, the speed integrated
+// over time: the same picture while a state lasts, without the presentation's
+// sudden spin when the speed changes between states.
+
 namespace {
 constexpr float kTau = 6.2831853071795864769F;
-constexpr int kBasePaths = 4;
-constexpr int kPathCount = kBasePaths * 2;
-constexpr int kPathSamples = 168;
-constexpr float kCanvasScale = static_cast<float>(AuraMercuryView::size) / 224.0F;
-constexpr float kVisualScale = 1.18F;
+constexpr float kCentreX = static_cast<float>(AuraMercuryView::width) / 2.0F;
+constexpr float kCentreY = static_cast<float>(AuraMercuryView::height) / 2.0F;
+// Light beyond the frame's top and bottom edges fades out over this many rows.
+constexpr int kEdgeFade = 18;
+// With a worker, the image source stays the same descriptor while its data
+// alternates between two frames; an image cache would keep showing the old one.
+static_assert(LV_CACHE_DEF_SIZE == 0, "Synapse's frames need LVGL's image cache off");
+// The reduced frame's lattice: the soft pass from every fourth step, brighter
+// to make up for the joints it no longer overlaps, and the bright pass from
+// every second. Measured on the PC: 70 % of a full frame's time, and a mean
+// difference of under 3 levels (of 255) in light.
+constexpr int kReducedSoftStride = 4;
+constexpr int kReducedBrightStride = 2;
+constexpr float kReducedSoftGain = 2.2F;
 
-struct Rgb {
-    float red;
-    float green;
-    float blue;
-};
-
-constexpr Rgb rgb(int red, int green, int blue) {
-    return {static_cast<float>(red) / 255.0F, static_cast<float>(green) / 255.0F,
-            static_cast<float>(blue) / 255.0F};
-}
-
-// Idle, listening, thinking and speaking. The spectral path colour remains
-// visible in every state; this tone pulls the lattice towards its state colour.
-constexpr std::array<Rgb, 4> kStateTone{{rgb(184, 154, 255), rgb(102, 248, 224), rgb(166, 116, 255),
-                                         rgb(255, 99, 196)}};
+// Idle, listening, thinking and speaking.
 constexpr std::array<float, 4> kSpeed{{0.32F, 0.60F, 1.42F, 0.85F}};
 constexpr std::array<float, 4> kSpread{{0.14F, 1.00F, 0.48F, 0.78F}};
 constexpr std::array<float, 4> kWeave{{0.26F, 0.42F, 1.00F, 0.65F}};
@@ -42,114 +42,203 @@ float weighted(const std::array<float, 4>& weights, const std::array<float, 4>& 
     return result;
 }
 
-Rgb weighted(const std::array<float, 4>& weights, const std::array<Rgb, 4>& values) {
-    Rgb result{};
-    for (std::size_t index = 0; index < weights.size(); ++index) {
-        result.red += weights[index] * values[index].red;
-        result.green += weights[index] * values[index].green;
-        result.blue += weights[index] * values[index].blue;
-    }
-    return result;
-}
+float fract(float value) { return value - std::floor(value); }
+// The clocks are doubles; every angle and fraction taken from them is reduced
+// before it meets the float sample terms.
+float spin(double radians) { return static_cast<float>(std::fmod(radians, 6.283185307179586)); }
+float cycle(double value) { return static_cast<float>(value - std::floor(value)); }
+float clamp01(float value) { return std::clamp(value, 0.0F, 1.0F); }
+float mix(float from, float to, float share) { return from + (to - from) * share; }
 
-Rgb blend(const Rgb& from, const Rgb& to, float share) {
-    return {from.red + (to.red - from.red) * share, from.green + (to.green - from.green) * share,
-            from.blue + (to.blue - from.blue) * share};
-}
+// The presentation's rgbAt(): teal to violet to pink, with its opacity.
+struct Spectral {
+    float red;
+    float green;
+    float blue;
+};
 
-float wrap(float value) { return value - std::floor(value); }
-
-Rgb spectrum(float position) {
-    constexpr std::array<Rgb, 3> stops{{rgb(107, 247, 221), rgb(147, 124, 255), rgb(255, 91, 198)}};
-    const float scaled = wrap(position) * 2.0F;
+Spectral spectral_colour(float position) {
+    constexpr Spectral stops[3] = {{107.0F, 247.0F, 221.0F}, {147.0F, 124.0F, 255.0F}, {255.0F, 91.0F, 198.0F}};
+    const float scaled = fract(position) * 2.0F;
     const int index = std::min(1, static_cast<int>(scaled));
-    return blend(stops[static_cast<std::size_t>(index)], stops[static_cast<std::size_t>(index + 1)],
-                 scaled - static_cast<float>(index));
+    const float share = scaled - static_cast<float>(index);
+    // The browser truncates each channel to an integer, as `r | 0` does.
+    return {std::floor(mix(stops[index].red, stops[index + 1].red, share)),
+            std::floor(mix(stops[index].green, stops[index + 1].green, share)),
+            std::floor(mix(stops[index].blue, stops[index + 1].blue, share))};
 }
 
-int channel(float value) { return static_cast<int>(std::clamp(value, 0.0F, 1.0F) * 255.0F + 0.5F); }
-
-std::uint32_t hex(const Rgb& color) {
-    return static_cast<std::uint32_t>((channel(color.red) << 16) | (channel(color.green) << 8) |
-                                      channel(color.blue));
+// The columns of row `row` a stroke can touch: inside the box around the
+// segment and within `reach` of its line, so a long diagonal line visits a
+// narrow band of each row instead of its whole bounding box.
+void narrow_to_line(float from_x, float from_y, float delta_x, float delta_y, float reach, int row, int& left,
+                    int& right) {
+    if (std::abs(delta_y) < 1e-3F) return;
+    const float slope = delta_x / delta_y;
+    const float centre = from_x + (static_cast<float>(row) + 0.5F - from_y) * slope;
+    const float half_span = reach * std::sqrt(1.0F + slope * slope);
+    left = std::max(left, static_cast<int>(std::floor(centre - half_span)));
+    right = std::min(right, static_cast<int>(std::ceil(centre + half_span)));
 }
+
 }  // namespace
 
-AuraMercuryView::AuraMercuryView() {
+AuraMercuryView::AuraMercuryView(Clock clock, FrameWorker* worker) : clock_(clock), worker_(worker) {
+    if (worker_) second_ = std::make_unique<Frame>();
+    canvas_ = buffer_.data();
+    shown_ = buffer_.data();
     descriptor_.header.magic = LV_IMAGE_HEADER_MAGIC;
-    descriptor_.header.cf = LV_COLOR_FORMAT_RGB565A8;
+#if LV_COLOR_DEPTH == 16
+    // A 16-bit display shows RGB565 anyway: pack the light in place, dithered.
+    descriptor_.header.cf = LV_COLOR_FORMAT_RGB565;
+    descriptor_.header.stride = width * 2;
+    descriptor_.data_size = width * height * 2;
+#else
+    descriptor_.header.cf = LV_COLOR_FORMAT_RGB888;
+    descriptor_.header.stride = width * 3;
+    descriptor_.data_size = width * height * 3;
+#endif
     descriptor_.header.flags = LV_IMAGE_FLAGS_MODIFIABLE;
-    descriptor_.header.w = size;
-    descriptor_.header.h = size;
-    descriptor_.header.stride = size * static_cast<int>(sizeof(std::uint16_t));
-    descriptor_.data_size = buffer_.size();
-    descriptor_.data = buffer_.data();
+    descriptor_.header.w = width;
+    descriptor_.header.h = height;
+    descriptor_.data = shown_;
+    // The vignette: a black radial veil from radius 120 (clear) to 330 (82 %).
+    for (std::size_t index = 0; index < vignette_.size(); ++index) {
+        const float distance = std::sqrt(static_cast<float>(index << kVignetteShift));
+        const float veil = 0.82F * clamp01((distance - 120.0F) / 210.0F);
+        vignette_[index] = static_cast<std::uint16_t>((1.0F - veil) * 256.0F + 0.5F);
+    }
+}
+
+AuraMercuryView::~AuraMercuryView() {
+    if (drawing_) worker_->wait_idle();
 }
 
 lv_obj_t* AuraMercuryView::attach(lv_obj_t* parent, int center_x, int center_y) {
-    // The approved canvas uses a 112 px outer radial glow.  The former field
-    // was wider than the complete 252 px source and read as a flat wash rather
-    // than light emitted by the reactor.
-    glow_ = light_field(parent, center_x, center_y, 112, 0x755CFF, LV_OPA_TRANSP);
-    lv_obj_move_to_index(glow_, 0);
-    glow_opacity_ = -1;
-    glow_color_ = 0;
+    // A frame still on the worker belongs to the previous attachment.
+    if (drawing_) {
+        worker_->wait_idle();
+        drawing_ = false;
+    }
     image_ = lv_image_create(parent);
     lv_image_set_src(image_, &descriptor_);
-    lv_obj_set_pos(image_, center_x - size / 2, center_y - size / 2);
+    lv_obj_set_pos(image_, center_x - width / 2, center_y - height / 2);
     lv_obj_set_clickable(image_, false);
     lv_obj_set_scrollable(image_, false);
+    // The frame is opaque light on the black canvas: it goes behind every label
+    // and control, including the Home clock and date made before it.
+    lv_obj_move_to_index(image_, 0);
     if (reduced_motion_ || !attached_before_) {
         for (std::size_t index = 0; index < weights_.size(); ++index) {
             weights_[index] = index == static_cast<std::size_t>(state_) ? 1.0F : 0.0F;
         }
     }
     attached_before_ = true;
-    accumulator_ms_ = frame_interval_ms;
-    interval_ms_ = frame_interval_ms;
+    // The first frame is drawn at once, so the presence is never blank, and the
+    // first tick draws the next one.
+    wait_ms_ = frame_interval_ms;
+    idle_ms_ = frame_interval_ms;
+    debt_ms_ = 0;
+    animation_ms_ = 0;
     frame_count_ = 0;
     advance(0.0F);
+    canvas_ = shown_;
+    frame_quality_ = quality_;
     render();
-    update_glow();
+    ++frame_count_;
     return image_;
 }
 
-void AuraMercuryView::detach() noexcept {
-    image_ = nullptr;
-    glow_ = nullptr;
-}
+void AuraMercuryView::detach() noexcept { image_ = nullptr; }
 
 void AuraMercuryView::set_state(MercuryState state) noexcept { state_ = state; }
 void AuraMercuryView::set_level(float level) noexcept { level_ = std::clamp(level, 0.0F, 1.0F); }
 void AuraMercuryView::set_reduced_motion(bool reduced) noexcept { reduced_motion_ = reduced; }
 
-std::uint32_t AuraMercuryView::paced_interval(std::uint32_t render_ms) noexcept {
-    // Drawing takes at most a third of the time, and Synapse never drops below 5 FPS.
-    return std::clamp<std::uint32_t>(std::min<std::uint32_t>(render_ms, 1000U) * 3U, frame_interval_ms, 200U);
+std::uint32_t AuraMercuryView::paced_wait(std::uint32_t render_ms) noexcept {
+    // An extreme stall counts as one second, so Synapse still moves every 3 s.
+    const std::uint32_t drawing = std::min<std::uint32_t>(render_ms, 1000U);
+    const std::uint32_t rest = drawing < frame_interval_ms ? frame_interval_ms - drawing : 0U;
+    return std::max(rest, drawing * 2U);
+}
+
+SynapseQuality AuraMercuryView::next_quality(SynapseQuality current, std::uint32_t render_ms) noexcept {
+    if (current == SynapseQuality::Full && render_ms > reduce_above_ms) return SynapseQuality::Reduced;
+    if (current == SynapseQuality::Reduced && render_ms < restore_below_ms) return SynapseQuality::Full;
+    return current;
+}
+
+std::uint32_t AuraMercuryView::now_ms() const noexcept {
+    if (clock_) return clock_();
+    return static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
 bool AuraMercuryView::tick(std::uint32_t elapsed_ms) {
     if (!image_ || reduced_motion_) return false;
-    accumulator_ms_ += elapsed_ms;
-    if (accumulator_ms_ < interval_ms_) return false;
-    // Preserve the fractional remainder.  The host UI normally ticks near
-    // 30 Hz; clearing the accumulator forced a nominal 50 ms renderer back to
-    // one frame every two host ticks (about 15 FPS).
-    accumulator_ms_ -= interval_ms_;
-    accumulator_ms_ = std::min<std::uint32_t>(accumulator_ms_, interval_ms_);
-    advance(static_cast<float>(interval_ms_) / 1000.0F);
-    // A device that needs longer per frame draws fewer of them, so the rest of
-    // the UI keeps two thirds of the time.
-    const std::uint32_t started = lv_tick_get();
-    render();
-    interval_ms_ = paced_interval(lv_tick_elaps(started));
-    lv_obj_invalidate(image_);
-    update_glow();
+    // Time spent drawing on this thread comes back inside its next elapsed
+    // times; it is not idle time.
+    const std::uint32_t repaid = std::min(elapsed_ms, debt_ms_);
+    debt_ms_ -= repaid;
+    // The animation moves with real time, however few frames a device draws.
+    animation_ms_ = std::min<std::uint32_t>(animation_ms_ + elapsed_ms, 1000U);
+    if (drawing_) {
+        if (worker_->busy()) return false;
+        drawing_ = false;
+        show(canvas_, drawn_ms_, true);
+        return true;
+    }
+    idle_ms_ = std::min<std::uint32_t>(idle_ms_ + (elapsed_ms - repaid), 2U * wait_ms_);
+    if (idle_ms_ < wait_ms_) return false;
+    // Another view's frame is still on the shared worker: try again next tick.
+    if (worker_ && worker_->busy()) return false;
+    // The host ticks about every 33 ms: idle time beyond the wait carries over,
+    // so a fast device keeps 20 FPS on average (show() trims it on a slow one).
+    idle_ms_ -= wait_ms_;
+    advance(static_cast<float>(animation_ms_) / 1000.0F);
+    animation_ms_ = 0;
+    frame_quality_ = quality_;
+    if (worker_) {
+        canvas_ = shown_ == buffer_.data() ? second_->data() : buffer_.data();
+        drawing_ = worker_->submit(&AuraMercuryView::draw_on_worker, this);
+        if (drawing_) return false;
+    }
+    const std::uint32_t render_ms = draw_into(shown_);
+    debt_ms_ = render_ms;
+    show(shown_, render_ms, false);
     return true;
 }
 
+std::uint32_t AuraMercuryView::draw_into(std::uint8_t* target) noexcept {
+    canvas_ = target;
+    const std::uint32_t started = now_ms();
+    render();
+    return now_ms() - started;
+}
+
+void AuraMercuryView::draw_on_worker(void* view) noexcept {
+    auto* self = static_cast<AuraMercuryView*>(view);
+    self->drawn_ms_ = self->draw_into(self->canvas_);
+}
+
+void AuraMercuryView::show(std::uint8_t* frame, std::uint32_t render_ms, bool from_worker) noexcept {
+    shown_ = frame;
+    descriptor_.data = frame;
+    if (image_) lv_obj_invalidate(image_);
+    ++frame_count_;
+    last_frame_ms_ = render_ms;
+    // A device that needs longer per frame draws fewer, lighter ones, so drawing
+    // keeps to a third of the time: idle time carried over never cuts into the
+    // twice-the-drawing a frame asks for, and a worker's frame starts it afresh.
+    wait_ms_ = paced_wait(render_ms);
+    const std::uint32_t drawing = std::min<std::uint32_t>(render_ms, 1000U);
+    const std::uint32_t spare = wait_ms_ > 2U * drawing ? wait_ms_ - 2U * drawing : 0U;
+    idle_ms_ = from_worker ? 0U : std::min(idle_ms_, spare);
+    quality_ = next_quality(quality_, render_ms);
+}
+
 void AuraMercuryView::advance(float seconds) noexcept {
-    seconds_ += seconds;
+    seconds_ += static_cast<double>(seconds);
     const float ease = seconds > 0.0F ? 1.0F - std::exp(-seconds / 0.2F) : 0.0F;
     float sum = 0.0F;
     for (std::size_t index = 0; index < weights_.size(); ++index) {
@@ -165,578 +254,523 @@ void AuraMercuryView::advance(float seconds) noexcept {
     weave_ = weighted(weights_, kWeave);
     wave_ = weighted(weights_, kWave);
     drive_ = (weights_[1] + weights_[3]) * level_;
-    phase_ += seconds * speed_;
+    phase_ += static_cast<double>(seconds) * speed_;
 }
 
-AuraMercuryView::Point AuraMercuryView::path_point(int path, float u) const noexcept {
-    const int base = path / 2;
-    const bool reflected = (path & 1) != 0;
-    const float angle = u * kTau;
-    const float voice = drive_ * wave_ * std::sin(angle * 8.0F - phase_ * 10.2F + static_cast<float>(base) * 0.73F);
-    const float knot = std::sin(angle * 3.0F + static_cast<float>(base) * 1.17F +
-                                phase_ * (0.46F + speed_ * 0.34F));
-    const float counter = std::sin(angle * 5.0F - static_cast<float>(base) * 0.61F - phase_ * 0.52F);
-    // Spatially this is the approved 480 px proposal at roughly two-thirds
-    // scale.  The earlier production reduction was substantially smaller and
-    // also removed most of the voice displacement, which made the lattice
-    // look sparse and nearly static on the 480 x 480 panel.
-    const float radius = 69.5F + static_cast<float>(base) * 1.43F + knot * (6.7F + weave_ * 5.3F) +
-                         counter * 2.33F + voice * 14.0F;
-    float x = std::cos(angle) * radius * (1.0F + spread_ * 0.15F * std::pow(std::sin(angle), 2.0F));
-    float y = std::sin(angle) * radius * (0.76F + spread_ * 0.13F);
-    float z = std::sin(angle * 2.0F + static_cast<float>(base) * 1.03F + phase_ * 2.05F) *
-              (21.3F + weave_ * 26.7F);
-    x += spread_ * 9.3F * std::sin(angle * 2.0F + static_cast<float>(base) * 0.86F);
-    y += voice * 6.7F + spread_ * 5.3F * std::cos(angle * 3.0F - phase_ * 1.2F);
+// ---- Light primitives: the canvas operations the presentation uses ----------
 
-    const float rotate_x = 0.18F + 0.36F * std::sin(seconds_ * 0.17F + static_cast<float>(base) * 0.72F) +
-                           static_cast<float>(base) * 0.066F;
-    const float rotate_y = phase_ * 0.54F + static_cast<float>(base) * 0.49F;
-    const float cos_y = std::cos(rotate_y);
-    const float sin_y = std::sin(rotate_y);
-    const float turned_x = x * cos_y + z * sin_y;
-    const float turned_z = z * cos_y - x * sin_y;
-    const float cos_x = std::cos(rotate_x);
-    const float sin_x = std::sin(rotate_x);
-    const float turned_y = y * cos_x - turned_z * sin_x;
-    const float depth = y * sin_x + turned_z * cos_x;
-    constexpr float focal = 260.0F;
-    const float scale = focal / (focal - depth);
-    Point result{static_cast<float>(size) / 2.0F + turned_x * scale * kVisualScale,
-                 static_cast<float>(size) / 2.0F + turned_y * scale * kVisualScale, depth};
-    if (reflected) {
-        result.x = static_cast<float>(size) - result.x;
-        result.y = static_cast<float>(size) - result.y;
-        result.z = -result.z;
-    }
-    return result;
-}
-
-void AuraMercuryView::add_light(int x, int y, float red, float green, float blue) noexcept {
-    if (x < 0 || x >= size || y < 0 || y >= size) return;
-    const auto index = static_cast<std::size_t>(y * size + x);
-    auto* red_green = buffer_.data() + index * 2;
-    auto* blue_byte = buffer_.data() + static_cast<std::size_t>(size * size) * 2 + index;
-    const auto add = [](std::uint8_t& target, float value) {
-        target = static_cast<std::uint8_t>(
-            std::min(255, static_cast<int>(target) + static_cast<int>(std::max(0.0F, value) * 255.0F)));
+void AuraMercuryView::add(int x, int y, const Light& light, float coverage) noexcept {
+    auto* pixel = canvas_ + (static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)) * 3;
+    const auto put = [coverage](std::uint8_t& channel, float value) {
+        const int sum = static_cast<int>(channel) + static_cast<int>(value * coverage + 0.5F);
+        channel = static_cast<std::uint8_t>(std::min(255, sum));
     };
-    add(red_green[0], red);
-    add(red_green[1], green);
-    add(*blue_byte, blue);
+    put(pixel[0], light.blue);
+    put(pixel[1], light.green);
+    put(pixel[2], light.red);
 }
 
-void AuraMercuryView::soft_dot(float x, float y, float radius, float red, float green, float blue,
-                               float peak) noexcept {
-    const int reach = static_cast<int>(std::ceil(radius + 0.5F));
-    const int center_x = static_cast<int>(x);
-    const int center_y = static_cast<int>(y);
-    for (int offset_y = -reach; offset_y <= reach; ++offset_y) {
-        for (int offset_x = -reach; offset_x <= reach; ++offset_x) {
-            const float pixel_x = static_cast<float>(center_x + offset_x) + 0.5F - x;
-            const float pixel_y = static_cast<float>(center_y + offset_y) + 0.5F - y;
-            const float distance = std::sqrt(pixel_x * pixel_x + pixel_y * pixel_y);
-            if (distance >= radius + 0.5F) continue;
-            float light = std::clamp(radius + 0.5F - distance, 0.0F, 1.0F);
-            if (radius > 2.0F) light *= std::max(0.0F, 1.0F - distance / (radius + 0.5F));
-            light *= peak;
-            add_light(center_x + offset_x, center_y + offset_y, red * light, green * light, blue * light);
-        }
-    }
-}
-
-void AuraMercuryView::light_line(const Point& from, const Point& to, float radius, float red, float green,
-                                 float blue, float peak) noexcept {
+// One straight stroke with round caps. Lines thinner than a pixel light a
+// one-pixel line proportionally less, as the browser's hairlines do.
+void AuraMercuryView::stroke(const Point& from, const Point& to, float line_width, const Light& light) noexcept {
+    const float half = std::max(line_width, 1.0F) * 0.5F;
+    const float strength = std::min(line_width, 1.0F);
+    const float reach = half + 0.5F;
+    const int left = std::max(0, static_cast<int>(std::floor(std::min(from.x, to.x) - reach)));
+    const int right = std::min(width - 1, static_cast<int>(std::ceil(std::max(from.x, to.x) + reach)));
+    const int top = std::max(0, static_cast<int>(std::floor(std::min(from.y, to.y) - reach)));
+    const int bottom = std::min(height - 1, static_cast<int>(std::ceil(std::max(from.y, to.y) + reach)));
+    if (left > right || top > bottom) return;
     const float delta_x = to.x - from.x;
     const float delta_y = to.y - from.y;
-    const int steps = std::max(1, static_cast<int>(std::ceil(std::hypot(delta_x, delta_y))));
-    for (int step = 0; step <= steps; ++step) {
-        const float share = static_cast<float>(step) / static_cast<float>(steps);
-        soft_dot(from.x + delta_x * share, from.y + delta_y * share, radius, red, green, blue, peak);
-    }
-}
-
-void AuraMercuryView::overlay_dot(float x, float y, float radius, float red, float green, float blue,
-                                  float opacity) noexcept {
-    const int reach = static_cast<int>(std::ceil(radius + 0.5F));
-    const int center_x = static_cast<int>(x);
-    const int center_y = static_cast<int>(y);
-    for (int offset_y = -reach; offset_y <= reach; ++offset_y) {
-        for (int offset_x = -reach; offset_x <= reach; ++offset_x) {
-            const int target_x = center_x + offset_x;
-            const int target_y = center_y + offset_y;
-            if (target_x < 0 || target_x >= size || target_y < 0 || target_y >= size) continue;
-            const float pixel_x = static_cast<float>(target_x) + 0.5F - x;
-            const float pixel_y = static_cast<float>(target_y) + 0.5F - y;
-            const float distance = std::hypot(pixel_x, pixel_y);
-            if (distance >= radius + 0.5F) continue;
-            float coverage = std::clamp(radius + 0.5F - distance, 0.0F, 1.0F);
-            if (radius > 1.0F) coverage *= std::max(0.0F, 1.0F - distance / (radius + 0.5F));
-            const float blend_amount = std::clamp(opacity * coverage, 0.0F, 1.0F);
-            const auto index = static_cast<std::size_t>(target_y * size + target_x);
-            const auto composite = [blend_amount](std::uint8_t& destination, float source) {
-                destination = static_cast<std::uint8_t>(
-                    std::clamp(static_cast<float>(destination) * (1.0F - blend_amount) +
-                                   source * 255.0F * blend_amount,
-                               0.0F, 255.0F) +
-                    0.5F);
-            };
-            composite(buffer_[index * 2], red);
-            composite(buffer_[index * 2 + 1], green);
-            composite(buffer_[static_cast<std::size_t>(size * size) * 2 + index], blue);
-        }
-    }
-}
-
-void AuraMercuryView::overlay_line(const Point& from, const Point& to, float radius, float red, float green,
-                                   float blue, float opacity) noexcept {
-    const float delta_x = to.x - from.x;
-    const float delta_y = to.y - from.y;
-    const int steps = std::max(1, static_cast<int>(std::ceil(std::hypot(delta_x, delta_y))));
-    for (int step = 0; step <= steps; ++step) {
-        const float share = static_cast<float>(step) / static_cast<float>(steps);
-        overlay_dot(from.x + delta_x * share, from.y + delta_y * share, radius, red, green, blue, opacity);
-    }
-}
-
-void AuraMercuryView::clear_core(float radius) noexcept {
-    const int center = size / 2;
-    const int reach = static_cast<int>(std::ceil(radius));
-    for (int y = center - reach; y <= center + reach; ++y) {
-        for (int x = center - reach; x <= center + reach; ++x) {
-            const float distance = std::hypot(static_cast<float>(x - center), static_cast<float>(y - center));
-            if (distance > radius) continue;
-            const float position = distance / radius;
-            const float inner_stop = std::min(0.30F, 12.0F / radius);
-            float darkness = 0.12F;
-            if (position > inner_stop && position <= 0.46F) {
-                darkness = 0.12F + (position - inner_stop) / (0.46F - inner_stop) * 0.16F;
-            } else if (position > 0.46F && position <= 0.72F) {
-                darkness = 0.28F + (position - 0.46F) / 0.26F * 0.56F;
-            } else if (position > 0.72F) {
-                darkness = 0.84F * (1.0F - (position - 0.72F) / 0.28F);
+    const float length_squared = delta_x * delta_x + delta_y * delta_y;
+    const float inverse = length_squared > 1e-6F ? 1.0F / length_squared : 0.0F;
+    const float outer = reach * reach;
+    const float inner = half > 0.5F ? (half - 0.5F) * (half - 0.5F) : -1.0F;
+    // Pixels the stroke covers completely all receive the same light.
+    const Light solid{light.red * strength, light.green * strength, light.blue * strength};
+    const int solid_blue = static_cast<int>(solid.blue + 0.5F);
+    const int solid_green = static_cast<int>(solid.green + 0.5F);
+    const int solid_red = static_cast<int>(solid.red + 0.5F);
+    for (int y = top; y <= bottom; ++y) {
+        const float offset_y = static_cast<float>(y) + 0.5F - from.y;
+        int first = left;
+        int last = right;
+        narrow_to_line(from.x, from.y, delta_x, delta_y, reach, y, first, last);
+        frame_work_ += static_cast<std::uint64_t>(last >= first ? last - first + 1 : 0);
+        auto* pixel = canvas_ + (static_cast<std::size_t>(y) * width + static_cast<std::size_t>(first)) * 3;
+        for (int x = first; x <= last; ++x, pixel += 3) {
+            const float offset_x = static_cast<float>(x) + 0.5F - from.x;
+            const float along = clamp01((offset_x * delta_x + offset_y * delta_y) * inverse);
+            const float away_x = offset_x - along * delta_x;
+            const float away_y = offset_y - along * delta_y;
+            const float distance_squared = away_x * away_x + away_y * away_y;
+            if (distance_squared >= outer) continue;
+            if (distance_squared <= inner) {
+                pixel[0] = static_cast<std::uint8_t>(std::min(255, pixel[0] + solid_blue));
+                pixel[1] = static_cast<std::uint8_t>(std::min(255, pixel[1] + solid_green));
+                pixel[2] = static_cast<std::uint8_t>(std::min(255, pixel[2] + solid_red));
+            } else {
+                add(x, y, solid, clamp01(reach - std::sqrt(distance_squared)));
             }
-            const float transmission = 1.0F - std::clamp(darkness, 0.0F, 0.84F);
-            const auto index = static_cast<std::size_t>(y * size + x);
-            buffer_[index * 2] =
-                static_cast<std::uint8_t>(static_cast<float>(buffer_[index * 2]) * transmission);
-            buffer_[index * 2 + 1] =
-                static_cast<std::uint8_t>(static_cast<float>(buffer_[index * 2 + 1]) * transmission);
-            auto& blue = buffer_[static_cast<std::size_t>(size * size) * 2 + index];
-            blue = static_cast<std::uint8_t>(static_cast<float>(blue) * transmission);
         }
     }
 }
 
-void AuraMercuryView::draw_atmosphere(float drive) {
-    const float center = static_cast<float>(size) / 2.0F;
-    const Rgb tone = weighted(weights_, kStateTone);
-    const float drift = std::sin(seconds_ * 0.22F) * 5.0F;
-    const float lift = std::cos(seconds_ * 0.18F) * 4.0F;
-    constexpr float violet_radius = 80.0F * kCanvasScale;
-    constexpr float teal_radius = 72.0F * kCanvasScale;
-    constexpr float reactor_outer_radius = 112.0F;
-    constexpr float reactor_inner_radius = 58.0F;
-    const float violet_x = center - 30.0F * kCanvasScale + drift;
-    const float violet_y = center - 10.0F * kCanvasScale;
-    const float teal_x = center + 34.0F * kCanvasScale;
-    const float teal_y = center + 8.0F * kCanvasScale + lift;
-    const Rgb reactor_outer = blend(rgb(104, 78, 255), tone, 0.08F);
-    const Rgb reactor_inner = rgb(85, 247, 222);
-
-    for (int y = 0; y < size; ++y) {
-        for (int x = 0; x < size; ++x) {
-            const float violet_dx = static_cast<float>(x) + 0.5F - violet_x;
-            const float violet_dy = static_cast<float>(y) + 0.5F - violet_y;
-            const float teal_dx = static_cast<float>(x) + 0.5F - teal_x;
-            const float teal_dy = static_cast<float>(y) + 0.5F - teal_y;
-            const float core_dx = static_cast<float>(x) + 0.5F - center;
-            const float core_dy = static_cast<float>(y) + 0.5F - center;
-            const float core_distance = std::sqrt(core_dx * core_dx + core_dy * core_dy);
-            float violet = 1.0F - (violet_dx * violet_dx + violet_dy * violet_dy) /
-                                      (violet_radius * violet_radius);
-            float teal = 1.0F - (teal_dx * teal_dx + teal_dy * teal_dy) / (teal_radius * teal_radius);
-            float reactor_violet = std::max(0.0F, 1.0F - core_distance / reactor_outer_radius);
-            float reactor_teal = std::max(0.0F, 1.0F - core_distance / reactor_inner_radius);
-            violet = std::max(0.0F, violet);
-            teal = std::max(0.0F, teal);
-            violet = violet * violet * (0.115F + weights_[2] * 0.035F + drive * 0.025F);
-            teal = teal * teal * (0.080F + drive * 0.040F);
-            reactor_violet *= 0.14F + drive * 0.08F;
-            reactor_teal *= 0.20F + drive * 0.14F;
-            if (violet <= 0.0F && teal <= 0.0F && reactor_violet <= 0.0F && reactor_teal <= 0.0F) continue;
-            add_light(x, y,
-                      tone.red * violet * 0.42F + teal * 0.08F + reactor_outer.red * reactor_violet +
-                          reactor_inner.red * reactor_teal,
-                      tone.green * violet * 0.18F + teal * 0.72F + reactor_outer.green * reactor_violet +
-                          reactor_inner.green * reactor_teal,
-                      tone.blue * violet * 0.82F + teal * 0.64F + reactor_outer.blue * reactor_violet +
-                          reactor_inner.blue * reactor_teal);
+// One stroke along a polyline: a single path, so its joints light once (the
+// lattice's separate steps, drawn with stroke(), brighten theirs). Round caps.
+void AuraMercuryView::stroke_path(const Point* points, int count, float line_width, const Light& light) noexcept {
+    if (count < 2) return;
+    const float half = std::max(line_width, 1.0F) * 0.5F;
+    const float strength = std::min(line_width, 1.0F);
+    const float reach = half + 0.5F;
+    const float outer = reach * reach;
+    const float inner = half > 0.5F ? (half - 0.5F) * (half - 0.5F) : -1.0F;
+    for (int segment = 0; segment + 1 < count; ++segment) {
+        const Point& from = points[segment];
+        const Point& to = points[segment + 1];
+        const bool first = segment == 0;
+        const bool last = segment + 2 == count;
+        const int left = std::max(0, static_cast<int>(std::floor(std::min(from.x, to.x) - reach)));
+        const int right = std::min(width - 1, static_cast<int>(std::ceil(std::max(from.x, to.x) + reach)));
+        const int top = std::max(0, static_cast<int>(std::floor(std::min(from.y, to.y) - reach)));
+        const int bottom = std::min(height - 1, static_cast<int>(std::ceil(std::max(from.y, to.y) + reach)));
+        if (left > right || top > bottom) continue;
+        const float delta_x = to.x - from.x;
+        const float delta_y = to.y - from.y;
+        const float length_squared = delta_x * delta_x + delta_y * delta_y;
+        const float inverse = length_squared > 1e-6F ? 1.0F / length_squared : 0.0F;
+        for (int y = top; y <= bottom; ++y) {
+            const float offset_y = static_cast<float>(y) + 0.5F - from.y;
+            int start = left;
+            int stop = right;
+            narrow_to_line(from.x, from.y, delta_x, delta_y, reach, y, start, stop);
+            for (int x = start; x <= stop; ++x) {
+                const float offset_x = static_cast<float>(x) + 0.5F - from.x;
+                float along = (offset_x * delta_x + offset_y * delta_y) * inverse;
+                // Each pixel belongs to one segment; the ends keep their caps.
+                if ((along < 0.0F && !first) || (along >= 1.0F && !last)) continue;
+                along = clamp01(along);
+                const float away_x = offset_x - along * delta_x;
+                const float away_y = offset_y - along * delta_y;
+                const float distance_squared = away_x * away_x + away_y * away_y;
+                if (distance_squared >= outer) continue;
+                const float coverage =
+                    distance_squared <= inner ? 1.0F : clamp01(reach - std::sqrt(distance_squared));
+                add(x, y, light, coverage * strength);
+            }
         }
     }
 }
 
-void AuraMercuryView::draw_orbits(float drive) {
-    const float center = static_cast<float>(size) / 2.0F;
-    const Rgb tone = weighted(weights_, kStateTone);
-    constexpr int arc_samples = 120;
+// A dashed arc of a circle drawn through rotate(rotation) and scale(1, scale_y)
+// about the centre, as the presentation's ellipses are. Dash lengths, the dash
+// offset and the line width are in the circle's own units.
+void AuraMercuryView::dashed_arc(float rotation, float scale_y, float radius, float start, float end,
+                                 const std::array<float, 4>& dashes, double offset, float line_width,
+                                 const Light& light) noexcept {
+    const float pattern = dashes[0] + dashes[1] + dashes[2] + dashes[3];
+    const float length = radius * (end - start);
+    if (pattern <= 0.0F || length <= 0.0F) return;
+    const float cos_r = std::cos(rotation);
+    const float sin_r = std::sin(rotation);
+    const auto at = [&](float travelled) {
+        const float angle = start + travelled / radius;
+        const float x = std::cos(angle) * radius;
+        const float y = std::sin(angle) * radius * scale_y;
+        return Point{kCentreX + x * cos_r - y * sin_r, kCentreY + x * sin_r + y * cos_r, 0.0F};
+    };
+    // Where the path starts inside the dash pattern.
+    auto position = static_cast<float>(std::fmod(offset, static_cast<double>(pattern)));
+    if (position < 0.0F) position += pattern;
+    int element = 0;
+    while (position >= dashes[static_cast<std::size_t>(element)]) {
+        position -= dashes[static_cast<std::size_t>(element)];
+        element = (element + 1) % 4;
+    }
+    std::array<Point, 48> points{};
+    float travelled = 0.0F;
+    while (travelled < length) {
+        const float remaining = dashes[static_cast<std::size_t>(element)] - position;
+        const float stop = std::min(length, travelled + remaining);
+        if ((element & 1) == 0) {
+            // The stroke's width across the scaled circle at the dash's middle.
+            const float middle = start + (travelled + stop) * 0.5F / radius;
+            const float tangent = std::hypot(std::sin(middle), scale_y * std::cos(middle));
+            const float shown = line_width * scale_y / std::max(tangent, 1e-3F);
+            const int pieces = std::clamp(static_cast<int>(std::ceil((stop - travelled) / 3.0F)), 1,
+                                          static_cast<int>(points.size()) - 1);
+            for (int piece = 0; piece <= pieces; ++piece) {
+                points[static_cast<std::size_t>(piece)] =
+                    at(travelled + (stop - travelled) * static_cast<float>(piece) / static_cast<float>(pieces));
+            }
+            stroke_path(points.data(), pieces + 1, shown, light);
+        }
+        travelled = stop;
+        position = 0.0F;
+        element = (element + 1) % 4;
+    }
+}
+
+// A radial gradient from `alpha` at the centre to nothing at `radius`.
+void AuraMercuryView::radial_glow(float x, float y, float radius, int red, int green, int blue,
+                                  float alpha) noexcept {
+    const int left = std::max(0, static_cast<int>(std::floor(x - radius)));
+    const int right = std::min(width - 1, static_cast<int>(std::ceil(x + radius)));
+    const int top = std::max(0, static_cast<int>(std::floor(y - radius)));
+    const int bottom = std::min(height - 1, static_cast<int>(std::ceil(y + radius)));
+    const Light light{static_cast<float>(red) * alpha, static_cast<float>(green) * alpha,
+                      static_cast<float>(blue) * alpha};
+    const float limit = radius * radius;
+    if (right >= left && bottom >= top) {
+        frame_work_ += static_cast<std::uint64_t>(right - left + 1) * static_cast<std::uint64_t>(bottom - top + 1);
+    }
+    for (int row = top; row <= bottom; ++row) {
+        const float offset_y = static_cast<float>(row) + 0.5F - y;
+        for (int column = left; column <= right; ++column) {
+            const float offset_x = static_cast<float>(column) + 0.5F - x;
+            const float distance_squared = offset_x * offset_x + offset_y * offset_y;
+            if (distance_squared >= limit) continue;
+            add(column, row, light, 1.0F - std::sqrt(distance_squared) / radius);
+        }
+    }
+}
+
+void AuraMercuryView::fill_circle(float x, float y, float radius, const Light& light) noexcept {
+    const float reach = radius + 0.5F;
+    const int left = std::max(0, static_cast<int>(std::floor(x - reach)));
+    const int right = std::min(width - 1, static_cast<int>(std::ceil(x + reach)));
+    const int top = std::max(0, static_cast<int>(std::floor(y - reach)));
+    const int bottom = std::min(height - 1, static_cast<int>(std::ceil(y + reach)));
+    if (right >= left && bottom >= top) {
+        frame_work_ += static_cast<std::uint64_t>(right - left + 1) * static_cast<std::uint64_t>(bottom - top + 1);
+    }
+    for (int row = top; row <= bottom; ++row) {
+        const float offset_y = static_cast<float>(row) + 0.5F - y;
+        for (int column = left; column <= right; ++column) {
+            const float offset_x = static_cast<float>(column) + 0.5F - x;
+            const float coverage = clamp01(reach - std::hypot(offset_x, offset_y));
+            if (coverage > 0.0F) add(column, row, light, coverage);
+        }
+    }
+}
+
+// ---- The presentation's layers ---------------------------------------------
+
+void AuraMercuryView::draw_orbits() noexcept {
+    // drawOrbitArcs(): five dashed elliptical traces outside the lattice.
     for (int ring = 0; ring < 5; ++ring) {
-        const float radius = (84.0F + static_cast<float>(ring) * 4.0F + drive * 2.0F) * kCanvasScale;
-        const float rotation = phase_ * (ring % 2 == 0 ? 0.29F : -0.38F) + static_cast<float>(ring) * 0.69F;
-        Point previous{};
-        bool has_previous = false;
-        for (int sample = 0; sample <= arc_samples; ++sample) {
-            const float angle = static_cast<float>(sample) / static_cast<float>(arc_samples) * kTau;
-            const float oval_y = std::sin(angle) * radius * (0.66F + 0.034F * static_cast<float>(ring));
-            const float oval_x = std::cos(angle) * radius;
-            const Point point{center + oval_x * std::cos(rotation) - oval_y * std::sin(rotation),
-                              center + oval_x * std::sin(rotation) + oval_y * std::cos(rotation), 0.0F};
-            const bool visible = ((sample + ring * 7) % (27 + ring * 3)) < (10 + ring * 2);
-            if (visible && has_previous) {
-                const Rgb color = blend(spectrum(static_cast<float>(ring) * 0.19F + angle / kTau), tone, 0.12F);
-                light_line(previous, point, ring == 0 ? 0.72F : 0.48F, color.red, color.green, color.blue,
-                           0.12F + weave_ * 0.055F);
-            }
-            has_previous = visible;
-            previous = point;
-        }
+        const bool odd = (ring & 1) != 0;
+        const float rotation = spin(phase_ * (odd ? -0.38 : 0.29)) + static_cast<float>(ring) * 0.69F;
+        const float scale_y = 0.66F + static_cast<float>(ring) * 0.034F + spread_ * 0.032F;
+        const float radius = 157.0F + static_cast<float>(ring) * 8.0F + drive_ * 10.0F;
+        const std::array<float, 4> dashes{{42.0F + static_cast<float>(ring) * 5.0F,
+                                           67.0F + static_cast<float>(ring) * 8.0F, 6.0F, 36.0F}};
+        const double offset = -(seconds_ * 25.0 + phase_ * 68.0) * (odd ? -1.0 : 1.0);
+        const Spectral colour = spectral_colour(static_cast<float>(ring) * 0.16F + cycle(seconds_ * 0.022));
+        const float alpha = clamp01(0.10F + weave_ * 0.052F);
+        dashed_arc(rotation, scale_y, radius, 0.0F, kTau, dashes, offset, ring == 0 ? 1.4F : 0.72F,
+                   {colour.red * alpha, colour.green * alpha, colour.blue * alpha});
     }
+}
 
+void AuraMercuryView::draw_resonance() noexcept {
+    // drawResonance(): 84 ticks that become a voice meter while listening and speaking.
     constexpr int ticks = 84;
     const float active = weights_[1] + weights_[3];
-    const float signal = std::clamp(drive + (1.0F - active) * weave_ * 0.18F, 0.0F, 1.0F);
+    const float signal = drive_ + (1.0F - active) * weave_ * 0.18F;
+    const float turn = spin(phase_ * 0.16);
+    const float shimmer = spin(seconds_ * 2.8);
+    const float pulse = spin(seconds_ * 3.6);
+    const float drift = cycle(seconds_ * 0.028);
     for (int index = 0; index < ticks; ++index) {
-        const float angle = static_cast<float>(index) / static_cast<float>(ticks) * kTau + phase_ * 0.16F;
-        const float texture = 0.5F + 0.5F * std::sin(static_cast<float>(index) * 1.69F + seconds_ * 2.8F);
-        const float radius = (84.0F + spread_ * 4.0F + signal * 5.3F *
-                                                          std::sin(static_cast<float>(index) * 0.68F - seconds_ * 3.6F)) *
-                             kCanvasScale;
-        const float length = (2.0F + signal * (6.0F + 14.0F * texture)) * kCanvasScale;
-        const Point from{center + std::cos(angle) * radius, center + std::sin(angle) * radius * 0.91F, 0.0F};
-        const Point to{center + std::cos(angle) * (radius + length),
-                       center + std::sin(angle) * (radius + length) * 0.91F, 0.0F};
-        const Rgb color = blend(spectrum(static_cast<float>(index) / static_cast<float>(ticks) * 0.72F), tone, 0.14F);
-        light_line(from, to, 0.58F + signal * 0.72F, color.red, color.green, color.blue,
-                   0.10F + signal * 0.50F);
+        const auto tick = static_cast<float>(index);
+        const float angle = tick / ticks * kTau + turn;
+        const float texture = 0.5F + 0.5F * std::sin(tick * 1.69F + shimmer);
+        const float length = 3.0F + signal * (10.0F + 31.0F * texture);
+        const float radius = 176.0F + spread_ * 12.0F + signal * 8.0F * std::sin(tick * 0.68F - pulse);
+        const float cos_a = std::cos(angle);
+        const float sin_a = std::sin(angle);
+        const Point from{kCentreX + cos_a * radius, kCentreY + sin_a * radius * 0.91F, 0.0F};
+        const Point to{kCentreX + cos_a * (radius + length), kCentreY + sin_a * (radius + length) * 0.91F, 0.0F};
+        const Spectral colour = spectral_colour(tick / ticks * 0.72F + drift);
+        const float alpha = clamp01(0.07F + signal * 0.48F);
+        stroke(from, to, 0.75F + signal * 1.45F, {colour.red * alpha, colour.green * alpha, colour.blue * alpha});
     }
+}
 
-    const float wave_strength = 0.04F + drive * 0.26F + weights_[2] * 0.08F;
+void AuraMercuryView::build_paths() noexcept {
+    // buildLoops(): four paths and their exact point reflections, so the
+    // reactor stays at the visual centre while the structure transforms.
+    const float tilt = spin(seconds_ * 0.17);
+    const float turn = spin(phase_ * 0.54);
+    const float ripple = spin(seconds_ * 10.2);
+    const float twist = spin(seconds_ * 0.46 + phase_ * 0.34);
+    const float counter_twist = spin(phase_ * 0.52);
+    const float lift = spin(phase_ * 2.05);
+    const float sway = spin(seconds_ * 1.2);
+    for (int base = 0; base < kPaths / 2; ++base) {
+        const auto loop = static_cast<float>(base);
+        const float rotate_x = 0.18F + 0.36F * std::sin(tilt + loop * 0.72F) + loop * 0.066F;
+        const float rotate_y = turn + loop * 0.49F;
+        const float cos_x = std::cos(rotate_x);
+        const float sin_x = std::sin(rotate_x);
+        const float cos_y = std::cos(rotate_y);
+        const float sin_y = std::sin(rotate_y);
+        for (int sample = 0; sample <= kSteps; ++sample) {
+            const float angle = static_cast<float>(sample) / kSteps * kTau;
+            const float voice = drive_ * wave_ * std::sin(angle * 8.0F - ripple + loop * 0.73F);
+            const float knot = std::sin(angle * 3.0F + loop * 1.17F + twist);
+            const float counter = std::sin(angle * 5.0F - loop * 0.61F - counter_twist);
+            const float radius =
+                104.0F + loop * 2.15F + knot * (10.0F + weave_ * 8.0F) + counter * 3.5F + voice * 21.0F;
+            const float sin_a = std::sin(angle);
+            float x = std::cos(angle) * radius * (1.0F + spread_ * 0.15F * sin_a * sin_a);
+            float y = sin_a * radius * (0.76F + spread_ * 0.13F);
+            const float z = std::sin(angle * 2.0F + loop * 1.03F + lift) * (32.0F + weave_ * 40.0F);
+            x += spread_ * 14.0F * std::sin(angle * 2.0F + loop * 0.86F);
+            y += voice * 10.0F + spread_ * 8.0F * std::cos(angle * 3.0F - sway);
+            const float turned_x = x * cos_y + z * sin_y;
+            const float turned_z = z * cos_y - x * sin_y;
+            const float turned_y = y * cos_x - turned_z * sin_x;
+            const float depth = y * sin_x + turned_z * cos_x;
+            const float scale = 390.0F / (390.0F - depth);
+            const Point point{kCentreX + turned_x * scale, kCentreY + turned_y * scale, depth};
+            paths_[static_cast<std::size_t>(base * 2 * (kSteps + 1) + sample)] = point;
+            paths_[static_cast<std::size_t>((base * 2 + 1) * (kSteps + 1) + sample)] =
+                Point{kCentreX * 2.0F - point.x, kCentreY * 2.0F - point.y, -point.z};
+        }
+    }
+}
+
+void AuraMercuryView::draw_waves() noexcept {
+    // drawPulseWaves(): three dotted wavefronts expanding from the reactor.
+    const float active = weights_[1] + weights_[3];
+    const float strength = active * 0.26F + drive_ * 0.74F + weights_[2] * 0.23F + weights_[0] * 0.08F;
     for (int ring = 0; ring < 3; ++ring) {
-        const float age = wrap(seconds_ * (0.12F + speed_ * 0.045F) + static_cast<float>(ring) / 3.0F);
-        const float radius = (66.0F + age * 39.0F + drive * 2.5F) * kCanvasScale;
-        Point previous{};
-        bool has_previous = false;
-        for (int sample = 0; sample <= arc_samples; ++sample) {
-            const float angle = static_cast<float>(sample) / static_cast<float>(arc_samples) * kTau;
-            const Point point{center + std::cos(angle) * radius,
-                              center + std::sin(angle) * radius * (0.88F + 0.035F * std::sin(seconds_ + ring)),
-                              0.0F};
-            const bool visible = ((sample + ring * 5) % 10) < 4;
-            if (visible && has_previous) {
-                const Rgb color = blend(spectrum(0.12F + static_cast<float>(ring) * 0.22F + age * 0.16F), tone,
-                                        0.14F);
-                light_line(previous, point, 0.5F, color.red, color.green, color.blue,
-                           (1.0F - age) * wave_strength);
+        const auto index = static_cast<float>(ring);
+        const float age = cycle(seconds_ * 0.12 + phase_ * 0.045 + ring / 3.0);
+        const float radius = 105.0F + age * 112.0F + drive_ * 8.0F;
+        const float rotation = spin(phase_ * 0.08) + index * 0.42F;
+        const float scale_y = 0.88F + 0.035F * std::sin(spin(seconds_) + index);
+        const Spectral colour = spectral_colour(0.12F + index * 0.22F + cycle(seconds_ * 0.016));
+        const float alpha = clamp01((1.0F - age) * strength * 0.26F);
+        dashed_arc(rotation, scale_y, radius, 0.0F, kTau, {{2.0F, 9.0F + index * 2.0F, 2.0F, 9.0F + index * 2.0F}},
+                   -seconds_ * 28.0, 0.7F + strength * 0.8F,
+                   {colour.red * alpha, colour.green * alpha, colour.blue * alpha});
+    }
+}
+
+void AuraMercuryView::draw_lattice() noexcept {
+    // drawLattice(): every path step is its own round-capped stroke, so the
+    // joints glow brighter: a soft wide pass, then the bright core pass.
+    const float drift = cycle(seconds_ * 0.024);
+    const bool reduced = frame_quality_ == SynapseQuality::Reduced;
+    for (int pass = 0; pass < 2; ++pass) {
+        const int stride = !reduced ? 1 : pass == 0 ? kReducedSoftStride : kReducedBrightStride;
+        const float gain = pass == 0 && reduced ? kReducedSoftGain : 1.0F;
+        for (int index = 0; index < kPaths; ++index) {
+            for (int sample = 0; sample < kSteps; sample += stride) {
+                const Point& from = path(index, sample);
+                const Point& to = path(index, std::min(sample + stride, kSteps));
+                const float front = clamp01(((from.z + to.z) * 0.5F + 100.0F) / 200.0F);
+                const Spectral colour = spectral_colour(static_cast<float>(sample) / kSteps * 0.58F +
+                                                        static_cast<float>(index) * 0.085F + drift);
+                const float alpha = pass == 0 ? (0.022F + front * 0.031F) * gain : clamp01(0.22F + front * 0.76F);
+                stroke(from, to, pass == 0 ? 9.0F + front * 5.0F : 0.5F + front * 1.65F,
+                       {colour.red * alpha, colour.green * alpha, colour.blue * alpha});
             }
-            has_previous = visible;
-            previous = point;
+        }
+    }
+    // The translucent web between neighbouring paths.
+    for (int sample = 0; sample < kSteps; sample += 7) {
+        for (int index = 0; index + 1 < kPaths; ++index) {
+            const Point& from = path(index, sample);
+            const Point& to = path(index + 1, sample);
+            const float front = clamp01(((from.z + to.z) * 0.5F + 90.0F) / 180.0F);
+            const Spectral colour =
+                spectral_colour(static_cast<float>(sample) / kSteps * 0.52F + static_cast<float>(index) * 0.095F);
+            const float alpha = 0.045F + front * 0.14F;
+            stroke(from, to, 0.48F, {colour.red * alpha, colour.green * alpha, colour.blue * alpha});
         }
     }
 }
 
-void AuraMercuryView::draw_paths(float drive) {
-    const Rgb tone = weighted(weights_, kStateTone);
-    for (int path = 0; path < kPathCount; ++path) {
-        Point previous = path_point(path, 0.0F);
-        for (int sample = 1; sample <= kPathSamples; ++sample) {
-            const float u = static_cast<float>(sample) / static_cast<float>(kPathSamples);
-            const Point point = path_point(path, u);
-            const float front = std::clamp((point.z + 80.0F) / 160.0F, 0.0F, 1.0F);
-            const Rgb color = blend(spectrum(u * 0.58F + static_cast<float>(path) * 0.085F + phase_ * 0.024F),
-                                    tone, 0.14F);
-            if ((sample & 1) == 0) {
-                soft_dot(point.x, point.y, 4.8F + front * 1.3F + drive * 0.6F, color.red, color.green, color.blue,
-                         0.060F + front * 0.065F);
-            }
-            if (sample % 3 == 0) {
-                soft_dot(point.x, point.y, 2.2F + front * 0.8F, color.red, color.green, color.blue,
-                         0.055F + front * 0.075F);
-            }
-            light_line(previous, point, 0.56F + front * 0.72F, color.red, color.green, color.blue,
-                       0.22F + front * 0.76F);
-            if (front > 0.74F && sample % 7 == 0) {
-                soft_dot(point.x, point.y, 1.6F + drive * 0.5F, 0.88F, 0.97F, 1.0F,
-                         (front - 0.74F) * 1.6F);
-            }
-            previous = point;
+void AuraMercuryView::draw_particles() noexcept {
+    // drawParticles(): sparks travelling along the paths with short trails.
+    const int count = weights_[2] > 0.5F ? 30 : 18;
+    std::array<Point, 11> trail{};
+    for (int particle = 0; particle < count; ++particle) {
+        const int index = particle % kPaths;
+        const float progress = cycle(phase_ * (0.070 + (particle % 5) * 0.009) + particle * 0.113);
+        const int sample = std::min(kSteps - 1, static_cast<int>(progress * kSteps));
+        const Point& head = path(index, sample);
+        const float front = clamp01((head.z + 100.0F) / 200.0F);
+        for (int step = 10; step >= 0; --step) {
+            trail[static_cast<std::size_t>(10 - step)] = path(index, (sample - step + kSteps) % kSteps);
         }
-    }
-
-    // A translucent web between adjacent paths is a defining feature of the
-    // approved proposal.  It is deliberately dimmer than the eight main paths
-    // but much denser than the former four-spoke approximation.
-    for (int path = 0; path < kPathCount - 1; ++path) {
-        for (int sample = 7; sample < kPathSamples; sample += 9) {
-            const float u = static_cast<float>(sample) / static_cast<float>(kPathSamples);
-            const Point from = path_point(path, u);
-            const Point to = path_point(path + 1, u);
-            const float front = std::clamp(((from.z + to.z) * 0.5F + 90.0F) / 180.0F, 0.0F, 1.0F);
-            const Rgb color = blend(spectrum(u * 0.52F + static_cast<float>(path) * 0.095F), tone, 0.16F);
-            light_line(from, to, 0.46F, color.red, color.green, color.blue, 0.055F + front * 0.160F);
+        const Spectral line = spectral_colour(progress * 0.68F + static_cast<float>(index) * 0.08F);
+        const float line_alpha = 0.12F + front * 0.34F;
+        stroke_path(trail.data(), static_cast<int>(trail.size()), 0.65F + front * 1.25F,
+                    {line.red * line_alpha, line.green * line_alpha, line.blue * line_alpha});
+        if ((particle & 1) != 0) {
+            radial_glow(head.x, head.y, 9.0F + front * 8.0F, 193, 157, 255, 0.10F + front * 0.16F);
+        } else {
+            radial_glow(head.x, head.y, 9.0F + front * 8.0F, 133, 255, 229, 0.10F + front * 0.16F);
         }
-    }
-
-    const int particle_count = weights_[2] > 0.5F ? 30 : 18;
-    for (int particle = 0; particle < particle_count; ++particle) {
-        const int path = particle % kPathCount;
-        const float progress = wrap(seconds_ * speed_ * (0.070F + static_cast<float>(particle % 5) * 0.009F) +
-                                    static_cast<float>(particle) * 0.113F);
-        const Point head = path_point(path, progress);
-        const float front = std::clamp((head.z + 100.0F) / 200.0F, 0.0F, 1.0F);
-        const Rgb color = blend(spectrum(progress * 0.68F + static_cast<float>(path) * 0.08F), tone, 0.12F);
-        for (int trail = 10; trail >= 0; --trail) {
-            const float u = wrap(progress - static_cast<float>(trail) * 0.009F);
-            const Point point = path_point(path, u);
-            const float share = 1.0F - static_cast<float>(trail) / 11.0F;
-            soft_dot(point.x, point.y, 0.7F + share * (0.9F + front), color.red, color.green, color.blue,
-                     0.07F + share * (0.22F + front * 0.36F));
-        }
-        soft_dot(head.x, head.y, 7.5F + front * 6.0F, color.red, color.green, color.blue,
-                 0.080F + front * 0.130F);
-        soft_dot(head.x, head.y, 1.0F + front * 1.3F, color.red, color.green, color.blue,
-                 0.42F + front * 0.48F);
+        const Spectral spark = spectral_colour(progress * 0.65F + static_cast<float>(index) * 0.1F);
+        const float spark_alpha = clamp01(0.45F + front * 0.5F);
+        fill_circle(head.x, head.y, 1.0F + front * 1.55F,
+                    {spark.red * spark_alpha, spark.green * spark_alpha, spark.blue * spark_alpha});
     }
 }
 
-void AuraMercuryView::draw_reactor(float drive) {
-    const float center = static_cast<float>(size) / 2.0F;
-    const Rgb tone = weighted(weights_, kStateTone);
-    const float aperture = 58.0F + spread_ * 8.0F + drive * 9.0F;
-    const float sphere = 20.0F + drive * 5.0F + spread_ * 1.5F;
-    clear_core(aperture);
-
-    // RGB565 compresses the two browser radial glows into a dark band once the
-    // aperture lens is applied. Restore their visible cyan-violet corona only
-    // outside the sphere, with a smooth crest at 36 px and no hard ring.
-    constexpr float corona_crest = 36.0F;
-    constexpr float corona_outer = 68.0F;
-    const Rgb corona_color = blend(blend(rgb(85, 247, 222), rgb(104, 78, 255), 0.55F), tone, 0.12F);
-    const float corona_peak = 0.28F + drive * 0.08F;
-    const int corona_reach = static_cast<int>(std::ceil(corona_outer));
-    for (int offset_y = -corona_reach; offset_y <= corona_reach; ++offset_y) {
-        for (int offset_x = -corona_reach; offset_x <= corona_reach; ++offset_x) {
-            const float distance = std::hypot(static_cast<float>(offset_x), static_cast<float>(offset_y));
-            if (distance <= sphere || distance >= corona_outer) continue;
-            float strength = distance < corona_crest ? (distance - sphere) / (corona_crest - sphere)
-                                                     : 1.0F - (distance - corona_crest) /
-                                                                  (corona_outer - corona_crest);
-            strength = std::clamp(strength, 0.0F, 1.0F);
-            strength = strength * strength * (3.0F - 2.0F * strength) * corona_peak;
-            add_light(size / 2 + offset_x, size / 2 + offset_y, corona_color.red * strength,
-                      corona_color.green * strength, corona_color.blue * strength);
-        }
-    }
+void AuraMercuryView::draw_core() noexcept {
+    // drawCore(). The presentation's dark lens is filled while the canvas adds
+    // light, so it leaves no mark; the reactor is pure light here as well.
+    const float aperture = 58.0F + spread_ * 8.0F + drive_ * 9.0F;
+    const float sphere = 20.0F + drive_ * 5.0F + spread_ * 1.5F;
+    radial_glow(kCentreX, kCentreY, 112.0F, 104, 78, 255, 0.10F + drive_ * 0.07F);
+    radial_glow(kCentreX, kCentreY, 58.0F, 85, 247, 222, 0.13F + drive_ * 0.11F);
 
     for (int ring = 0; ring < 4; ++ring) {
-        const float radius = aperture - 9.0F + static_cast<float>(ring) * 11.0F;
-        const float start = phase_ * (ring % 2 == 0 ? 0.88F : -0.72F) +
-                            static_cast<float>(ring) * 1.19F + 0.18F + static_cast<float>(ring) * 0.34F;
-        const float sweep = 0.94F + drive * 0.65F;
-        Point previous{};
-        constexpr int samples = 22;
-        for (int sample = 0; sample <= samples; ++sample) {
-            const float angle = start + static_cast<float>(sample) / static_cast<float>(samples) * sweep;
-            const float oval = 0.58F + static_cast<float>(ring) * 0.09F;
-            const Point point{center + std::cos(angle) * radius, center + std::sin(angle) * radius * oval, 0.0F};
-            if (sample > 0) {
-                const Rgb color = blend(spectrum(static_cast<float>(ring) * 0.19F + phase_ * 0.04F), tone, 0.22F);
-                light_line(previous, point, 0.55F + drive * 0.85F, color.red, color.green, color.blue,
-                           0.34F + drive * 0.50F);
-            }
-            previous = point;
-        }
+        const bool odd = (ring & 1) != 0;
+        const auto index = static_cast<float>(ring);
+        const Spectral colour = spectral_colour(index * 0.19F + cycle(seconds_ * 0.04));
+        const float alpha = clamp01(0.34F + drive_ * 0.50F);
+        dashed_arc(spin(phase_ * (odd ? -0.72 : 0.88)) + index * 1.19F, 0.58F + index * 0.09F,
+                   aperture - 9.0F + index * 11.0F, 0.18F + index * 0.34F, 1.12F + index * 0.34F + drive_ * 0.65F,
+                   odd ? std::array<float, 4>{{18.0F, 10.0F, 3.0F, 13.0F}}
+                       : std::array<float, 4>{{32.0F, 17.0F, 32.0F, 17.0F}},
+                   -seconds_ * (24.0 + ring * 7.0), 1.0F + drive_ * 1.8F,
+                   {colour.red * alpha, colour.green * alpha, colour.blue * alpha});
     }
 
-    // Keep the approved white centre broad enough to read on RGB565.  Directly
-    // sampling the browser stops made their 15% white band collapse to a pin
-    // light after quantisation; these intermediate cyan stops preserve the
-    // same visual gradient and measured radial luminance on the 480 px output.
-    constexpr std::array<float, 6> stops{{0.0F, 0.28F, 0.52F, 0.74F, 0.90F, 1.0F}};
-    constexpr std::array<Rgb, 6> colors{{rgb(245, 255, 255), rgb(184, 255, 241), rgb(112, 235, 226),
-                                         rgb(72, 126, 180), rgb(55, 105, 150), rgb(4, 2, 13)}};
-    constexpr std::array<float, 6> opacities{{1.0F, 0.98F, 0.90F, 0.94F, 0.98F, 1.0F}};
-    const int reach = static_cast<int>(std::ceil(sphere));
-    for (int offset_y = -reach; offset_y <= reach; ++offset_y) {
-        for (int offset_x = -reach; offset_x <= reach; ++offset_x) {
-            const float distance = std::hypot(static_cast<float>(offset_x), static_cast<float>(offset_y));
-            if (distance > sphere) continue;
-            const float position = distance / sphere;
-            std::size_t segment = 0;
-            while (segment + 1 < stops.size() - 1 && position > stops[segment + 1]) ++segment;
-            const float share = (position - stops[segment]) / (stops[segment + 1] - stops[segment]);
-            const Rgb color = blend(colors[segment], colors[segment + 1], share);
-            const float opacity = opacities[segment] + (opacities[segment + 1] - opacities[segment]) * share;
-            const auto index = static_cast<std::size_t>((size / 2 + offset_y) * size + size / 2 + offset_x);
-            const auto composite = [opacity](std::uint8_t& destination, float source) {
-                const float old = static_cast<float>(destination) / 255.0F;
-                destination = static_cast<std::uint8_t>(
-                    std::clamp(source * opacity + old * (1.0F - opacity), 0.0F, 1.0F) * 255.0F + 0.5F);
-            };
-            composite(buffer_[index * 2], color.red);
-            composite(buffer_[index * 2 + 1], color.green);
-            composite(buffer_[static_cast<std::size_t>(size * size) * 2 + index], color.blue);
+    // The nucleus: a radial gradient from radius 1 to the sphere's edge, added.
+    struct Stop {
+        float at;
+        float red;
+        float green;
+        float blue;
+        float alpha;
+    };
+    constexpr Stop stops[] = {{0.0F, 245.0F, 255.0F, 255.0F, 1.0F},
+                              {0.15F, 184.0F, 255.0F, 241.0F, 0.98F},
+                              {0.43F, 82.0F, 218.0F, 216.0F, 0.84F},
+                              {0.72F, 42.0F, 27.0F, 94.0F, 0.94F},
+                              {1.0F, 4.0F, 2.0F, 13.0F, 1.0F}};
+    const float reach = sphere + 0.5F;
+    const int left = static_cast<int>(std::floor(kCentreX - reach));
+    const int right = static_cast<int>(std::ceil(kCentreX + reach));
+    const int top = static_cast<int>(std::floor(kCentreY - reach));
+    const int bottom = static_cast<int>(std::ceil(kCentreY + reach));
+    for (int row = top; row <= bottom; ++row) {
+        for (int column = left; column <= right; ++column) {
+            const float distance = std::hypot(static_cast<float>(column) + 0.5F - kCentreX,
+                                              static_cast<float>(row) + 0.5F - kCentreY);
+            const float coverage = clamp01(reach - distance);
+            if (coverage <= 0.0F) continue;
+            const float position = clamp01((distance - 1.0F) / (sphere - 1.0F));
+            std::size_t stop = 0;
+            while (stop + 2 < std::size(stops) && position > stops[stop + 1].at) ++stop;
+            const Stop& from = stops[stop];
+            const Stop& to = stops[stop + 1];
+            const float share = clamp01((position - from.at) / (to.at - from.at));
+            const float alpha = mix(from.alpha, to.alpha, share);
+            add(column, row,
+                {mix(from.red, to.red, share) * alpha, mix(from.green, to.green, share) * alpha,
+                 mix(from.blue, to.blue, share) * alpha},
+                coverage);
         }
     }
-    Point ring_previous{center + sphere, center, 0.0F};
-    constexpr int core_ring_samples = 48;
-    for (int sample = 1; sample <= core_ring_samples; ++sample) {
-        const float angle = static_cast<float>(sample) / static_cast<float>(core_ring_samples) * kTau;
-        const Point ring_point{center + std::cos(angle) * sphere, center + std::sin(angle) * sphere, 0.0F};
-        const Rgb ring_color = blend(spectrum(0.14F + phase_ * 0.03F), tone, 0.10F);
-        light_line(ring_previous, ring_point, 0.64F, ring_color.red, ring_color.green, ring_color.blue, 0.72F);
-        ring_previous = ring_point;
+    // Its bright rim, one stroke around the sphere.
+    std::array<Point, 65> rim{};
+    for (std::size_t index = 0; index < rim.size(); ++index) {
+        const float angle = static_cast<float>(index) / static_cast<float>(rim.size() - 1) * kTau;
+        rim[index] = Point{kCentreX + std::cos(angle) * sphere, kCentreY + std::sin(angle) * sphere, 0.0F};
     }
-    soft_dot(center - sphere * 0.24F, center - sphere * 0.27F, 7.0F, 0.92F, 1.0F, 1.0F, 0.16F);
-    soft_dot(center, center, 12.0F, 0.96F, 1.0F, 1.0F, 0.48F);
+    const Spectral edge = spectral_colour(0.14F + cycle(seconds_ * 0.03));
+    stroke_path(rim.data(), static_cast<int>(rim.size()), 1.15F,
+                {edge.red * 0.72F, edge.green * 0.72F, edge.blue * 0.72F});
+    radial_glow(kCentreX - sphere * 0.24F, kCentreY - sphere * 0.27F, 7.0F, 235, 255, 255, 0.16F);
 }
 
-void AuraMercuryView::draw_foreground_paths(float drive) {
-    // The full lattice is laid down before the reactor, forming its rear
-    // hemisphere. Redraw only the z-positive strands where they cross the
-    // nucleus. This is a deliberate depth pass: the core remains luminous,
-    // but is visibly enclosed by the network instead of pasted over it.
-    const float center = static_cast<float>(size) / 2.0F;
-    const float sphere = 20.0F + drive * 5.0F + spread_ * 1.5F;
-    const float integration_radius = sphere + 8.0F;
-    const Rgb tone = weighted(weights_, kStateTone);
-    for (int path = 0; path < kPathCount; ++path) {
-        Point previous = path_point(path, 0.0F);
-        for (int sample = 1; sample <= kPathSamples; ++sample) {
-            const float u = static_cast<float>(sample) / static_cast<float>(kPathSamples);
-            const Point point = path_point(path, u);
-            const float midpoint_x = (previous.x + point.x) * 0.5F - center;
-            const float midpoint_y = (previous.y + point.y) * 0.5F - center;
-            const float distance = std::hypot(midpoint_x, midpoint_y);
-            const float depth = (previous.z + point.z) * 0.5F;
-            if (depth > 0.0F && distance < integration_radius) {
-                const float edge_fade = std::clamp((integration_radius - distance) / 8.0F, 0.0F, 1.0F);
-                const float front = std::clamp((depth + 12.0F) / 72.0F, 0.0F, 1.0F);
-                const Rgb color = blend(
-                    spectrum(u * 0.58F + static_cast<float>(path) * 0.085F + phase_ * 0.024F), tone, 0.10F);
-                light_line(previous, point, 0.62F + front * 0.62F, color.red, color.green, color.blue,
-                           edge_fade * (0.22F + front * 0.52F));
-                if (sample % 5 == 0) {
-                    soft_dot(point.x, point.y, 1.1F + front * 0.7F, 0.86F, 0.98F, 1.0F,
-                             edge_fade * (0.10F + front * 0.22F));
-                }
-            }
-            previous = point;
+void AuraMercuryView::finish() noexcept {
+    // The presentation's background tint (two broad radial glows painted first)
+    // and its vignette, then this frame's own fade at its top and bottom edges.
+    constexpr int columns = kTintColumns;
+    constexpr int rows = kTintRows;
+    auto& tint = tint_;
+    const float violet_x = kCentreX - 74.0F + std::sin(spin(seconds_ * 0.22)) * 19.0F;
+    const float violet_y = kCentreY - 24.0F;
+    const float teal_x = kCentreX + 82.0F;
+    const float teal_y = kCentreY + 17.0F + std::cos(spin(seconds_ * 0.18)) * 16.0F;
+    for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns; ++column) {
+            const float x = (static_cast<float>(column) + 0.5F) * kTintCell;
+            const float y = (static_cast<float>(row) + 0.5F) * kTintCell;
+            const float violet = 0.14F * std::max(0.0F, 1.0F - std::hypot(x - violet_x, y - violet_y) / 205.0F);
+            const float teal = 0.095F * std::max(0.0F, 1.0F - std::hypot(x - teal_x, y - teal_y) / 190.0F);
+            // Source-over: the teal glow is painted over the violet one.
+            auto& cell = tint[static_cast<std::size_t>(row * columns + column)];
+            cell[0] = static_cast<std::uint8_t>(104.0F * violet * (1.0F - teal) + 86.0F * teal + 0.5F);
+            cell[1] = static_cast<std::uint8_t>(21.0F * violet * (1.0F - teal) + 91.0F * teal + 0.5F);
+            cell[2] = static_cast<std::uint8_t>(49.0F * violet * (1.0F - teal) + 10.0F * teal + 0.5F);
         }
     }
-
-    // Each point-reflected pair represents one strand passing behind and then
-    // in front of the reactor. Keep two restrained front half-chords visible
-    // at every phase. Their directions come from the live 3D path geometry,
-    // so they rotate with the lattice instead of looking like static spokes.
-    for (int filament = 0; filament < 2; ++filament) {
-        const int pair = filament * 2;
-        const float u = wrap(0.17F + static_cast<float>(filament) * 0.31F + phase_ * 0.035F);
-        const Point first = path_point(pair, u);
-        const Point second = path_point(pair + 1, u);
-        const Point& foreground = first.z >= second.z ? first : second;
-        float direction_x = foreground.x - center;
-        float direction_y = foreground.y - center;
-        const float length = std::max(1.0F, std::hypot(direction_x, direction_y));
-        direction_x /= length;
-        direction_y /= length;
-        const float perpendicular_x = -direction_y;
-        const float perpendicular_y = direction_x;
-        const float bend = std::sin(phase_ * 0.7F + static_cast<float>(filament) * 2.1F) * 2.2F;
-        const Point entry{center - direction_x * sphere * 0.62F + perpendicular_x * bend * 0.45F,
-                          center - direction_y * sphere * 0.62F + perpendicular_y * bend * 0.45F, 0.0F};
-        const Point middle{center + direction_x * sphere * 0.18F + perpendicular_x * bend,
-                           center + direction_y * sphere * 0.18F + perpendicular_y * bend, 0.0F};
-        const Point exit{center + direction_x * integration_radius + perpendicular_x * bend * 0.25F,
-                         center + direction_y * integration_radius + perpendicular_y * bend * 0.25F, 0.0F};
-        const Rgb color = blend(spectrum(u * 0.58F + static_cast<float>(pair) * 0.085F), tone, 0.08F);
-        const float opacity = 0.44F + drive * 0.10F;
-        overlay_line(entry, middle, 1.05F + drive * 0.22F, color.red, color.green, color.blue, opacity);
-        overlay_line(middle, exit, 1.05F + drive * 0.22F, color.red, color.green, color.blue, opacity * 0.86F);
+    auto* bytes = canvas_;
+#if LV_COLOR_DEPTH == 16
+    auto* packed = reinterpret_cast<std::uint16_t*>(canvas_);
+    // A 4 x 4 ordered dither keeps the faint glows smooth in RGB565.
+    constexpr std::uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+#endif
+    for (int y = 0; y < height; ++y) {
+        const int edge = std::min(y, height - 1 - y);
+        float fade = edge >= kEdgeFade ? 1.0F : static_cast<float>(edge) / kEdgeFade;
+        fade = fade * fade * (3.0F - 2.0F * fade);
+        const auto row_factor = static_cast<int>(fade * 256.0F + 0.5F);
+        const int doubled_y = 2 * y + 1 - height;
+        for (int x = 0; x < width; ++x) {
+            const auto index = static_cast<std::size_t>(y * width + x);
+            const int doubled_x = 2 * x + 1 - width;
+            const int squared = (doubled_x * doubled_x + doubled_y * doubled_y) >> 2;
+            const int factor = (vignette_[static_cast<std::size_t>(squared >> kVignetteShift)] * row_factor) >> 8;
+            const auto& cell = tint[static_cast<std::size_t>((y / kTintCell) * columns + x / kTintCell)];
+            const int blue = (std::min(255, bytes[index * 3] + cell[0]) * factor) >> 8;
+            const int green = (std::min(255, bytes[index * 3 + 1] + cell[1]) * factor) >> 8;
+            const int red = (std::min(255, bytes[index * 3 + 2] + cell[2]) * factor) >> 8;
+#if LV_COLOR_DEPTH == 16
+            const int threshold = bayer[y & 3][x & 3];
+            const int red5 = std::min(31, (red + (threshold >> 1)) >> 3);
+            const int green6 = std::min(63, (green + (threshold >> 2)) >> 2);
+            const int blue5 = std::min(31, (blue + (threshold >> 1)) >> 3);
+            packed[index] = static_cast<std::uint16_t>((red5 << 11) | (green6 << 5) | blue5);
+#else
+            bytes[index * 3] = static_cast<std::uint8_t>(blue);
+            bytes[index * 3 + 1] = static_cast<std::uint8_t>(green);
+            bytes[index * 3 + 2] = static_cast<std::uint8_t>(red);
+#endif
+        }
     }
 }
 
-void AuraMercuryView::finalize() {
-    auto* colors = reinterpret_cast<std::uint16_t*>(buffer_.data());
-    auto* alpha = buffer_.data() + static_cast<std::size_t>(size * size) * 2;
-    int lit_radius = -1;
-    for (int y = 0; y < size; ++y) {
-        for (int x = 0; x < size; ++x) {
-            const auto index = static_cast<std::size_t>(y * size + x);
-            const float dx = static_cast<float>(x) + 0.5F - static_cast<float>(size) / 2.0F;
-            const float dy = static_cast<float>(y) + 0.5F - static_cast<float>(size) / 2.0F;
-            const float distance = std::sqrt(dx * dx + dy * dy);
-            float vignette = std::clamp((105.0F * kCanvasScale - distance) / (8.0F * kCanvasScale), 0.0F, 1.0F);
-            vignette = vignette * vignette * (3.0F - 2.0F * vignette);
-            const int red = static_cast<int>(static_cast<float>(buffer_[index * 2]) * vignette);
-            const int green = static_cast<int>(static_cast<float>(buffer_[index * 2 + 1]) * vignette);
-            const int blue = static_cast<int>(static_cast<float>(alpha[index]) * vignette);
-            const int coverage = std::max(red, std::max(green, blue));
-            if (coverage == 0) {
-                colors[index] = 0;
-                alpha[index] = 0;
-                continue;
-            }
-            const auto normalized_red = static_cast<unsigned>(red * 255 / coverage);
-            const auto normalized_green = static_cast<unsigned>(green * 255 / coverage);
-            const auto normalized_blue = static_cast<unsigned>(blue * 255 / coverage);
-            colors[index] = static_cast<std::uint16_t>(((normalized_red & 0xF8U) << 8) |
-                                                        ((normalized_green & 0xFCU) << 3) |
-                                                        (normalized_blue >> 3));
-            alpha[index] = static_cast<std::uint8_t>(coverage);
-            if (coverage >= 3) {
-                lit_radius = std::max(lit_radius, std::max(std::abs(x - size / 2), std::abs(y - size / 2)));
-            }
-        }
-    }
-    lit_center_x_ = size / 2;
-    lit_center_y_ = size / 2;
-    if (lit_radius >= 0) {
-        lit_extent_ = lit_radius * 2 + 1;
-    } else {
-        lit_extent_ = 0;
-    }
-}
-
-void AuraMercuryView::render() {
-    std::fill(buffer_.begin(), buffer_.end(), std::uint8_t{0});
-    draw_atmosphere(drive_);
-    draw_orbits(drive_);
-    draw_paths(drive_);
-    draw_reactor(drive_);
-    draw_foreground_paths(drive_);
-    finalize();
-    ++frame_count_;
-}
-
-void AuraMercuryView::update_glow() {
-    if (!glow_) return;
-    const Rgb tone = weighted(weights_, kStateTone);
-    const int opacity = channel(0.025F + 0.045F * drive_ + 0.025F * weights_[2]);
-    if (std::abs(opacity - glow_opacity_) >= 3) {
-        lv_obj_set_style_image_opa(glow_, static_cast<lv_opa_t>(opacity), 0);
-        glow_opacity_ = opacity;
-    }
-    const std::uint32_t coarse = hex(tone) & 0xF8F8F8U;
-    if (coarse != glow_color_) {
-        lv_obj_set_style_image_recolor(glow_, lv_color_hex(coarse), 0);
-        glow_color_ = coarse;
-    }
+void AuraMercuryView::render() noexcept {
+    frame_work_ = 0;
+    std::memset(canvas_, 0, buffer_.size());
+    draw_orbits();
+    draw_resonance();
+    build_paths();
+    draw_waves();
+    draw_lattice();
+    draw_particles();
+    draw_core();
+    finish();
 }
 
 std::uint32_t AuraMercuryView::frame_signature() const noexcept {
     std::uint32_t hash = 2166136261U;
-    for (const auto byte : buffer_) {
-        hash ^= byte;
+    for (std::size_t index = 0; index < buffer_.size(); ++index) {
+        hash ^= shown_[index];
         hash *= 16777619U;
     }
     return hash;

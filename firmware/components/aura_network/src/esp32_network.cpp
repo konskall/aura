@@ -199,6 +199,13 @@ bool Esp32Network::time_valid() const {
     return std::time(nullptr) > kPlausibleEpoch;
 }
 
+namespace {
+std::atomic<std::uint32_t> time_syncs{0};
+void on_time_synced(struct timeval*) { time_syncs.fetch_add(1, std::memory_order_relaxed); }
+}  // namespace
+
+std::uint32_t Esp32Network::time_sync_count() const noexcept { return time_syncs.load(std::memory_order_relaxed); }
+
 void Esp32Network::push(WifiEvent event) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (events_.size() >= kEventCapacity) events_.pop_front();
@@ -380,6 +387,7 @@ void Esp32Network::start_time_sync() {
     if (time_sync_started_) return;
     esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     config.wait_for_sync = false;
+    config.sync_cb = on_time_synced;
     if (esp_netif_sntp_init(&config) == ESP_OK) {
         time_sync_started_ = true;
     } else {

@@ -28,6 +28,10 @@ public:
     virtual lv_obj_t* object() const noexcept = 0;
     virtual std::uint64_t frame_count() const noexcept = 0;
     virtual std::size_t buffer_bytes() const noexcept = 0;
+    // How long the last frame took to draw, and whether it was a lighter one
+    // (a presence drawn by LVGL objects reports nothing).
+    virtual std::uint32_t last_frame_ms() const noexcept { return 0; }
+    virtual bool reduced_quality() const noexcept { return false; }
 };
 
 std::unique_ptr<PresenceView> make_presence(Appearance appearance);

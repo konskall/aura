@@ -54,6 +54,12 @@ add_library(aura_core STATIC
     shared/core/src/briefing.cpp
     shared/core/src/clock_services.cpp
     shared/core/src/display_power.cpp
+    shared/core/src/runtime_metrics.cpp
+    shared/core/src/board_chips.cpp
+    shared/core/src/cloud_assistant.cpp
+    shared/core/src/cloud_keys.cpp
+    shared/core/src/turn_prompt.cpp
+    shared/core/src/voice_turn.cpp
     shared/core/src/sounds.cpp
     shared/core/src/radio.cpp
     shared/core/src/mp3_decoder.cpp
@@ -102,6 +108,7 @@ add_library(aura_ui STATIC
     shared/ui/src/aura_icons.cpp
     shared/ui/src/aura_keyboard.cpp
     shared/ui/src/aura_aurora_view.cpp
+    shared/ui/src/aura_frame_worker.cpp
     shared/ui/src/aura_mercury_view.cpp
     shared/ui/src/aura_pearl_view.cpp
     shared/ui/src/aura_presence.cpp
@@ -346,6 +353,23 @@ if(BUILD_TESTING)
     add_executable(aura_ui_recovery_models_tests tests/unit/ui_recovery_models_test.cpp)
     target_link_libraries(aura_ui_recovery_models_tests PRIVATE aura_core)
     add_test(NAME aura_ui_recovery_models_tests COMMAND aura_ui_recovery_models_tests)
+    add_executable(aura_voice_turn_tests tests/unit/voice_turn_test.cpp)
+    target_link_libraries(aura_voice_turn_tests PRIVATE aura_core)
+    add_test(NAME aura_voice_turn_tests COMMAND aura_voice_turn_tests)
+    add_executable(aura_cloud_assistant_tests tests/unit/cloud_assistant_test.cpp)
+    target_link_libraries(aura_cloud_assistant_tests PRIVATE aura_core)
+    add_test(NAME aura_cloud_assistant_tests COMMAND aura_cloud_assistant_tests)
+    if(AURA_NODE_EXECUTABLE)
+        add_test(NAME aura_turn_prompt_parity
+            COMMAND ${AURA_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/interop/run_turn_prompt_parity.mjs
+                    $<TARGET_FILE:aura_cloud_assistant_tests>)
+    endif()
+    add_executable(aura_board_chips_tests tests/unit/board_chips_test.cpp)
+    target_link_libraries(aura_board_chips_tests PRIVATE aura_core)
+    add_test(NAME aura_board_chips_tests COMMAND aura_board_chips_tests)
+    add_executable(aura_firmware_config_tests tests/unit/firmware_config_test.cpp)
+    target_compile_definitions(aura_firmware_config_tests PRIVATE AURA_REPO_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME aura_firmware_config_tests COMMAND aura_firmware_config_tests)
     add_executable(aura_ui_assets_tests tests/unit/ui_assets_test.cpp)
     target_link_libraries(aura_ui_assets_tests PRIVATE aura_ui)
     add_test(NAME aura_ui_assets_tests COMMAND aura_ui_assets_tests)
@@ -377,6 +401,18 @@ if(BUILD_TESTING)
             AURA_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         target_link_libraries(aura_aoraton_account_tests PRIVATE aura_core bcrypt)
         add_test(NAME aura_aoraton_account_tests COMMAND aura_aoraton_account_tests)
+        add_executable(aura_update_signature_tests
+            tests/unit/update_signature_test.cpp
+            simulator/app/src/windows_update_signature.cpp
+        )
+        target_include_directories(aura_update_signature_tests PRIVATE simulator/app/include)
+        target_link_libraries(aura_update_signature_tests PRIVATE aura_core bcrypt)
+        add_test(NAME aura_update_signature_tests COMMAND aura_update_signature_tests)
+        if(AURA_NODE_EXECUTABLE)
+            add_test(NAME aura_update_signing_interop
+                COMMAND ${AURA_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/interop/run_update_signing_test.mjs
+                        $<TARGET_FILE:aura_update_signature_tests>)
+        endif()
         add_executable(aura_aoraton_inco_tests tests/unit/aoraton_inco_test.cpp)
         target_link_libraries(aura_aoraton_inco_tests PRIVATE aura_core)
         add_test(NAME aura_aoraton_inco_tests COMMAND aura_aoraton_inco_tests)

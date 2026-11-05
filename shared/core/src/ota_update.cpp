@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <string>
 #include <utility>
 
 namespace aura {
@@ -29,10 +31,18 @@ bool parse_version(const std::string& version, std::array<long, 3>& parts) noexc
     return position == version.size();
 }
 
-bool is_hex64(const std::string& value) noexcept {
-    return value.size() == 64 && std::all_of(value.begin(), value.end(), [](char ch) {
+bool is_hex(const std::string& value, std::size_t length) noexcept {
+    return value.size() == length && std::all_of(value.begin(), value.end(), [](char ch) {
         return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
     });
+}
+
+bool is_hex64(const std::string& value) noexcept { return is_hex(value, 64); }
+
+int hex_digit(char ch) noexcept {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    return ch - 'A' + 10;
 }
 
 }  // namespace
@@ -54,7 +64,15 @@ int compare_versions(const std::string& left, const std::string& right) noexcept
     return 0;
 }
 
-std::optional<UpdateManifest> parse_update_manifest(const std::string& json, std::string* error) {
+std::string update_signing_message(const UpdateManifest& manifest) {
+    std::string sha256 = manifest.sha256;
+    std::transform(sha256.begin(), sha256.end(), sha256.begin(),
+                   [](char ch) { return static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); });
+    return "AURA-OTA-1\n" + manifest.version + "\n" + std::to_string(manifest.size_bytes) + "\n" + sha256 + "\n";
+}
+
+std::optional<UpdateManifest> parse_update_manifest(const std::string& json, const IUpdateSignatureVerifier& verifier,
+                                                    std::string* error) {
     auto reject = [error](const char* code) -> std::optional<UpdateManifest> {
         if (error) *error = code;
         return std::nullopt;
@@ -81,6 +99,14 @@ std::optional<UpdateManifest> parse_update_manifest(const std::string& json, std
     manifest.size_bytes = static_cast<std::uint32_t>(*size);
     manifest.sha256 = *sha256;
     if (const auto notes = object->string("notes")) manifest.notes = sanitize_text(*notes, 300, true);
+    const auto signature = object->string("signature");
+    if (!signature || !is_hex(*signature, 128)) return reject("MANIFEST_UNSIGNED");
+    for (std::size_t index = 0; index < manifest.signature.size(); ++index) {
+        manifest.signature[index] = static_cast<std::uint8_t>(hex_digit((*signature)[index * 2]) * 16 +
+                                                              hex_digit((*signature)[index * 2 + 1]));
+    }
+    if (!verifier.configured()) return reject("UPDATE_KEY_MISSING");
+    if (!verifier.verify(update_signing_message(manifest), manifest.signature)) return reject("MANIFEST_BAD_SIGNATURE");
     return manifest;
 }
 

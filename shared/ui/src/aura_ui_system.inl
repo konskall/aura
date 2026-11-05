@@ -265,6 +265,11 @@
 
         aura_wordmark(list, (ui::tokens::display_width - 144) / 2, y);
         y += 68;
+        // The project's creator, under the wordmark.
+        auto* creator = label(list, c().credits_creator, kGutter + 12, y, kWidth - 24, ui::font_body(),
+                              ui::tokens::text, LV_TEXT_ALIGN_CENTER);
+        lv_obj_update_layout(creator);
+        y += static_cast<int>(lv_obj_get_height(creator)) + 10;
         auto* intro = label(list, c().credits_intro, kGutter + 12, y, kWidth - 24, ui::font_caption(),
                             ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
         lv_obj_set_height(intro, LV_SIZE_CONTENT);
@@ -301,8 +306,8 @@
         const lv_opa_t halo_opa = quiet ? static_cast<lv_opa_t>(LV_OPA_10) : static_cast<lv_opa_t>(LV_OPA_20);
         system_core = make_dot(content, core_size, accent, halo_opa);
         lv_obj_set_pos(system_core, (ui::tokens::display_width - core_size) / 2, center_y - core_size / 2);
-        lv_obj_set_style_transform_pivot_x(system_core, core_size / 2, 0);
-        lv_obj_set_style_transform_pivot_y(system_core, core_size / 2, 0);
+        system_core_size = core_size;
+        system_core_center_y = center_y;
 
         system_ring_outer = spinner_arc(content, outer_size, accent, quiet ? 2 : 4);
         lv_obj_set_pos(system_ring_outer, (ui::tokens::display_width - outer_size) / 2,
@@ -442,7 +447,8 @@
             const float seconds = static_cast<float>(phase_ms) / 1000.0F;
             const float pulse = 0.5F + std::sin(seconds * 2.4F) * 0.5F;
             if (system_core) {
-                lv_obj_set_style_transform_scale(system_core, 250 + static_cast<int>(pulse * 12.0F), 0);
+                pulse_disc(system_core, ui::tokens::display_width / 2, system_core_center_y, system_core_size,
+                           250 + static_cast<int>(pulse * 12.0F));
                 if (current_view != UiView::PowerOff) {
                     lv_obj_set_style_bg_opa(system_core, static_cast<lv_opa_t>(28 + pulse * 24.0F), 0);
                 }

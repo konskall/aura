@@ -4,11 +4,11 @@ The local bridge binds only to `127.0.0.1`, rejects non-loopback peers and unapp
 
 Codex is spawned with an argument array and `shell: false`, receives its prompt through standard input and runs in an isolated minimal directory with read-only/ephemeral restrictions. The bridge does not read or print authentication files. Saved ChatGPT authentication is reused by the CLI and is not equivalent to production API entitlement.
 
-The optional Groq development backend reads `GROQ_API_KEY` only from the bridge process environment. For repeat owner-requested simulator runs, the launcher may populate that environment from the repository's Git-ignored local `.env`. This file is plaintext local development state: its parser allowlists names, performs no evaluation or expansion, skips empty values, and gives explicit process values priority. The value is never returned by health checks, added to a URL, written to tracked files or logs, or compiled into firmware. Tests use an obvious test-only credential and an injected fake HTTP implementation. The ESP32 must eventually call an authenticated HTTPS gateway with a revocable device-scoped credential; upstream provider keys never enter source, NVS, firmware images or UI state. Any key pasted into a prompt or issue is treated as exposed and must be rotated.
+The optional Groq development backend reads `GROQ_API_KEY` only from the bridge process environment. For repeat owner-requested simulator runs, the launcher may populate that environment from the repository's Git-ignored local `.env`. This file is plaintext local development state: its parser allowlists names, performs no evaluation or expansion, skips empty values, and gives explicit process values priority. The value is never returned by health checks, added to a URL, written to tracked files or logs, or compiled into firmware. Tests use an obvious test-only credential and an injected fake HTTP implementation. On the ESP32 the owner chose, on 2026-11-05, to call Groq and Azure directly ([ADR 0009](ADR/0009-device-direct-cloud-assistant.md)): the keys enter only the device's encrypted NVS, sent once from the PC, and never source, firmware images, logs or UI state. Any key pasted into a prompt or issue is treated as exposed and must be rotated.
 
 The optional neural TTS adapter has no credential. It accepts only the bridge's two voice profiles, maps them to fixed voice identifiers, receives Base64 text through an argument array with `shell:false`, and emits at most 8 MiB of audio. Text and audio are not written to disk or logged. The external `edge-tts` client is installed only below ignored `.tools`, is never packaged into firmware, and talks to an unofficial consumer endpoint with no availability guarantee. Since 2026-10-28 it is never chosen automatically: `-TtsProvider auto` picks official Azure Speech when configured, otherwise Windows voices, and an explicit `-TtsProvider neural` prints a warning. A production device must use the authenticated gateway contract instead. See [ADR 0004](ADR/0004-neural-speech-simulator-adapter.md).
 
-The official Azure Speech simulator provider reads its key only from the bridge process environment, optionally populated from that same ignored local `.env`. The launchers never accept it as an argument or print it. Hidden input rejects implausibly short values; the opt-in clipboard path reads the value in memory and clears the clipboard immediately. The bridge accepts only documented Azure Speech HTTPS hosts, sends bounded escaped SSML with a fixed voice identifier, caps the returned audio at 8 MiB and validates MP3 framing. Foundry project and Azure OpenAI endpoints are not accepted as Speech endpoints. A key pasted into chat is already exposed and must be revoked before use. Direct Azure access remains simulator-only, while production hardware uses the gateway boundary described above. See [ADR 0005](ADR/0005-official-azure-speech-simulator-provider.md).
+The official Azure Speech simulator provider reads its key only from the bridge process environment, optionally populated from that same ignored local `.env`. The launchers never accept it as an argument or print it. Hidden input rejects implausibly short values; the opt-in clipboard path reads the value in memory and clears the clipboard immediately. The bridge accepts only documented Azure Speech HTTPS hosts, sends bounded escaped SSML with a fixed voice identifier, caps the returned audio at 8 MiB and validates MP3 framing. Foundry project and Azure OpenAI endpoints are not accepted as Speech endpoints. A key pasted into chat is already exposed and must be revoked before use. On the device Azure is called directly with a key kept in encrypted NVS ([ADR 0009](ADR/0009-device-direct-cloud-assistant.md)). See [ADR 0005](ADR/0005-official-azure-speech-simulator-provider.md).
 
 Since 2026-10-30 `run.bat` uses both by default: the audio of each spoken question goes to Groq for transcription, and the text AURA speaks goes to Azure. `run.bat mock` keeps speech recognition on the PC; its voice uses Azure only when an Azure key is configured.
 
@@ -87,3 +87,39 @@ Files stream through bounded buffers into private staging, then flush and close 
 The normal `scripts/build-firmware.ps1` output remains a development image and intentionally does not burn security eFuses. Release manufacturing uses `scripts/build-firmware-production.ps1 -SigningKey <external-rsa-pem>` with ESP-IDF 5.5.5. That isolated build enables Secure Boot V2 with signed binaries, AES-256 flash encryption in release mode, encrypted NVS with a dedicated `nvs_keys` partition, strong stack protection and light heap poisoning. Its separate partition table starts at `0x10000` so the signed bootloader fits while both OTA app offsets remain unchanged. The signing key is rejected if it is stored inside the repository, the build uses `firmware/build-production`, and the script never flashes a board or modifies eFuses.
 
 Secure Boot and release-mode flash encryption become permanent on the first correctly provisioned boot. A production signing key must therefore be generated and retained by the manufacturer outside source control, backed up securely, and validated through the ESP-IDF manufacturing procedure before any device is powered with the production image. A temporary test key proves that the profile compiles; it is never a deployable signing root.
+
+## Development boards: encrypted NVS (2026-11-05)
+
+Every firmware build encrypts NVS (`CONFIG_NVS_ENCRYPTION`). It holds the Wi-Fi password, the assistant's keys and the settings.
+
+On development boards the XTS keys come from the HMAC peripheral, with a random key that the first boot burns into eFuse block 5 (`CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID=5`):
+
+- No software can read that eFuse key.
+- Burning it is permanent, but it neither limits flashing or debugging nor uses the blocks secure boot and flash encryption need.
+- A board erased and reflashed keeps the same eFuse key, so its NVS stays readable to AURA.
+
+This protects a dump of the flash. It does not protect against someone who can flash their own firmware, which is what secure boot is for in production. `tests/unit/firmware_config_test.cpp` checks:
+
+- that development builds keep this setting;
+- that they never enable secure boot or flash encryption;
+- that the production profile keeps both, in release mode, with NVS keys in `nvs_keys`.
+
+## Signed updates (2026-11-05)
+
+An update installs only with the owner's signature: the manifest must carry an ECDSA P-256 signature (`signature`, 128 hex characters) over `AURA-OTA-1`, the version, the size and the SHA-256 of the image (`update_signing_message`). The device checks it with mbedTLS against the public key it was built with (`CONFIG_AURA_OTA_PUBLIC_KEY`) before it downloads anything, then checks the image against the signed SHA-256. A build without the key installs nothing (`UPDATE_KEY_MISSING`); an unsigned or wrongly signed manifest is refused (`MANIFEST_UNSIGNED`, `MANIFEST_BAD_SIGNATURE`); a newer version is still required, so an old signed image cannot come back.
+
+- `node scripts/update-signing.mjs keygen <file outside the repository>` makes the key pair. It refuses a path inside the repository or an existing file, saves the private key and prints the `CONFIG_AURA_OTA_PUBLIC_KEY` line for `firmware/sdkconfig.defaults`. Keep an offline copy of the private key: devices built with its public key accept updates signed with it only.
+- `node scripts/update-signing.mjs sign --image <bin> --version <x.y.z> --url <https://...> --key <file> --out <manifest.json>` writes the signed manifest.
+- `tests/interop/run_update_signing_test.mjs` signs with the script and verifies with the parser the device uses (the simulator's BCrypt verifier). That run covers four refusals: a changed version, a changed hash, another key and a missing signature.
+
+This signature works without secure boot, so a compromised update server cannot install firmware even on a development board. Production adds Secure Boot V2 on top of it.
+
+## The device's assistant keys (2026-11-05)
+
+See [ADR 0009](ADR/0009-device-direct-cloud-assistant.md). In short:
+
+- the keys go from the ignored `.env` to the device over the code-protected transfer session (`scripts/send-device-keys.ps1`, `POST /api/keys`);
+- the format is checked before they are stored in encrypted NVS;
+- no response echoes them, and no log, screen or file holds them;
+- the audio and text of a question go to Groq and Azure;
+- if a device is lost, revoke both keys.

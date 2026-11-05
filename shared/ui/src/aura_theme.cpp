@@ -103,6 +103,38 @@ bool is_light_field(lv_obj_t* object) {
     return lv_obj_check_type(object, &lv_image_class) && lv_image_get_src(object) == light_disc();
 }
 
+// The owner's choice among three glass headers (2026-11-04), without the prototype's
+// shadow: none anywhere, and on true black it showed only as a darker rim.
+lv_obj_t* make_header_glass(lv_obj_t* parent) {
+    const auto& rect = tokens::HEADER_GLASS_RECT;
+    auto* glass = lv_obj_create(parent);
+    reset(glass);
+    lv_obj_set_pos(glass, rect.x, rect.y);
+    lv_obj_set_size(glass, rect.width, rect.height);
+    lv_obj_set_style_radius(glass, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(glass, color(tokens::surface_glass), 0);
+    lv_obj_set_style_bg_grad_color(glass, color(tokens::surface), 0);
+    lv_obj_set_style_bg_grad_dir(glass, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(glass, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_main_opa(glass, 176, 0);
+    lv_obj_set_style_bg_grad_opa(glass, 136, 0);
+    lv_obj_set_style_border_width(glass, 1, 0);
+    lv_obj_set_style_border_color(glass, color(tokens::text), 0);
+    lv_obj_set_style_border_opa(glass, 40, 0);
+    lv_obj_set_style_blur_radius(glass, 18, 0);
+    lv_obj_set_style_blur_backdrop(glass, true, 0);
+    // Taps anywhere in the header band stop here; the 8 px around the capsule too.
+    lv_obj_set_clickable(glass, true);
+    lv_obj_set_ext_click_area(glass, rect.x);
+    return glass;
+}
+
+// Nothing else blurs what lies under it.
+bool is_header_glass(lv_obj_t* object) {
+    return object && lv_obj_get_style_blur_backdrop(object, LV_PART_MAIN) &&
+           lv_obj_get_style_blur_radius(object, LV_PART_MAIN) > 0;
+}
+
 // No shadows anywhere: they are the most expensive LVGL primitive on the
 // ESP32-S3 and read as dated on true black.
 void style_platter(lv_obj_t* object, std::uint32_t accent, int radius, bool selected) {

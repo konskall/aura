@@ -1359,6 +1359,11 @@ void CompanionRuntime::factory_reset() {
     soft_restart();
 }
 
+void CompanionRuntime::set_clock(const LocalDateTime& now, std::int64_t utc_minute) {
+    clock_.set_clock(now, utc_minute);
+    display_.set_minute(minute_index(now));
+}
+
 void CompanionRuntime::set_clock(const LocalDateTime& now) {
     clock_.set_clock(now);
     display_.set_minute(minute_index(now));

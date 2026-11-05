@@ -60,6 +60,15 @@ constexpr int kMeterCenterY = 292;
 // Centre of the weather hero halo inside its 190 px scene.
 constexpr int kWeatherHaloCenterX = 94;
 constexpr int kWeatherHaloCenterY = 79;
+constexpr int kWeatherHaloSize = 138;
+
+// A pulse resizes its disc about the disc's centre: a style scale would draw
+// the disc through a transform layer, a full ARGB8888 copy, on every frame.
+void pulse_disc(lv_obj_t* disc, int center_x, int center_y, int size, int scale) {
+    const int pulsed = (size * scale + 128) / 256;
+    lv_obj_set_size(disc, pulsed, pulsed);
+    lv_obj_set_pos(disc, center_x - pulsed / 2, center_y - pulsed / 2);
+}
 
 void set_text_if_changed(lv_obj_t* label, const char* text) {
     const char* current = lv_label_get_text(label);
@@ -123,6 +132,7 @@ struct AuraUi::Impl {
     lv_obj_t* status_charging{};
     lv_obj_t* header_back{};
     lv_obj_t* header_title{};
+    lv_obj_t* header_glass{};
     bool header_action{false};
     lv_obj_t* home_clock{};
     lv_obj_t* home_date{};
@@ -197,6 +207,9 @@ struct AuraUi::Impl {
     // Where each list was scrolled when it was left; used only when going back.
     std::vector<std::pair<UiView, int32_t>> scroll_memory;
     bool restore_scroll{false};
+    // New data for the open screen arrived while a finger was on it; the screen
+    // is rebuilt once the finger lifts and the list stops (tick()).
+    bool refresh_pending{false};
     SoundSettings sound{};
     lv_obj_t* sound_volume_label{};
     SystemAction pending_system{SystemAction::Restart};
@@ -204,6 +217,8 @@ struct AuraUi::Impl {
     std::uint32_t boot_remaining_ms{0};
     lv_obj_t* boot_spinner{};
     lv_obj_t* system_core{};
+    int system_core_size{};      // the core's size at rest; its pulse resizes it
+    int system_core_center_y{};
     lv_obj_t* system_ring_outer{};
     lv_obj_t* system_ring_inner{};
     lv_obj_t* system_orbit_dot{};
@@ -1239,21 +1254,68 @@ struct AuraUi::Impl {
         return arrow;
     }
 
+    // After a render: the header's glass lies over the scrolling content, and the
+    // header's own controls (everything inside the header band) over the glass.
+    void raise_header() {
+        if (!header_glass) return;
+        lv_obj_update_layout(content);
+        lv_obj_move_foreground(header_glass);
+        std::vector<lv_obj_t*> controls;
+        const auto count = lv_obj_get_child_count(content);
+        for (std::uint32_t index = 0; index < count; ++index) {
+            auto* child = lv_obj_get_child(content, static_cast<std::int32_t>(index));
+            if (child == header_glass) continue;
+            lv_area_t area{};
+            lv_obj_get_coords(child, &area);
+            if (area.y1 >= 0 && area.y2 < kHeader) controls.push_back(child);
+        }
+        for (auto* child : controls) lv_obj_move_foreground(child);
+    }
+
     // Back (long press: Home), a 32 px title, and either the time (status
-    // chrome) or one action button on the right.
+    // chrome) or one action button on the right, all on a glass capsule that
+    // the screen's list scrolls under.
     void make_header(const char* title, ui::IconRole action = ui::IconRole::Count,
                      lv_event_cb_t action_callback = nullptr, std::uint32_t action_accent = ui::tokens::blue,
                      bool action_enabled = true) {
+        header_glass = ui::make_header_glass(content);
         header_back = round_button(content, 16, 16, ui::tokens::HEADER_BUTTON, ui::IconRole::ChevronLeft,
                                    ui::tokens::text, back_event, true);
         lv_obj_add_event_cb(header_back, home_event, LV_EVENT_LONG_PRESSED, this);
         header_title = line(content, title, 96, 28, 284, ui::font_title(), ui::tokens::text);
+        fit_header_title();
         header_action = action != ui::IconRole::Count;
         if (header_action) {
             auto* button = round_button(content, 400, 16, ui::tokens::HEADER_BUTTON, action, action_accent,
                                         action_callback);
             ui::set_button_disabled(button, !action_enabled);
         }
+    }
+
+    // A title too long for one line at the title size takes the headline size,
+    // then a second line, and only then an ellipsis, so a long room or network
+    // name stays readable; a smaller title is centred on the header's glass.
+    void fit_header_title() {
+        if (!header_title) return;
+        auto* title = header_title;
+        lv_label_set_long_mode(title, LV_LABEL_LONG_MODE_WRAP);
+        lv_obj_set_height(title, LV_SIZE_CONTENT);
+        lv_obj_set_style_text_font(title, ui::font_title(), 0);
+        lv_obj_update_layout(title);
+        const int32_t title_line = lv_font_get_line_height(ui::font_title());
+        const auto& glass = ui::tokens::HEADER_GLASS_RECT;
+        if (lv_obj_get_height(title) <= title_line) {
+            lv_obj_set_height(title, title_line);
+            lv_obj_set_y(title, 28);
+        } else {
+            lv_obj_set_style_text_font(title, ui::font_headline(), 0);
+            lv_obj_update_layout(title);
+            const int32_t line_height = lv_font_get_line_height(ui::font_headline());
+            const int32_t lines = lv_obj_get_height(title) > line_height ? 2 : 1;
+            lv_obj_set_height(title, line_height * lines);
+            lv_obj_set_y(title, glass.y + (glass.height - line_height * lines) / 2);
+        }
+        lv_label_set_long_mode(title, LV_LABEL_LONG_MODE_DOTS);
     }
 
     // Header-right tag (e.g. TEST) that replaces the time.
@@ -1296,8 +1358,13 @@ struct AuraUi::Impl {
     lv_obj_t* make_list(int y = kHeader, int height = ui::tokens::display_height - kHeader) {
         auto* list = lv_obj_create(content);
         ui::reset(list);
-        lv_obj_set_size(list, ui::tokens::display_width, height);
-        lv_obj_set_pos(list, 0, y);
+        // Under a glass header the list starts at the top of the screen with the
+        // header's height as padding: its rows sit where they did and scroll under it.
+        const int under = header_glass && y == kHeader ? kHeader : 0;
+        lv_obj_set_size(list, ui::tokens::display_width, height + under);
+        lv_obj_set_pos(list, 0, y - under);
+        lv_obj_set_style_pad_top(list, under, 0);
+        lv_obj_set_style_pad_top(list, under, LV_PART_SCROLLBAR);
         lv_obj_set_clickable(list, true);
         lv_obj_set_scrollable(list, true);
         lv_obj_set_scroll_dir(list, LV_DIR_VER);
@@ -1365,6 +1432,7 @@ struct AuraUi::Impl {
         lv_obj_set_pos(logo, 96, 32);
         lv_obj_set_x(header_title, 140);
         lv_obj_set_width(header_title, 244);
+        fit_header_title();
     }
 
     void aoraton_brand(int y, int size) {
@@ -2719,11 +2787,10 @@ struct AuraUi::Impl {
         lv_obj_set_pos(weather_scene, 266, 40);
         lv_obj_set_overflow_visible(weather_scene, false);
         lv_obj_set_style_clip_corner(weather_scene, true, 0);
-        weather_halo = make_dot(weather_scene, 138, accent, LV_OPA_20);
-        lv_obj_set_pos(weather_halo, kWeatherHaloCenterX - 69, kWeatherHaloCenterY - 69);
         // The halo breathes and the sun turns about their own centres.
-        lv_obj_set_style_transform_pivot_x(weather_halo, 69, 0);
-        lv_obj_set_style_transform_pivot_y(weather_halo, 69, 0);
+        weather_halo = make_dot(weather_scene, kWeatherHaloSize, accent, LV_OPA_20);
+        lv_obj_set_pos(weather_halo, kWeatherHaloCenterX - kWeatherHaloSize / 2,
+                       kWeatherHaloCenterY - kWeatherHaloSize / 2);
 
         const bool night = !data.is_day;
         const bool precipitation = data.condition == WeatherCondition::Rain ||
@@ -2747,8 +2814,6 @@ struct AuraUi::Impl {
             const int size = data.condition == WeatherCondition::Clear ? 82 : 76;
             weather_icon = icon_view(weather_scene, weather_condition_icon(data.condition, data.is_day), size, accent);
             lv_obj_set_pos(weather_icon, kWeatherHaloCenterX - size / 2, kWeatherHaloCenterY - size / 2);
-            lv_obj_set_style_transform_pivot_x(weather_icon, size / 2, 0);
-            lv_obj_set_style_transform_pivot_y(weather_icon, size / 2, 0);
         }
         if (data.condition == WeatherCondition::Cloudy || data.condition == WeatherCondition::PartlyCloudy ||
             data.condition == WeatherCondition::Fog || precipitation || snow) {
@@ -3595,7 +3660,8 @@ struct AuraUi::Impl {
         const float seconds = static_cast<float>(phase_ms) / 1000.0F;
         const float pulse = 0.5F + 0.5F * std::sin(seconds * 2.2F);
         if (weather_halo) {
-            lv_obj_set_style_transform_scale(weather_halo, 246 + static_cast<int>(pulse * 20.0F), 0);
+            pulse_disc(weather_halo, kWeatherHaloCenterX, kWeatherHaloCenterY, kWeatherHaloSize,
+                       246 + static_cast<int>(pulse * 20.0F));
             lv_obj_set_style_bg_opa(weather_halo, static_cast<lv_opa_t>(28 + pulse * 34.0F), 0);
             if (weather.data.condition == WeatherCondition::Thunderstorm) {
                 const bool flash = (phase_ms % 3600U) > 3240U && (phase_ms % 3600U) < 3320U;
@@ -3612,10 +3678,12 @@ struct AuraUi::Impl {
             const int base_x = night_moon ? 62 :
                 kWeatherHaloCenterX - static_cast<int>(lv_obj_get_width(weather_icon)) / 2;
             lv_obj_set_x(weather_icon, base_x + (drifting ? static_cast<int>(std::sin(seconds * 0.9F) * 5.0F) : 0));
-            lv_obj_set_style_transform_rotation(weather_icon,
-                weather.data.condition == WeatherCondition::Clear && weather.data.is_day ?
-                    static_cast<int32_t>((phase_ms / 12U) % 3600U) : 0,
-                0);
+            // The sun is an image: it turns as it is drawn, about its centre.
+            if (lv_obj_check_type(weather_icon, &lv_image_class)) {
+                lv_image_set_rotation(weather_icon,
+                    weather.data.condition == WeatherCondition::Clear && weather.data.is_day ?
+                        static_cast<int32_t>((phase_ms / 12U) % 3600U) : 0);
+            }
         }
         if (weather_moon_cutout) {
             lv_obj_set_x(weather_moon_cutout, 82);
@@ -3663,6 +3731,7 @@ struct AuraUi::Impl {
         presence->detach();
         header_back = nullptr;
         header_title = nullptr;
+        header_glass = nullptr;
         header_action = false;
         home_clock = nullptr;
         home_date = nullptr;
@@ -3731,7 +3800,24 @@ struct AuraUi::Impl {
 
     // Data refreshes re-render the visible view (e.g. every second while a pairing
     // countdown runs); only a view change or an explicit state change fades in.
+    // A pointer is down, or a list still moves after one (a drag, or its throw).
+    static bool interacting() {
+        for (lv_indev_t* indev = lv_indev_get_next(nullptr); indev; indev = lv_indev_get_next(indev)) {
+            if (lv_indev_get_type(indev) != LV_INDEV_TYPE_POINTER) continue;
+            if (lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED || lv_indev_get_scroll_obj(indev)) return true;
+        }
+        return false;
+    }
+
     void render(UiView view, bool fade = false) {
+        // Data that changes the open screen while a finger is on it waits for
+        // the finger: rebuilding would drop the drag or the tap under it. A
+        // rebuild a touch asks for (from its own event) happens at once.
+        if (view == current_view && content && lv_indev_get_act() == nullptr && interacting()) {
+            refresh_pending = true;
+            return;
+        }
+        refresh_pending = false;
         if (current_view == UiView::PhotoViewer && view != UiView::PhotoViewer && photos.playing && callbacks.on_photo_play)
             callbacks.on_photo_play(false);
         if (blocked_by_power(view)) return;
@@ -3821,6 +3907,7 @@ struct AuraUi::Impl {
             const int32_t limit = lv_obj_get_scroll_y(primary_scroller) + lv_obj_get_scroll_bottom(primary_scroller);
             lv_obj_scroll_to_y(primary_scroller, std::max<int32_t>(0, std::min(saved_scroll, limit)), LV_ANIM_OFF);
         }
+        raise_header();
         move_status_foreground();
         if (toast) lv_obj_move_foreground(toast);
         update_status();
@@ -3873,7 +3960,11 @@ struct AuraUi::Impl {
         if (header_title && !header_action) {
             lv_obj_update_layout(status_right);
             const int right_x = ui::tokens::display_width - 20 - lv_obj_get_width(status_right);
-            lv_obj_set_width(header_title, std::max(120, right_x - 12 - static_cast<int>(lv_obj_get_x(header_title))));
+            const int width = std::max(120, right_x - 12 - static_cast<int>(lv_obj_get_x(header_title)));
+            if (width != lv_obj_get_width(header_title)) {
+                lv_obj_set_width(header_title, width);
+                fit_header_title();
+            }
         }
         lv_obj_set_hidden(status_bar, immersive(current_view));
     }
@@ -4150,6 +4241,7 @@ void AuraUi::set_input_amplitude(float amplitude, bool simulated) {
 }
 
 void AuraUi::tick(std::uint32_t elapsed_ms) {
+    if (impl_->refresh_pending && !Impl::interacting()) impl_->render(impl_->current_view);
     impl_->phase_ms += elapsed_ms;
     impl_->animation_ms += elapsed_ms;
     impl_->motion_sample_ms += elapsed_ms;
@@ -4256,6 +4348,8 @@ std::uint64_t AuraUi::weather_forecast_interaction_count() const noexcept {
 }
 std::uint64_t AuraUi::mercury_frame_count() const noexcept { return impl_->presence->frame_count(); }
 std::size_t AuraUi::mercury_buffer_bytes() const noexcept { return impl_->presence->buffer_bytes(); }
+std::uint32_t AuraUi::mercury_frame_ms() const noexcept { return impl_->presence->last_frame_ms(); }
+bool AuraUi::mercury_reduced() const noexcept { return impl_->presence->reduced_quality(); }
 bool AuraUi::reduced_motion() const noexcept { return impl_->reduced_motion; }
 
 UiView AuraUi::view() const noexcept { return impl_->current_view; }

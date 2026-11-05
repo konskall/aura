@@ -245,8 +245,60 @@ void Esp32Companion::install(AuraUiCallbacks& callbacks, IAoratonService* aorato
     };
 }
 
+bool Esp32Companion::begin_question() {
+    if (recording_note_ || recording_question_ || voice_.state != VoiceCaptureState::Idle ||
+        !capabilities_.speech_recognition || !microphone_.start()) {
+        return false;
+    }
+    audio_.stop();
+    // A question ends by itself when the speaker stops (VoiceRecorder's turn mode).
+    recorder_.start(VoiceRecorder::Mode::Turn);
+    recording_question_ = true;
+    voice_.state = VoiceCaptureState::Recording;
+    voice_.purpose = VoicePurpose::Assistant;
+    voice_.error_code.clear();
+    ++voice_.sequence;
+    return true;
+}
+
+void Esp32Companion::end_question() {
+    if (!recording_question_) return;
+    recording_question_ = false;
+    const bool stopped = microphone_.stop();
+    samples_.clear();
+    microphone_.drain(samples_);
+    if (!samples_.empty()) recorder_.append(samples_.data(), samples_.size());
+    auto wav = recorder_.finish_wav();
+    voice_.state = VoiceCaptureState::Idle;
+    voice_.level = 0.0F;
+    ++voice_.sequence;
+    if (!stopped) {
+        voice_.error_code = "MICROPHONE_STOP_TIMEOUT";
+        return;
+    }
+    if (question_sink_) question_sink_(std::move(wav));
+}
+
+void Esp32Companion::cancel_question() {
+    if (!recording_question_) return;
+    recording_question_ = false;
+    microphone_.stop();
+    recorder_.cancel();
+    voice_.state = VoiceCaptureState::Idle;
+    voice_.level = 0.0F;
+    ++voice_.sequence;
+}
+
+void Esp32Companion::set_speech_available(bool recognition, bool output) {
+    const bool listens = recognition && capabilities_.microphone;
+    if (capabilities_.speech_recognition == listens && capabilities_.speech_output == output) return;
+    capabilities_.speech_recognition = listens;
+    capabilities_.speech_output = output;
+    capabilities_dirty_ = true;
+}
+
 void Esp32Companion::begin_note() {
-    if (recording_note_ || voice_.state != VoiceCaptureState::Idle ||
+    if (recording_note_ || recording_question_ || voice_.state != VoiceCaptureState::Idle ||
         !capabilities_.microphone || !microphone_.start()) return;
     audio_.stop();
     // A note is dictated: it may pause to think and may last half a minute.
@@ -351,14 +403,17 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
         }
     }
 
-    if (recording_note_) {
+    if (recording_note_ || recording_question_) {
         samples_.clear();
         microphone_.drain(samples_);
         if (!samples_.empty()) recorder_.append(samples_.data(), samples_.size());
         voice_.level = recorder_.level();
         voice_.elapsed_ms = recorder_.elapsed_ms();
         ++voice_.sequence;
-        if (recorder_.should_stop()) finish_note();
+        if (recorder_.should_stop()) {
+            if (recording_note_) finish_note();
+            else end_question();
+        }
     }
 
     // The side button: a press wakes or sleeps the screen; holding it records a note.
@@ -379,7 +434,8 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
     }
     button_down_ = down;
 
-    const bool busy = clock_.snapshot().alert || recording_note_ || phone_.snapshot().incoming_call ||
+    const bool busy = clock_.snapshot().alert || recording_note_ || recording_question_ ||
+                      phone_.snapshot().incoming_call ||
                       audio_.diagnostics().state == AudioState::Playing ||
                       ota_.snapshot().state == UpdateState::Downloading || photos_.snapshot().playing ||
                       transfer_state.state == TransferState::Receiving ||
@@ -639,7 +695,7 @@ void Esp32Companion::apply(AuraUi& ui) {
     ui.apply_launcher_layout(launcher_layout_.snapshot());
 }
 
-void Esp32Companion::set_clock(const std::tm& local) {
+void Esp32Companion::set_clock(const std::tm& local, std::time_t utc) {
     LocalDateTime now;
     now.year = local.tm_year + 1900;
     now.month = local.tm_mon + 1;
@@ -648,7 +704,7 @@ void Esp32Companion::set_clock(const std::tm& local) {
     now.minute = local.tm_min;
     now.second = local.tm_sec;
     now.weekday = local.tm_wday;
-    clock_.set_clock(now);
+    clock_.set_clock(now, static_cast<std::int64_t>(utc) / 60);
     display_.set_minute(minute_index(now));
 }
 

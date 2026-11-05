@@ -1,4 +1,5 @@
 #include "aura/aura_appearance.hpp"
+#include "aura/aura_frame_worker.hpp"
 #include "aura/aura_icons.hpp"
 #include "aura/aura_aurora_view.hpp"
 #include "aura/aura_mercury_view.hpp"
@@ -9,14 +10,21 @@
 #include "aura/strings.hpp"
 #include "aura/visual_strings.hpp"
 #include "aura/companion_strings.hpp"
+#include "aura/photo_strings.hpp"
+#include "aura/transfer_strings.hpp"
 #include "aura_brand_assets.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 #include <iostream>
+#include <memory>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 void expect(bool value, const char* message) {
@@ -65,7 +73,46 @@ void check_aura_logo_asset(const lv_image_dsc_t& asset, int width, int height) {
 // field must be initialized in both languages and every character must exist
 // in the UI fonts, or the device would show an empty box.
 template <typename Table>
-void expect_complete_table(const Table& table, const char* name, const lv_font_t* font = nullptr) {
+void expect_complete_table(const Table& table, const char* name, const lv_font_t* font = nullptr);
+
+// The printf conversions in `text`, in order, each followed by a space ("%%" is
+// literal text, not a conversion).
+std::string printf_conversions(const char* text) {
+    std::string conversions;
+    for (const char* cursor = text; *cursor != '\0'; ++cursor) {
+        if (*cursor != '%') continue;
+        ++cursor;
+        if (*cursor == '%') continue;
+        std::string conversion = "%";
+        while (*cursor != '\0' && std::strchr("-+ #0123456789.*hlLzjt", *cursor) != nullptr) conversion += *cursor++;
+        if (*cursor == '\0') {
+            conversions += conversion + ' ';
+            break;
+        }
+        conversions += conversion + *cursor + ' ';
+    }
+    return conversions;
+}
+
+// Every copy has the same printf conversions, in the same order, in both languages.
+template <typename Table>
+void expect_matching_formats(const Table& greek, const Table& english, const char* name) {
+    static_assert(sizeof(Table) % sizeof(const char*) == 0, "string table holds only pointers");
+    const auto* greek_fields = reinterpret_cast<const char* const*>(&greek);
+    const auto* english_fields = reinterpret_cast<const char* const*>(&english);
+    for (std::size_t index = 0; index < sizeof(Table) / sizeof(const char*); ++index) {
+        const auto greek_conversions = printf_conversions(greek_fields[index]);
+        const auto english_conversions = printf_conversions(english_fields[index]);
+        if (greek_conversions != english_conversions) {
+            std::cerr << "FAILED: " << name << " field " << index << ": Greek {" << greek_conversions
+                      << "} against English {" << english_conversions << "}\n";
+            std::exit(1);
+        }
+    }
+}
+
+template <typename Table>
+void expect_complete_table(const Table& table, const char* name, const lv_font_t* font) {
     static_assert(sizeof(Table) % sizeof(const char*) == 0, "string table holds only pointers");
     const lv_font_t* drawn = font ? font : aura::ui::font_caption();
     const auto* fields = reinterpret_cast<const char* const*>(&table);
@@ -428,8 +475,8 @@ void check_presences() {
         expect(presence->object() == nullptr, "a detached presence holds no object");
         lv_obj_clean(lv_screen_active());
     }
-    expect(aura::ui::make_presence(aura::Appearance::Halo)->buffer_bytes() == 190512U,
-           "Halo uses the bounded 252 x 252 Synapse buffer");
+    expect(aura::ui::make_presence(aura::Appearance::Halo)->buffer_bytes() == 362880U,
+           "Halo uses the bounded 480 x 252 Synapse frame");
 }
 
 // Μάρμαρο's pearl: a sphere in its historical buffer size plus LVGL rings.
@@ -632,6 +679,426 @@ void check_stars_presence() {
     lv_obj_clean(screen);
 }
 
+// Synapse's luminance (Rec. 709) at one frame pixel, in either frame format:
+// RGB888 (blue, green, red in memory) or RGB565.
+float synapse_luminance(const lv_image_dsc_t& frame, int x, int y) {
+    const auto index = static_cast<std::size_t>(y) * frame.header.w + static_cast<std::size_t>(x);
+    float red = 0.0F;
+    float green = 0.0F;
+    float blue = 0.0F;
+    if (frame.header.cf == LV_COLOR_FORMAT_RGB888) {
+        const auto* pixel = frame.data + index * 3;
+        blue = pixel[0];
+        green = pixel[1];
+        red = pixel[2];
+    } else {
+        const auto packed = reinterpret_cast<const std::uint16_t*>(frame.data)[index];
+        red = static_cast<float>((packed >> 11U) & 0x1FU) * 255.0F / 31.0F;
+        green = static_cast<float>((packed >> 5U) & 0x3FU) * 255.0F / 63.0F;
+        blue = static_cast<float>(packed & 0x1FU) * 255.0F / 31.0F;
+    }
+    return red * 0.2126F + green * 0.7152F + blue * 0.0722F;
+}
+
+// The approved browser presentation (artifacts/halo-synapse.html), rendered at
+// t = 6 s with each state's values settled and a voice amplitude of 0.5 while
+// listening and speaking: mean luminance per radial band (0-15, 15-40, 40-80,
+// 80-130 and 130-240 px from the centre) and quadrant (top left, top right,
+// bottom left, bottom right), counting rows within 100 px of the centre only.
+constexpr float kSynapseReference[4][5][4] = {
+    {{204.7F, 225.6F, 226.1F, 210.5F}, {91.6F, 91.6F, 116.5F, 80.2F}, {67.2F, 83.8F, 63.9F, 87.8F},
+     {45.5F, 38.6F, 29.0F, 45.8F}, {1.9F, 2.3F, 1.5F, 2.8F}},
+    {{223.1F, 239.1F, 226.5F, 224.1F}, {78.2F, 95.0F, 69.7F, 116.9F}, {48.4F, 48.5F, 59.5F, 101.0F},
+     {31.4F, 68.4F, 75.3F, 45.2F}, {8.1F, 6.8F, 6.4F, 5.8F}},
+    {{202.1F, 225.3F, 228.1F, 207.5F}, {92.4F, 118.4F, 99.9F, 102.6F}, {49.4F, 62.9F, 71.6F, 65.0F},
+     {39.7F, 62.7F, 50.1F, 46.1F}, {3.5F, 9.3F, 3.3F, 4.5F}},
+    {{225.1F, 239.9F, 237.9F, 220.0F}, {82.1F, 95.3F, 137.1F, 76.2F}, {43.3F, 35.2F, 69.6F, 55.2F},
+     {49.4F, 39.1F, 51.2F, 58.8F}, {15.2F, 12.2F, 13.2F, 9.1F}},
+};
+
+// A clock for the Synapse checks: each reading advances it by `synapse_draw_ms`,
+// and Synapse reads it once before and once after drawing a frame, so every
+// frame takes exactly that long to draw.
+std::uint32_t synapse_clock_ms = 0;
+std::uint32_t synapse_draw_ms = 0;
+std::uint32_t synapse_test_clock() noexcept {
+    const auto now = synapse_clock_ms;
+    synapse_clock_ms += synapse_draw_ms;
+    return now;
+}
+// The checks' own Synapse: it draws every frame instantly (a real clock on a
+// busy machine could make one frame slow and switch it to the reduced frame).
+std::unique_ptr<aura::ui::AuraMercuryView> instant_synapse() {
+    synapse_draw_ms = 0;
+    return std::make_unique<aura::ui::AuraMercuryView>(synapse_test_clock, nullptr);
+}
+
+void check_synapse() {
+    using aura::ui::AuraMercuryView;
+    using aura::ui::PresenceState;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+
+    // The approved presentation at 1:1 scale: the full width of the screen,
+    // between the assistant captions (above y = 120) and the controls (y >= 372).
+    expect(AuraMercuryView::width == 480 && AuraMercuryView::height == 252,
+           "Synapse draws the approved presentation at 1:1 in a 480 x 252 frame");
+    expect(AuraMercuryView::frame_interval_ms == 50,
+           "Synapse animation targets 20 FPS for presentation-grade motion");
+
+    auto* caption = lv_label_create(screen);
+    auto synapse = instant_synapse();
+    expect(synapse->buffer_bytes() == static_cast<std::size_t>(480 * 252 * 3),
+           "Synapse keeps one bounded 480 x 252 x 3 byte frame");
+    auto* synapse_object = synapse->attach(screen, 240, 246);
+    lv_obj_update_layout(screen);
+    lv_area_t area{};
+    lv_obj_get_coords(synapse_object, &area);
+    expect(area.x1 == 0 && area.x2 == 479 && area.y1 == 120 && area.y2 == 371,
+           "Synapse spans the screen width between the captions and the controls");
+    expect(lv_obj_get_index(synapse_object) == 0 && lv_obj_get_index(caption) == 1,
+           "Synapse lies behind every label and control, even ones made before it");
+    const auto* synapse_source = static_cast<const lv_image_dsc_t*>(lv_image_get_src(synapse_object));
+    expect(synapse_source && synapse_source->header.w == 480 && synapse_source->header.h == 252 &&
+               (synapse_source->header.cf == LV_COLOR_FORMAT_RGB888 ||
+                synapse_source->header.cf == LV_COLOR_FORMAT_RGB565),
+           "Synapse is an opaque light field on the black canvas, without an alpha plane");
+    synapse->detach();
+    lv_obj_clean(screen);
+
+    // Every state matches the approved presentation's light, band by band.
+    const PresenceState states[] = {PresenceState::Idle, PresenceState::Listening, PresenceState::Thinking,
+                                    PresenceState::Speaking};
+    const char* names[] = {"idle", "listening", "thinking", "speaking"};
+    for (int state = 0; state < 4; ++state) {
+        auto view = instant_synapse();
+        view->set_state(states[state]);
+        view->set_level(state == 1 || state == 3 ? 0.5F : 0.0F);
+        auto* image = view->attach(screen, 240, 246);
+        for (int step = 0; step < 120; ++step) view->tick(50);
+        const auto& frame = *static_cast<const lv_image_dsc_t*>(lv_image_get_src(image));
+        std::array<std::array<float, 4>, 5> totals{};
+        std::array<std::array<int, 4>, 5> counts{};
+        constexpr float bands[] = {0.0F, 15.0F, 40.0F, 80.0F, 130.0F, 240.0F};
+        for (int y = 0; y < AuraMercuryView::height; ++y) {
+            for (int x = 0; x < AuraMercuryView::width; ++x) {
+                const float dx = static_cast<float>(x) + 0.5F - 240.0F;
+                const float dy = static_cast<float>(y) + 0.5F - 126.0F;
+                if (std::abs(dy) > 100.0F) continue;
+                const float distance = std::hypot(dx, dy);
+                int band = 0;
+                while (band < 5 && distance >= bands[band + 1]) ++band;
+                if (band == 5) continue;
+                const int quadrant = (dx >= 0.0F ? 1 : 0) + (dy >= 0.0F ? 2 : 0);
+                totals[static_cast<std::size_t>(band)][static_cast<std::size_t>(quadrant)] +=
+                    synapse_luminance(frame, x, y);
+                ++counts[static_cast<std::size_t>(band)][static_cast<std::size_t>(quadrant)];
+            }
+        }
+        for (int band = 0; band < 5; ++band) {
+            for (int quadrant = 0; quadrant < 4; ++quadrant) {
+                const float mean = totals[static_cast<std::size_t>(band)][static_cast<std::size_t>(quadrant)] /
+                                   static_cast<float>(counts[static_cast<std::size_t>(band)]
+                                                            [static_cast<std::size_t>(quadrant)]);
+                const float reference = kSynapseReference[state][band][quadrant];
+                if (std::abs(mean - reference) > reference * 0.15F + 4.0F) {
+                    std::cerr << "Synapse " << names[state] << " band " << band << " quadrant " << quadrant
+                              << ": " << mean << " against " << reference << '\n';
+                    expect(false, "Synapse matches the approved presentation's light in every state");
+                }
+            }
+        }
+        view->detach();
+        lv_obj_clean(screen);
+    }
+
+    // Distinct states, and the listening lattice follows the voice level.
+    auto moving = instant_synapse();
+    moving->attach(screen, 240, 246);
+    std::array<std::uint32_t, 4> signatures{};
+    for (int state = 0; state < 4; ++state) {
+        moving->set_state(states[state]);
+        moving->set_level(0.72F);
+        for (int step = 0; step < 8; ++step) moving->tick(50);
+        signatures[static_cast<std::size_t>(state)] = moving->frame_signature();
+    }
+    expect(signatures[0] != signatures[1] && signatures[1] != signatures[2] && signatures[2] != signatures[3] &&
+               signatures[0] != signatures[3],
+           "every assistant state has a distinct Synapse frame");
+    moving->set_state(PresenceState::Listening);
+    moving->set_level(0.0F);
+    for (int step = 0; step < 7; ++step) moving->tick(50);
+    const auto quiet_signature = moving->frame_signature();
+    moving->set_level(1.0F);
+    for (int step = 0; step < 7; ++step) moving->tick(50);
+    expect(moving->frame_signature() != quiet_signature, "the listening lattice follows the voice level");
+    moving->set_reduced_motion(true);
+    const auto frozen = moving->frame_count();
+    for (int step = 0; step < 4; ++step) moving->tick(50);
+    expect(moving->frame_count() == frozen, "Reduced Motion freezes Synapse");
+    moving->detach();
+    lv_obj_clean(screen);
+}
+
+
+// The mean difference, per colour channel, of two Synapse frames.
+float synapse_difference(const lv_image_dsc_t& left, const lv_image_dsc_t& right) {
+    float total = 0.0F;
+    for (int y = 0; y < aura::ui::AuraMercuryView::height; ++y) {
+        for (int x = 0; x < aura::ui::AuraMercuryView::width; ++x) {
+            total += std::abs(synapse_luminance(left, x, y) - synapse_luminance(right, x, y));
+        }
+    }
+    return total / static_cast<float>(aura::ui::AuraMercuryView::width * aura::ui::AuraMercuryView::height);
+}
+
+// Synapse never takes more than a third of the time it draws in, on any device:
+// a slower one draws fewer, then lighter frames, and with a worker the UI thread
+// does not draw at all.
+void check_synapse_pacing() {
+    using aura::ui::AuraMercuryView;
+    using aura::ui::FrameWorker;
+    using aura::ui::SynapseQuality;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+
+    // Idle time after a frame: the rest of its 50 ms, and at least twice the drawing.
+    expect(AuraMercuryView::paced_wait(0) == 50 && AuraMercuryView::paced_wait(10) == 40,
+           "a fast frame keeps Synapse at 20 FPS");
+    expect(AuraMercuryView::paced_wait(30) == 60, "a 30 ms frame leaves twice its drawing time idle");
+    expect(AuraMercuryView::paced_wait(150) == 300,
+           "a slow frame leaves twice its drawing time idle, with no frame-rate floor that would starve the UI");
+    expect(AuraMercuryView::paced_wait(5000) == 2000, "an extreme stall still lets Synapse move every 3 s");
+    expect(AuraMercuryView::next_quality(SynapseQuality::Full, AuraMercuryView::reduce_above_ms) ==
+               SynapseQuality::Full &&
+               AuraMercuryView::next_quality(SynapseQuality::Full, AuraMercuryView::reduce_above_ms + 1) ==
+               SynapseQuality::Reduced,
+           "a full frame slower than the limit switches Synapse to the reduced frame");
+    expect(AuraMercuryView::next_quality(SynapseQuality::Reduced, AuraMercuryView::restore_below_ms) ==
+               SynapseQuality::Reduced &&
+               AuraMercuryView::next_quality(SynapseQuality::Reduced, AuraMercuryView::restore_below_ms - 1) ==
+               SynapseQuality::Full,
+           "a reduced frame well inside the limit restores the full frame");
+    expect(AuraMercuryView::restore_below_ms * 2 < AuraMercuryView::reduce_above_ms,
+           "the two limits are far enough apart that the quality does not flap");
+
+    // The firmware's loop: it sleeps 33 ms between ticks, and each tick reports the
+    // time since the previous one, drawing on the same thread included.
+    synapse_draw_ms = 150;  // the ESP32-S3 estimate for one frame
+    auto slow = std::make_unique<AuraMercuryView>(synapse_test_clock, nullptr);
+    slow->attach(screen, 240, 246);
+    const auto first_frame = slow->frame_count();
+    std::uint64_t total_ms = 0;
+    std::uint64_t drawing_ms = 0;
+    std::uint32_t elapsed_ms = 33;
+    for (int tick = 0; tick < 600; ++tick) {
+        const auto frames = slow->frame_count();
+        slow->tick(elapsed_ms);
+        const std::uint32_t drew_ms = slow->frame_count() > frames ? synapse_draw_ms : 0;
+        drawing_ms += drew_ms;
+        elapsed_ms = 33 + drew_ms;
+        total_ms += elapsed_ms;
+    }
+    const double duty = static_cast<double>(drawing_ms) / static_cast<double>(total_ms);
+    if (duty > 0.34) std::cerr << "Synapse drew for " << duty * 100.0 << " % of the time\n";
+    expect(duty <= 0.34, "drawing Synapse takes at most a third of the time on a slow device");
+    expect(slow->frame_count() >= first_frame + 20, "a slow device still animates Synapse");
+    expect(slow->quality() == SynapseQuality::Reduced, "a device too slow for the full frame draws the reduced one");
+    slow->detach();
+    lv_obj_clean(screen);
+
+    // The reduced frame keeps the look for less work. Between the two limits
+    // each view keeps the quality it has.
+    synapse_draw_ms = 60;
+    auto full = std::make_unique<AuraMercuryView>(synapse_test_clock, nullptr);
+    auto reduced = std::make_unique<AuraMercuryView>(synapse_test_clock, nullptr);
+    reduced->set_quality(SynapseQuality::Reduced);
+    auto* full_image = full->attach(screen, 240, 246);
+    auto* reduced_image = reduced->attach(screen, 240, 246);
+    for (int step = 0; step < 20; ++step) {
+        full->tick(50);
+        reduced->tick(50);
+    }
+    const float difference = synapse_difference(*static_cast<const lv_image_dsc_t*>(lv_image_get_src(full_image)),
+                                                 *static_cast<const lv_image_dsc_t*>(lv_image_get_src(reduced_image)));
+    if (difference > 3.0F) std::cerr << "reduced Synapse differs by " << difference << " per pixel\n";
+    expect(full->quality() == SynapseQuality::Full && reduced->quality() == SynapseQuality::Reduced,
+           "a frame time between the two limits keeps the quality");
+    expect(difference <= 3.0F, "the reduced frame looks like the full one");
+    if (reduced->frame_work() * 3 > full->frame_work() * 2) {
+        std::cerr << "reduced Synapse work " << reduced->frame_work() << " against " << full->frame_work() << '\n';
+    }
+    expect(reduced->frame_work() * 3 <= full->frame_work() * 2,
+           "the reduced frame takes at most two thirds of the work");
+    full->detach();
+    reduced->detach();
+    lv_obj_clean(screen);
+
+    // With a worker, the caller only hands frames over: the worker draws them and
+    // the next tick shows the finished one.
+    FrameWorker worker;
+    auto async = std::make_unique<AuraMercuryView>(nullptr, &worker);
+    expect(async->buffer_bytes() == static_cast<std::size_t>(2 * 480 * 252 * 3),
+           "a view with a worker shows one frame while the worker draws the next");
+    auto* async_image = async->attach(screen, 240, 246);
+    const auto attached_frames = async->frame_count();
+    const auto* shown_before = static_cast<const lv_image_dsc_t*>(lv_image_get_src(async_image))->data;
+    async->tick(50);
+    expect(async->frame_count() == attached_frames, "the tick that starts a frame does not draw it");
+    worker.wait_idle();
+    async->tick(1);
+    const auto* shown_after = static_cast<const lv_image_dsc_t*>(lv_image_get_src(async_image))->data;
+    expect(async->frame_count() == attached_frames + 1 && shown_after != shown_before,
+           "the next tick shows the frame the worker drew");
+    async->tick(50);
+    async.reset();  // while the worker may still draw: the view waits for it
+    expect(!worker.busy(), "a view never leaves the worker drawing into freed memory");
+    lv_obj_clean(screen);
+}
+
+// A header floats on a glass capsule, and what scrolls under it shows through, blurred.
+void check_header_glass() {
+    namespace ui = aura::ui;
+    ensure_lvgl();
+    const auto& rect = ui::tokens::HEADER_GLASS_RECT;
+    expect(rect.x == 8 && rect.y == 8 && rect.width == 464 && rect.height == 80,
+           "the header glass lies 8 px inside the 96 px header band");
+    for (const auto appearance : aura::kAppearances) {
+        ui::set_active_appearance(appearance);
+        auto* screen = lv_obj_create(nullptr);
+        ui::reset(screen);
+        lv_obj_set_size(screen, 480, 480);
+        auto* glass = ui::make_header_glass(screen);
+        lv_obj_update_layout(screen);
+        lv_area_t area{};
+        lv_obj_get_coords(glass, &area);
+        expect(area.x1 == rect.x && area.y1 == rect.y && lv_area_get_width(&area) == rect.width &&
+                   lv_area_get_height(&area) == rect.height,
+               "the header glass covers HEADER_GLASS_RECT");
+        expect(lv_obj_get_style_radius(glass, LV_PART_MAIN) == LV_RADIUS_CIRCLE, "the header glass is a capsule");
+        expect(lv_obj_get_style_blur_backdrop(glass, LV_PART_MAIN) &&
+                   lv_obj_get_style_blur_radius(glass, LV_PART_MAIN) == 18,
+               "the header glass blurs what lies under it");
+        expect(lv_obj_get_style_bg_main_opa(glass, LV_PART_MAIN) == 176 &&
+                   lv_obj_get_style_bg_grad_opa(glass, LV_PART_MAIN) == 136 &&
+                   lv_obj_get_style_bg_grad_dir(glass, LV_PART_MAIN) == LV_GRAD_DIR_VER &&
+                   same_color(lv_obj_get_style_bg_color(glass, LV_PART_MAIN), ui::tokens::surface_glass) &&
+                   same_color(lv_obj_get_style_bg_grad_color(glass, LV_PART_MAIN), ui::tokens::surface),
+               "the header glass is the look's surfaces, translucent and clearer towards its foot");
+        expect(lv_obj_get_style_border_width(glass, LV_PART_MAIN) == 1 &&
+                   lv_obj_get_style_border_opa(glass, LV_PART_MAIN) == 40 &&
+                   same_color(lv_obj_get_style_border_color(glass, LV_PART_MAIN), ui::tokens::text),
+               "the header glass has a faint light edge");
+        expect(lv_obj_get_style_shadow_width(glass, LV_PART_MAIN) == 0,
+               "the header glass casts no shadow (none anywhere: costly on the ESP32-S3)");
+        bool band = lv_obj_is_clickable(glass);
+        for (const lv_point_t point : {lv_point_t{0, 0}, lv_point_t{479, 0}, lv_point_t{0, 95}, lv_point_t{479, 95},
+                                       lv_point_t{240, 92}, lv_point_t{4, 48}}) {
+            band = band && lv_obj_hit_test(glass, &point);
+        }
+        const lv_point_t below{240, 96};
+        expect(band && !lv_obj_hit_test(glass, &below),
+               "taps anywhere in the header band, and only there, stop at the glass");
+        expect(ui::is_header_glass(glass) && !ui::is_header_glass(screen), "the header glass is recognisable");
+        lv_obj_delete(screen);
+    }
+    ui::set_active_appearance(aura::Appearance::Halo);
+}
+
+// The device's LVGL draws the screen in bands of DEVICE_DRAW_ROWS rows, rounded to
+// even starts and odd ends for the panel, and the glass can blur only what its band
+// holds. Drawn that way, the capsule must look as it does when the screen is drawn whole.
+std::vector<std::uint8_t> glass_frame(480 * 480 * 2);
+
+void check_header_glass_bands() {
+    namespace ui = aura::ui;
+    ensure_lvgl();
+    auto* previous = lv_display_get_default();
+    auto* display = lv_display_create(480, 480);
+    lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
+    lv_display_set_flush_cb(display, [](lv_display_t* target, const lv_area_t* area, std::uint8_t* pixels) {
+        const auto width = static_cast<std::size_t>(lv_area_get_width(area));
+        for (int y = area->y1; y <= area->y2; ++y) {
+            std::memcpy(&glass_frame[(static_cast<std::size_t>(y) * 480 + static_cast<std::size_t>(area->x1)) * 2],
+                        pixels + static_cast<std::size_t>(y - area->y1) * width * 2, width * 2);
+        }
+        lv_display_flush_ready(target);
+    });
+    lv_display_add_event_cb(
+        display,
+        [](lv_event_t* event) {
+            auto* area = static_cast<lv_area_t*>(lv_event_get_param(event));
+            area->x1 &= ~1;
+            area->y1 &= ~1;
+            area->x2 |= 1;
+            area->y2 |= 1;
+        },
+        LV_EVENT_INVALIDATE_AREA, nullptr);
+    lv_display_set_default(display);
+    ui::set_active_appearance(aura::Appearance::Halo);
+
+    // Bright discs and a white bar across the band edges, as the launcher's icons
+    // and names pass under the header.
+    auto* screen = lv_obj_create(nullptr);
+    ui::reset(screen);
+    lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+    constexpr std::array<std::uint32_t, 6> tints{0x8B5CF6, 0xF5B83D, 0x2DD4A7, 0xFF5470, 0x3A7BFF, 0xFFFFFF};
+    for (std::size_t index = 0; index < tints.size(); ++index) {
+        auto* disc = lv_obj_create(screen);
+        ui::reset(disc);
+        lv_obj_set_size(disc, 88, 88);
+        lv_obj_set_pos(disc, 12 + static_cast<int>(index) * 76, 6 + static_cast<int>(index % 3) * 20);
+        lv_obj_set_style_radius(disc, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(disc, ui::color(tints[index]), 0);
+        lv_obj_set_style_bg_opa(disc, LV_OPA_COVER, 0);
+    }
+    auto* bar = lv_obj_create(screen);
+    ui::reset(bar);
+    lv_obj_set_size(bar, 300, 10);
+    lv_obj_set_pos(bar, 90, 46);
+    lv_obj_set_style_bg_color(bar, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+    ui::make_header_glass(screen);
+    lv_screen_load(screen);
+
+    std::vector<std::uint8_t> whole_buffer(480 * 480 * 2);
+    std::vector<std::uint8_t> band_buffer(static_cast<std::size_t>(480) * ui::tokens::DEVICE_DRAW_ROWS * 2);
+    const auto render = [&](std::vector<std::uint8_t>& buffer) {
+        lv_display_set_buffers(display, buffer.data(), nullptr, static_cast<std::uint32_t>(buffer.size()),
+                               LV_DISPLAY_RENDER_MODE_PARTIAL);
+        lv_obj_invalidate(screen);
+        lv_refr_now(display);
+        return glass_frame;
+    };
+    const auto whole = render(whole_buffer);
+    const auto banded = render(band_buffer);
+
+    // The largest difference of one RGB565 channel (in its own steps) inside the capsule.
+    const auto& rect = ui::tokens::HEADER_GLASS_RECT;
+    int worst = 0;
+    int worst_row = -1;
+    for (int y = rect.y; y < rect.y + rect.height; ++y) {
+        for (int x = rect.x; x < rect.x + rect.width; ++x) {
+            const auto at = (static_cast<std::size_t>(y) * 480 + static_cast<std::size_t>(x)) * 2;
+            const auto a = static_cast<int>(whole[at] | (whole[at + 1] << 8));
+            const auto b = static_cast<int>(banded[at] | (banded[at + 1] << 8));
+            const int difference = std::max({std::abs((a >> 11) - (b >> 11)), std::abs(((a >> 5) & 63) - ((b >> 5) & 63)),
+                                             std::abs((a & 31) - (b & 31))});
+            if (difference > worst) {
+                worst = difference;
+                worst_row = y;
+            }
+        }
+    }
+    std::cout << "header glass in " << ui::tokens::DEVICE_DRAW_ROWS << "-row bands: largest channel difference "
+              << worst << " (row " << worst_row << ")\n";
+    expect(worst <= 1, "drawn in the device's bands, the header glass looks as when the screen is drawn whole");
+
+    lv_display_set_default(previous);
+    lv_display_delete(display);
+}
+
 int main() {
     check_aura_logo_asset(aura_brand_aura_compact, 144, 53);
     check_aura_logo_asset(aura_brand_aura_hero, 176, 65);
@@ -720,6 +1187,18 @@ int main() {
     expect_complete_table(aura::l10n::visual_en_us(), "VisualStrings en_us");
     expect_complete_table(aura::l10n::companion_el_gr(), "CompanionStrings el_gr");
     expect_complete_table(aura::l10n::companion_en_us(), "CompanionStrings en_us");
+    // The code fills a copy's placeholders the same way in either language, so
+    // a translation must keep them, in order: a mismatch prints garbage or crashes.
+    expect(printf_conversions("%d of %s, 100%% %02u %.1f") == "%d %s %02u %.1f ",
+           "printf conversions are read in order, without %%");
+    expect(printf_conversions("%d %s") != printf_conversions("%s %d"), "swapped placeholders differ");
+    expect_matching_formats(aura::l10n::el_gr(), aura::l10n::en_us(), "Strings");
+    expect_matching_formats(aura::l10n::visual_el_gr(), aura::l10n::visual_en_us(), "VisualStrings");
+    expect_matching_formats(aura::l10n::companion_el_gr(), aura::l10n::companion_en_us(), "CompanionStrings");
+    expect_matching_formats(aura::l10n::photo_strings(aura::InterfaceLanguage::Greek),
+                            aura::l10n::photo_strings(aura::InterfaceLanguage::English), "PhotoStrings");
+    expect_matching_formats(aura::l10n::transfer_strings(aura::InterfaceLanguage::Greek),
+                            aura::l10n::transfer_strings(aura::InterfaceLanguage::English), "TransferStrings");
     expect_no_greek_copy(aura::l10n::en_us(), "Strings en_us");
     const auto& visual_en = aura::l10n::visual_en_us();
     expect_no_greek_copy(visual_en, "VisualStrings en_us",
@@ -741,121 +1220,10 @@ int main() {
     check_aurora_presence();
     check_stars_presence();
 
-    aura::ui::AuraMercuryView synapse;
-    expect(aura::ui::AuraMercuryView::size == 252 &&
-               synapse.buffer_bytes() == static_cast<std::size_t>(252 * 252 * 3),
-           "Synapse uses bounded 252 x 252 RGB565+A8 storage");
-    expect(aura::ui::AuraMercuryView::frame_interval_ms == 50,
-           "Synapse animation targets 20 FPS for presentation-grade motion");
-    // A slow device renders Synapse less often instead of starving the UI: a
-    // frame takes at most a third of the time, and never slower than 5 FPS.
-    expect(aura::ui::AuraMercuryView::paced_interval(0) == 50 &&
-               aura::ui::AuraMercuryView::paced_interval(16) == 50,
-           "a fast frame keeps Synapse at 20 FPS");
-    expect(aura::ui::AuraMercuryView::paced_interval(30) == 90,
-           "a 30 ms frame waits three times its cost");
-    expect(aura::ui::AuraMercuryView::paced_interval(90) == 200,
-           "a very slow frame still leaves Synapse at 5 FPS");
-    auto* synapse_object = synapse.attach(lv_screen_active(), 240, 260);
-    const auto* synapse_source = static_cast<const lv_image_dsc_t*>(lv_image_get_src(synapse_object));
-    expect(synapse_object && synapse_source && synapse_source->header.w == 252 && synapse_source->header.h == 252,
-           "Synapse attaches the larger production canvas");
-    expect(synapse.reactor_x() == aura::ui::AuraMercuryView::size / 2 &&
-               synapse.reactor_y() == aura::ui::AuraMercuryView::size / 2 &&
-               synapse.lit_center_x() == synapse.reactor_x() && synapse.lit_center_y() == synapse.reactor_y(),
-           "the reactor and luminous geometry share the exact centre");
-    expect(synapse.lit_extent() <= aura::ui::AuraMercuryView::size - 12,
-           "Synapse keeps a transparent safety margin around its motion");
-
-    const auto composite_luminance = [synapse_source](int x, int y) {
-        constexpr int side = aura::ui::AuraMercuryView::size;
-        const auto index = static_cast<std::size_t>(y * side + x);
-        const auto packed = reinterpret_cast<const std::uint16_t*>(synapse_source->data)[index];
-        const float red = static_cast<float>((packed >> 11U) & 0x1FU) * 255.0F / 31.0F;
-        const float green = static_cast<float>((packed >> 5U) & 0x3FU) * 255.0F / 63.0F;
-        const float blue = static_cast<float>(packed & 0x1FU) * 255.0F / 31.0F;
-        const float alpha = static_cast<float>(synapse_source->data[side * side * 2 + index]) / 255.0F;
-        return (red * 0.2126F + green * 0.7152F + blue * 0.0722F) * alpha;
-    };
-    const auto radial_average = [&](float inner, float outer) {
-        float total = 0.0F;
-        int count = 0;
-        const int center = aura::ui::AuraMercuryView::size / 2;
-        const int reach = static_cast<int>(outer + 1.0F);
-        for (int y = center - reach; y <= center + reach; ++y) {
-            for (int x = center - reach; x <= center + reach; ++x) {
-                const float distance = std::hypot(static_cast<float>(x - center), static_cast<float>(y - center));
-                if (distance < inner || distance > outer) continue;
-                total += composite_luminance(x, y);
-                ++count;
-            }
-        }
-        return total / static_cast<float>(count);
-    };
-    const auto directional_range = [&](float inner, float outer) {
-        std::array<float, 8> totals{};
-        std::array<int, 8> counts{};
-        const int center = aura::ui::AuraMercuryView::size / 2;
-        const int reach = static_cast<int>(outer + 1.0F);
-        constexpr float tau = 6.28318530718F;
-        for (int y = center - reach; y <= center + reach; ++y) {
-            for (int x = center - reach; x <= center + reach; ++x) {
-                const float dx = static_cast<float>(x - center);
-                const float dy = static_cast<float>(y - center);
-                const float distance = std::hypot(dx, dy);
-                if (distance < inner || distance > outer) continue;
-                float angle = std::atan2(dy, dx);
-                if (angle < 0.0F) angle += tau;
-                const auto sector = std::min<std::size_t>(7, static_cast<std::size_t>(angle / tau * 8.0F));
-                totals[sector] += composite_luminance(x, y);
-                ++counts[sector];
-            }
-        }
-        float minimum = 255.0F;
-        float maximum = 0.0F;
-        for (std::size_t sector = 0; sector < totals.size(); ++sector) {
-            const float average = totals[sector] / static_cast<float>(counts[sector]);
-            minimum = std::min(minimum, average);
-            maximum = std::max(maximum, average);
-        }
-        return maximum - minimum;
-    };
-    expect(radial_average(0.0F, 6.0F) >= 220.0F,
-           "Synapse keeps the approved broad white nucleus instead of a pin light");
-    expect(radial_average(9.0F, 13.0F) >= 125.0F,
-           "Synapse keeps the approved cyan inner glow around the nucleus");
-    expect(radial_average(28.0F, 45.0F) >= 55.0F,
-           "Synapse keeps a visible cyan-violet corona outside the reactor");
-    float minimum_foreground_contrast = directional_range(7.0F, 18.0F);
-    for (int frame = 0; frame < 24; ++frame) {
-        synapse.tick(50);
-        minimum_foreground_contrast =
-            std::min(minimum_foreground_contrast, directional_range(7.0F, 18.0F));
-    }
-    expect(minimum_foreground_contrast >= 9.25F,
-           "foreground fibres visibly cross the reactor so it remains embedded in the network");
-
-    std::array<std::uint32_t, 4> signatures{};
-    for (const auto state : {aura::ui::PresenceState::Idle, aura::ui::PresenceState::Listening,
-                             aura::ui::PresenceState::Thinking, aura::ui::PresenceState::Speaking}) {
-        synapse.set_state(state);
-        synapse.set_level(0.72F);
-        for (int step = 0; step < 8; ++step) synapse.tick(50);
-        signatures[static_cast<std::size_t>(state)] = synapse.frame_signature();
-    }
-    expect(signatures[0] != signatures[1] && signatures[1] != signatures[2] &&
-               signatures[2] != signatures[3] && signatures[0] != signatures[3],
-           "every assistant state has a distinct Synapse frame");
-
-    synapse.set_state(aura::ui::PresenceState::Listening);
-    synapse.set_level(0.0F);
-    for (int step = 0; step < 7; ++step) synapse.tick(50);
-    const auto quiet_signature = synapse.frame_signature();
-    synapse.set_level(1.0F);
-    for (int step = 0; step < 7; ++step) synapse.tick(50);
-    expect(synapse.frame_signature() != quiet_signature, "the listening lattice follows the voice level");
-    synapse.detach();
-    lv_obj_clean(lv_screen_active());
+    check_synapse();
+    check_synapse_pacing();
+    check_header_glass();
+    check_header_glass_bands();
 
     std::cout << "ui_assets_test: PASS\n";
     return 0;

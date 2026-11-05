@@ -9,7 +9,9 @@ Windows 10/11, PowerShell 5.1+, Git and network access are needed for first setu
 .\scripts\dev-simulator.ps1
 ```
 
-For everyday testing, `run.bat` in the repository root runs `build-simulator.ps1` (incremental) and then `dev-simulator.ps1 -Provider codex -SpeechProvider groq -TtsProvider azure`: Codex answers, Groq speech recognition and Azure voices, so the ignored `.env` needs `GROQ_API_KEY`, `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. `run.bat mock` selects Demo Mode and needs no keys. `run.bat` refuses to start a second copy while a simulator window is open, and it pauses on failure so a double-clicked window does not vanish.
+For everyday testing, `run.bat` in the repository root runs `build-simulator.ps1` (incremental) and then `dev-simulator.ps1 -Provider codex -SpeechProvider groq -TtsProvider azure`: Codex answers, Groq speech recognition and Azure voices, so the ignored `.env` needs `GROQ_API_KEY`, `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. `run.bat mock` selects Demo Mode and needs no keys. `run.bat` refuses to start a second copy while a simulator window is open, and it pauses on failure so a double-clicked window does not vanish. Since 2026-11-05 `dev-simulator.ps1` runs a copy, `build\native\run\aura_simulator.exe`, so a build can replace `build\native\aura_simulator.exe` while the window is open (Windows locks a running program's file). The first run of the copy may ask once for a firewall exception, as the file transfer listens on the local network.
+
+The simulator draws Σύναψη on its UI thread. The firmware starts a worker on the second core for it (`FrameWorker::start_shared` in `app_main`), which the unit tests exercise.
 
 Demo Mode is the default of `dev-simulator.ps1`. To use the locally authenticated Codex CLI for Assistant turns:
 
@@ -146,5 +148,8 @@ Windows simulator falls back to Open-Meteo.
 .\scripts\verify-live-simulator.ps1
 .\scripts\capture-v10_3_1-weather-evidence.ps1
 ```
+
+`--capture <view> --capture-scroll <px>` scrolls the captured view's list first, to show rows passing under the
+header's glass.
 
 Eighteen named views are rendered to genuine 480 × 480 captures, converted losslessly to PNG and assembled into `artifacts/v8/AURA_V8_PRODUCTION_SCREENS.png`. The set includes the four animated AI states, short/long answers, quick actions, notifications, settings, Audio, Aoraton rooms/chat/compose/confirm, offline/error, battery and diagnostics. More detailed steps are in [simulator/WINDOWS_SETUP.md](simulator/WINDOWS_SETUP.md) and [simulator/INTERACTION_TESTS.md](simulator/INTERACTION_TESTS.md).

@@ -29,6 +29,8 @@ public:
     void shutdown();  // call outside the LVGL lock before reboot/reset/deep sleep
     void poll();
     TransferSession& session() { return session_; }
+    // Where POST /api/keys puts the assistant's keys (encrypted NVS); set before start().
+    void set_key_sink(ICloudKeySink* sink) { key_sink_ = sink; }
 
 private:
     static void manager_entry(void* context);
@@ -37,6 +39,7 @@ private:
     esp_err_t request(httpd_req_t* request);
     TransferSession session_;
     Esp32TransferStorage storage_;
+    ICloudKeySink* key_sink_{nullptr};
     std::atomic<bool> available_{false}, listening_{false};
 };
 }  // namespace aura::firmware

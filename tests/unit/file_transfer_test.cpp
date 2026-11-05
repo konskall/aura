@@ -1,3 +1,4 @@
+#include "aura/cloud_keys.hpp"
 #include "aura/file_transfer.hpp"
 #include "aura/text_util.hpp"
 #include <algorithm>
@@ -61,6 +62,70 @@ struct Store : ITransferStorage {
     }
 };
 }  // namespace
+// The owner's PC sends the assistant's keys over the same code-protected
+// session; the device keeps them (the sink) and never echoes them.
+struct KeySink : ICloudKeySink {
+    std::vector<CloudKeys> stored;
+    bool store(const CloudKeys& keys) override {
+        stored.push_back(keys);
+        return true;
+    }
+};
+
+void cloud_key_tests() {
+    std::uint64_t now = 1000;
+    TransferSession session;
+    Store files;
+    KeySink keys;
+    TransferProtocol protocol(session, files, [&] { return now; }, &keys);
+    std::array<std::uint8_t, 36> entropy{};
+    entropy.fill(41);
+    expect(session.start(entropy, now), "a session for the keys");
+    session.ready(session.snapshot().generation, "http://127.0.0.1:8788", now);
+    TransferRequest request;
+    request.local_peer = true;
+    request.host = "127.0.0.1:8788";
+    request.method = "POST";
+    request.content_type = "application/json";
+    const auto send = [&](const std::string& path, const std::string& body, TransferProtocol& handler) {
+        Reader reader(body);
+        request.path = path;
+        request.length = body.size();
+        return handler.handle(request, reader);
+    };
+    const auto token = parse_flat_json(send("/api/session", "{\"pin\":\"" + session.snapshot().pin + "\"}", protocol).body,
+                                       128)->string("token");
+    expect(token.has_value(), "the PIN signs in");
+    const std::string groq = "gsk_" + std::string(52, 'A');
+    const std::string azure(32, 'b');
+    const std::string body = "{\"groq_api_key\":\"" + groq + "\",\"azure_speech_key\":\"" + azure +
+                             "\",\"azure_speech_region\":\"westeurope\"}";
+    expect(send("/api/keys", body, protocol).status == 401 && keys.stored.empty(), "keys need the signed-in session");
+    request.authorization = "Bearer " + *token;
+    const auto stored = send("/api/keys", body, protocol);
+    expect(stored.status == 200 && stored.body == "{\"ok\":true}", "the keys are kept");
+    expect(keys.stored.size() == 1 && keys.stored[0].groq_api_key == groq && keys.stored[0].azure_speech_key == azure &&
+               keys.stored[0].azure_speech_region == "westeurope",
+           "exactly the keys that were sent");
+    expect(stored.body.find(groq) == std::string::npos, "the response never echoes a key");
+    expect(send("/api/keys", "{\"groq_api_key\":\"sk-123\",\"azure_speech_key\":\"" + azure +
+                                 "\",\"azure_speech_region\":\"westeurope\"}", protocol).status == 400,
+           "a key in the wrong format is refused");
+    expect(send("/api/keys", "{\"groq_api_key\":\"" + groq + "\",\"extra\":\"x\",\"azure_speech_key\":\"\","
+                                 "\"azure_speech_region\":\"\"}", protocol).status == 400,
+           "only the three fields");
+    expect(send("/api/keys", "{\"groq_api_key\":\"" + groq + "\",\"azure_speech_key\":\"\",\"azure_speech_region\":\"\"}",
+                protocol).status == 200 && keys.stored.size() == 2,
+           "Azure may be left out");
+    request.content_type = "text/plain";
+    expect(send("/api/keys", body, protocol).status == 400, "keys arrive as JSON only");
+    request.content_type = "application/json";
+    expect(send("/api/keys", std::string(1100, ' '), protocol).status == 400, "a long body is refused");
+    TransferProtocol without_keys(session, files, [&] { return now; });
+    expect(send("/api/keys", body, without_keys).status == 404, "a platform that keeps no keys has no such endpoint");
+    expect(keys.stored.size() == 2, "refused requests store nothing");
+}
+
 int main() {
     for (auto name : {"DEMO φωτογραφία.jpg", "DEMO notes.txt", "DEMO 20%.pdf"})
         expect(transfer_filename_valid(name), "safe Unicode filename accepted");
@@ -201,5 +266,6 @@ int main() {
     session.tick(now);
     expect(session.snapshot().state == TransferState::Expired && session.snapshot().pin.empty(),
            "lease expires and clears credentials");
+    cloud_key_tests();
     std::cout << "Transfer framing, auth, expiry, validation, cancellation and streaming checks passed\n";
 }
