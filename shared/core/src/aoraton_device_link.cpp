@@ -94,8 +94,22 @@ bool error_code_shaped(std::string_view error) {
 
 }  // namespace
 
-bool aoraton_link_config_valid(const AoratonLinkConfig& config) {
-    return valid_origin(config.base_url) && jwt_shaped(config.anon_key);
+// http://127.0.0.1:<port>, nothing more: a test's local fake.
+bool loopback_origin(std::string_view url) {
+    constexpr std::string_view kPrefix = "http://127.0.0.1:";
+    if (url.substr(0, kPrefix.size()) != kPrefix) return false;
+    std::string_view port = url.substr(kPrefix.size());
+    if (!port.empty() && port.back() == '/') port.remove_suffix(1);
+    if (port.empty() || port.size() > 5) return false;
+    for (char c : port) {
+        if (c < '0' || c > '9') return false;
+    }
+    return true;
+}
+
+bool aoraton_link_config_valid(const AoratonLinkConfig& config, bool allow_loopback) {
+    return (valid_origin(config.base_url) || (allow_loopback && loopback_origin(config.base_url))) &&
+           jwt_shaped(config.anon_key);
 }
 
 bool aoraton_link_code_valid(std::string_view code) { return code_shaped(code); }
@@ -167,7 +181,8 @@ bool aoraton_decode_secrets(const std::vector<std::uint8_t>& record, AoratonStor
     return true;
 }
 
-AoratonDeviceLink::AoratonDeviceLink(ConfigSink config_sink) : config_sink_(std::move(config_sink)) {}
+AoratonDeviceLink::AoratonDeviceLink(ConfigSink config_sink, bool allow_loopback)
+    : config_sink_(std::move(config_sink)), allow_loopback_(allow_loopback) {}
 
 AoratonDeviceLink::~AoratonDeviceLink() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -181,7 +196,7 @@ void AoratonDeviceLink::clear_answer_locked() noexcept {
 }
 
 bool AoratonDeviceLink::configure(const AoratonLinkConfig& config) {
-    if (!aoraton_link_config_valid(config) || !config_sink_) return false;
+    if (!aoraton_link_config_valid(config, allow_loopback_) || !config_sink_) return false;
     if (!config_sink_(config)) return false;
     std::lock_guard<std::mutex> lock(mutex_);
     configured_ = true;
@@ -268,7 +283,8 @@ void AoratonDeviceLink::publish(bool configured, AoratonPairingState pairing, co
 
 bool AoratonDeviceLink::open(const std::string& authorize_url) {
     if (authorize_url.empty() || authorize_url.size() > kMaxAuthorizeUrlChars ||
-        authorize_url.rfind("https://", 0) != 0)
+        (authorize_url.rfind("https://", 0) != 0 &&
+         !(allow_loopback_ && authorize_url.rfind("http://127.0.0.1:", 0) == 0)))
         return false;
     std::lock_guard<std::mutex> lock(mutex_);
     clear_answer_locked();
@@ -295,6 +311,19 @@ void AoratonDeviceLink::close() {
     clear_answer_locked();
     open_ = false;
     authorize_url_.clear();
+}
+
+void aoraton_link_pump(AoratonDeviceLink& link, IAoratonService& service, bool configured, bool account_ready) {
+    if (account_ready) {
+        if (link.take_sign_in_request()) service.begin_pairing();
+        std::string invite;
+        while (link.take_invite(invite)) {
+            service.add_invite_key(invite);
+            wipe(invite);
+        }
+    }
+    const auto& snapshot = service.snapshot();
+    link.publish(configured, snapshot.pairing, snapshot.last_error);
 }
 
 }  // namespace aura

@@ -39,6 +39,9 @@ struct AoratonTransportOptions {
     // Stand-in for the browser (fake-backend smoke only): fetch the authorize
     // URL and follow its redirect to the loopback callback.
     bool fetch_instead_of_browser{false};
+    // The device mode's link (AoratonDeviceMode): the PC helper relays the
+    // sign-in instead of this PC's browser opening it here.
+    IAoratonSignInChannel* sign_in_channel{nullptr};
 };
 
 // Reads AURA_AORATON_URL and AURA_AORATON_ANON_KEY (set by dev-simulator.ps1

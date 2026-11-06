@@ -38,6 +38,10 @@ The room keys are unlocked on the device: the owner types the vault passphrase o
 
 The helper prints no code, token, key or invite. The device's responses echo none of them.
 
+The settings are marked as stored as soon as the device keeps them. A sign-in or invite the PC sends while the account restarts with them waits until it is ready (`aoraton_link_pump`). Before 2026-11-06 the PC could hit that restart and be told the device could not start the sign-in.
+
+**The simulator as the device.** `run.bat device` runs the same link, pump and worker in the simulator (`AoratonDeviceMode`). Windows stands in for the device's TLS, crypto and NVS, so the sign-in can be tried live before the board arrives ([SIMULATOR.md](../SIMULATOR.md)).
+
 ### Hybrid sync (the owner's choice)
 
 Realtime runs while the screen is lit, or while the device is on USB power (the AXP2101 reports it). On battery with the screen dark (`realtime_sync_allowed`):

@@ -169,7 +169,8 @@ Appearance read_stored_appearance(const std::string& store_dir) {
 
 CompanionRuntime::CompanionRuntime(CompanionContext context) : ctx_(std::move(context)) {
     photos_ = std::make_unique<PhotoRuntime>(ctx_.store_dir, ctx_.deterministic);
-    transfer_ = std::make_unique<FileTransferRuntime>(ctx_.store_dir, ctx_.deterministic);
+    transfer_ = std::make_unique<FileTransferRuntime>(ctx_.store_dir, ctx_.deterministic, std::string{}, 0,
+                                                      ctx_.aoraton_link);
     capabilities_.imu = true;          // simulated through the control panel
     // A normal interactive run exposes pairing only when a real platform
     // transport exists. Deterministic evidence retains its labelled DEMO path.

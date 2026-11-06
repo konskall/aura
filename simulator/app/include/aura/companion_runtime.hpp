@@ -64,6 +64,9 @@ struct CompanionContext {
     std::function<std::unique_ptr<IAssistantProvider>()> make_translator;
     bool deterministic{false};
     std::string store_dir;
+    // The Aoraton device mode's link: File transfer then serves the PC helper's
+    // /api/aoraton/* calls, as on the device.
+    IAoratonLinkEndpoint* aoraton_link{nullptr};
 };
 
 // The v13 "Companion" half of the simulator: clock, notes, translation,

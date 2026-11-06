@@ -15,7 +15,8 @@ Verified from the current official Waveshare documentation on 2026-10-17:
     - ADC control 0x30: battery, VBUS and system voltage and the temperature on, TS-pin detection off ("necessary on the board");
     - battery detection 0x68 bit 0 on;
     - nothing else: no rail, charger or power-key writes.
-- ES7210 microphone ADC and ES8311 playback codec/amplifier path. A physical speaker is not assumed.
+- ES7210 microphone ADC and ES8311 playback codec/amplifier path. The owner's board has a speaker (2026-11-06).
+  The firmware plays clips at 16 or 24 kHz, and the radio as a continuous stream at the station's own rate (8–48 kHz). The codec is reopened in between, because the board has one output.
 - TF slot, native USB-C, 2.4 GHz Wi-Fi, Bluetooth 5 LE. Bluetooth Classic A2DP/HFP is not promised.
 
 ## Flash layout (16 MB, `firmware/partitions.csv`)

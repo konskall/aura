@@ -24,8 +24,8 @@ constexpr std::size_t kMaxSearchBytes = 512U * 1024U;
 constexpr std::size_t kMaxEvents = 16;
 constexpr std::uint32_t kHighWaterMs = 3500;
 constexpr std::uint32_t kLowWaterMs = 1800;
-constexpr int kReadTimeout = -1;
-constexpr int kReadError = -2;
+constexpr int kReadTimeout = kRadioReadTimeout;
+constexpr int kReadError = kRadioReadError;
 // About ten seconds of silence from the server ends the attempt.
 constexpr int kMaxQuietReads = 4;
 // A stream that sends this much and nothing playable is not MP3.
@@ -471,50 +471,39 @@ std::string WindowsRadioService::stream_icy(const std::wstring& host, const std:
 
 std::string WindowsRadioService::pump(const StreamReader& read, std::size_t metaint, std::uint64_t generation,
                                       bool& heard_audio) {
-    IcyStreamReader icy(metaint);
-    Mp3StreamDecoder decoder;
-    std::array<std::uint8_t, 16U * 1024U> input{};
-    std::vector<std::uint8_t> audio_bytes;
-    std::size_t received_total = 0;
-    int quiet_reads = 0;
-    while (current(generation)) {
-        const int received = read(input.data(), static_cast<int>(input.size()));
-        if (received == kReadTimeout) {
-            if (++quiet_reads >= kMaxQuietReads) return "RADIO_TIMEOUT";
-            continue;
+    // The shared pump (aura/radio.hpp), as on the device; this output is the
+    // continuous channel of WindowsAudioBackend.
+    class Sink final : public IRadioAudioSink {
+    public:
+        Sink(WindowsRadioService& service, std::uint64_t generation) : service_(service), generation_(generation) {}
+        bool open(std::uint32_t sample_rate, std::uint8_t channels) override {
+            std::lock_guard<std::mutex> audio_lock(service_.audio_control_mutex_);
+            return service_.current(generation_) && service_.audio_.stream_open(sample_rate, channels);
         }
-        if (received < 0) return "RADIO_NETWORK";
-        if (received == 0) return heard_audio ? "RADIO_STREAM_ENDED" : "RADIO_DECODE";
-        quiet_reads = 0;
-        received_total += static_cast<std::size_t>(received);
-        if (!heard_audio && received_total > kMaxBytesBeforeAudio) return "RADIO_DECODE";
-        audio_bytes.clear();
-        icy.feed(input.data(), static_cast<std::size_t>(received), audio_bytes);
-        std::string title;
-        if (icy.take_title(title) && !title.empty()) publish({RadioWorkerEventType::Title, generation, std::move(title)});
-        decoder.feed(audio_bytes.data(), audio_bytes.size());
-        while (current(generation)) {
-            Mp3Pcm pcm;
-            const auto frames = decoder.decode(pcm, 1152U * 8U);
-            if (frames == 0) break;
-            bool audio_ok = false;
-            {
-                std::lock_guard<std::mutex> audio_lock(audio_control_mutex_);
-                audio_ok = current(generation) && audio_.stream_open(pcm.sample_rate, pcm.channels) &&
-                           audio_.stream_push(pcm.samples.data(), frames);
-            }
-            if (!audio_ok) return current(generation) ? "RADIO_AUDIO" : std::string{};
-            if (!heard_audio) {
-                heard_audio = true;
-                publish({RadioWorkerEventType::Playing, generation, {}});
-            }
-            while (current(generation) && audio_.stream_buffered_ms() > kHighWaterMs) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(40));
-                if (audio_.stream_buffered_ms() <= kLowWaterMs) break;
-            }
+        bool push(const std::int16_t* samples, std::size_t frames) override {
+            std::lock_guard<std::mutex> audio_lock(service_.audio_control_mutex_);
+            return service_.current(generation_) && service_.audio_.stream_push(samples, frames);
         }
-    }
-    return {};
+        std::uint32_t buffered_ms() const override { return service_.audio_.stream_buffered_ms(); }
+
+    private:
+        WindowsRadioService& service_;
+        std::uint64_t generation_;
+    } sink(*this, generation);
+    RadioPumpIo io;
+    io.read = read;
+    io.current = [this, generation] { return current(generation); };
+    io.title = [this, generation](std::string title) {
+        publish({RadioWorkerEventType::Title, generation, std::move(title)});
+    };
+    io.playing = [this, generation] { publish({RadioWorkerEventType::Playing, generation, {}}); };
+    io.wait = [](std::uint32_t ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); };
+    RadioPumpLimits limits;
+    limits.high_water_ms = kHighWaterMs;
+    limits.low_water_ms = kLowWaterMs;
+    limits.max_quiet_reads = kMaxQuietReads;
+    limits.max_bytes_before_audio = kMaxBytesBeforeAudio;
+    return radio_pump(metaint, sink, io, limits, heard_audio);
 }
 
 }  // namespace aura::simulator

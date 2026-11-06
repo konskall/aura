@@ -23,7 +23,10 @@ struct AoratonLinkConfig {
 };
 
 // An https origin (no path or query) and a JWT-shaped key, bounded.
-bool aoraton_link_config_valid(const AoratonLinkConfig& config);
+// `allow_loopback` also takes http://127.0.0.1:<port>: only a test's local
+// fake, when the simulator runs with AURA_AORATON_ALLOW_LOOPBACK=1. The device
+// never asks for it.
+bool aoraton_link_config_valid(const AoratonLinkConfig& config, bool allow_loopback = false);
 // The authorization code the browser returned: a bounded token (no spaces).
 bool aoraton_link_code_valid(std::string_view code);
 
@@ -67,7 +70,7 @@ public:
     static constexpr std::size_t kMaxInvites = 4;
     using ConfigSink = std::function<bool(const AoratonLinkConfig&)>;
 
-    explicit AoratonDeviceLink(ConfigSink config_sink);
+    explicit AoratonDeviceLink(ConfigSink config_sink, bool allow_loopback = false);
     ~AoratonDeviceLink() override;
     AoratonDeviceLink(const AoratonDeviceLink&) = delete;
     AoratonDeviceLink& operator=(const AoratonDeviceLink&) = delete;
@@ -95,6 +98,7 @@ private:
     void clear_answer_locked() noexcept;
 
     ConfigSink config_sink_;
+    bool allow_loopback_{false};
     mutable std::mutex mutex_;
     bool configured_{false};
     bool sign_in_requested_{false};
@@ -106,5 +110,12 @@ private:
     std::string error_;
     std::deque<std::string> invites_;
 };
+
+// The UI thread's share, once per frame, on the device and in the simulator's
+// device mode. `configured`: the platform holds the PC's settings (it says so
+// as soon as it stores them). `account_ready`: its account runs. A sign-in or
+// an invite the PC sent while the account (re)starts waits for it; the
+// account's state then goes back to the PC.
+void aoraton_link_pump(AoratonDeviceLink& link, IAoratonService& service, bool configured, bool account_ready);
 
 }  // namespace aura

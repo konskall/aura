@@ -72,6 +72,12 @@ public:
     void set_message_sink(std::function<void(std::vector<std::uint8_t>)> sink) { message_sink_ = std::move(sink); }
     // Speech recognition and spoken replies, once the cloud keys are there.
     void set_speech_available(bool recognition, bool output);
+    // The microphone records (a note, a question, a voice message): the radio
+    // is silenced meanwhile, so its sound does not end up in the recording.
+    bool microphone_active() const noexcept { return voice_.state == VoiceCaptureState::Recording; }
+    // Small text files on the microSD card (the radio's favourites).
+    std::string load_text(const char* name) const { return store_.read(name); }
+    bool save_text(const char* name, const std::string& data) const { return store_.write(name, data); }
     // Where the transfer session's POST /api/keys puts the assistant's keys.
     void set_cloud_key_sink(ICloudKeySink* sink) { transfer_.set_key_sink(sink); }
     // The PC-assisted aoraton.com sign-in over the same session (ADR 0010).

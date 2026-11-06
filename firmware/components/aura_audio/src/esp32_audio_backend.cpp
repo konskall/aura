@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "bsp/esp-bsp.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 
 namespace aura::firmware {
@@ -14,6 +15,11 @@ namespace {
 constexpr char kTag[] = "aura_audio";
 constexpr std::size_t kMaxPcmSamples = 256U * 1024U;
 constexpr std::size_t kChunkSamples = 512;
+// The radio's ring: three seconds of its own format (576 KiB at 48 kHz stereo).
+constexpr std::size_t kStreamSeconds = 3;
+constexpr std::size_t kMaxPushFrames = 1152U * 32U;
+// Silence written while the network is late, before the output rests.
+constexpr std::uint32_t kStreamUnderrunMs = 500;
 constexpr double kPi = 3.14159265358979323846;
 
 std::uint16_t le16(const std::uint8_t* value) {
@@ -86,11 +92,16 @@ void Esp32AudioBackend::shutdown() {
     }
     xSemaphoreTake(mutex_, portMAX_DELAY);
     clip_.samples.clear();
+    std::int16_t* ring = ring_;
+    ring_ = nullptr;
+    ring_capacity_ = ring_read_ = ring_size_ = 0;
+    stream_open_ = false;
     machine_.dispatch(AudioCommand::Shutdown);
     diagnostics_.state = machine_.state();
     diagnostics_.device_available = false;
     diagnostics_.envelope = 0.0F;
     xSemaphoreGive(mutex_);
+    heap_caps_free(ring);
 }
 
 bool Esp32AudioBackend::play_pcm(const PcmClip& clip) { return play_clip(clip, false); }
@@ -225,8 +236,10 @@ void Esp32AudioBackend::stop() {
     clip_.samples.clear();
     pending_wav_path_.clear();
     alert_clip_ = false;
+    // Stopping a clip leaves the radio playing.
+    const bool streaming = stream_open_ && !stream_hold_;
     xSemaphoreGive(mutex_);
-    amplifier_.disable();
+    if (!streaming) amplifier_.disable();
 }
 
 void Esp32AudioBackend::set_volume(float volume) {
@@ -241,7 +254,7 @@ void Esp32AudioBackend::set_muted(bool muted) {
     xSemaphoreTake(mutex_, portMAX_DELAY);
     diagnostics_.muted = muted;
     if (muted) diagnostics_.envelope = 0.0F;
-    const bool playing = machine_.state() == AudioState::Playing;
+    const bool playing = machine_.state() == AudioState::Playing || (stream_open_ && !stream_hold_);
     xSemaphoreGive(mutex_);
     if (muted) amplifier_.mute();
     else if (playing) amplifier_.unmute();
@@ -262,9 +275,13 @@ void Esp32AudioBackend::task_entry(void* context) {
 }
 
 void Esp32AudioBackend::playback_task() {
-    std::array<std::int16_t, kChunkSamples> chunk{};
     for (;;) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const bool busy = clip_pending_locked() || stream_ready_locked();
+        xSemaphoreGive(mutex_);
+        // Asleep until a clip or the radio needs the output; a notification sent
+        // meanwhile is kept, so none is lost.
+        if (!busy) ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         xSemaphoreTake(mutex_, portMAX_DELAY);
         if (shutting_down_) {
             task_ = nullptr;
@@ -274,115 +291,270 @@ void Esp32AudioBackend::playback_task() {
         }
         const std::uint32_t generation = generation_;
         const std::string wav_path = pending_wav_path_;
+        const bool clip = clip_pending_locked();
+        const bool stream = stream_ready_locked();
         xSemaphoreGive(mutex_);
+        // A clip comes first; the radio goes on after it.
+        if (clip) play_clip_now(generation, wav_path);
+        else if (stream) play_stream_now();
+    }
+}
 
-        if (!wav_path.empty()) {
-            PcmClip loaded;
-            const bool ok = load_pcm_wav(wav_path, loaded);
-            xSemaphoreTake(mutex_, portMAX_DELAY);
-            if (shutting_down_ || generation != generation_) {
-                xSemaphoreGive(mutex_);
-                continue;
-            }
-            pending_wav_path_.clear();
-            if (!ok) {
-                set_error_locked("INVALID_OR_OVERSIZED_WAV");
-                xSemaphoreGive(mutex_);
-                continue;
-            }
-            clip_ = std::move(loaded);
-            cursor_ = 0;
-            diagnostics_.format = clip_.format;
-            diagnostics_.buffered_frames = clip_.samples.size() /
-                std::max<std::uint8_t>(1, clip_.format.channels);
-            xSemaphoreGive(mutex_);
-        }
-
+void Esp32AudioBackend::play_clip_now(std::uint32_t generation, const std::string& wav_path) {
+    std::array<std::int16_t, kChunkSamples> chunk{};
+    if (!wav_path.empty()) {
+        PcmClip loaded;
+        const bool ok = load_pcm_wav(wav_path, loaded);
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        if (shutting_down_ || generation != generation_ || clip_.samples.empty()) {
+        if (shutting_down_ || generation != generation_) {
             xSemaphoreGive(mutex_);
-            continue;
+            return;
         }
-        const AudioFormat format = clip_.format;
-        xSemaphoreGive(mutex_);
-
-        // C++ requires designated initializers in declaration order
-        // (bits_per_sample, channel, channel_mask, sample_rate, ...); assign instead.
-        esp_codec_dev_sample_info_t sample_info{};
-        sample_info.bits_per_sample = format.bits_per_sample;
-        sample_info.channel = format.channels;
-        sample_info.sample_rate = format.sample_rate;
-        if (esp_codec_dev_open(codec_, &sample_info) != ESP_CODEC_DEV_OK) {
-            xSemaphoreTake(mutex_, portMAX_DELAY);
-            set_error_locked("ES8311_OPEN_FAILED");
+        pending_wav_path_.clear();
+        if (!ok) {
+            set_error_locked("INVALID_OR_OVERSIZED_WAV");
             xSemaphoreGive(mutex_);
-            continue;
+            return;
         }
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        machine_.dispatch(AudioCommand::BeginPlayback);
-        diagnostics_.state = machine_.state();
-        const bool muted = diagnostics_.muted;
-        const bool alert = alert_clip_;
-        const float owner_volume = diagnostics_.volume;
-        xSemaphoreGive(mutex_);
-        // A muted device stays muted for new clips (set_muted(false) unmutes),
-        // except a clock alert: it rings through mute, never below the alert minimum.
-        if (alert) {
-            esp_codec_dev_set_out_vol(codec_, static_cast<int>(playback_gain(owner_volume, muted, true) * 100.0F));
-        }
-        if (!muted || alert) amplifier_.enable();
-
-        bool failed = false;
-        for (;;) {
-            xSemaphoreTake(mutex_, portMAX_DELAY);
-            if (shutting_down_ || generation != generation_) {
-                xSemaphoreGive(mutex_);
-                break;
-            }
-            if (machine_.state() == AudioState::Paused) {
-                xSemaphoreGive(mutex_);
-                vTaskDelay(pdMS_TO_TICKS(20));
-                continue;
-            }
-            if (cursor_ >= clip_.samples.size()) {
-                xSemaphoreGive(mutex_);
-                break;
-            }
-            const std::size_t count = std::min(kChunkSamples, clip_.samples.size() - cursor_);
-            std::copy_n(clip_.samples.data() + cursor_, count, chunk.data());
-            cursor_ += count;
-            float peak = 0.0F;
-            for (std::size_t i = 0; i < count; ++i) peak = std::max(peak, std::abs(static_cast<float>(chunk[i])) / 32768.0F);
-            diagnostics_.envelope = diagnostics_.muted && !alert ? 0.0F : diagnostics_.envelope * 0.7F + peak * 0.3F;
-            diagnostics_.progress = static_cast<float>(cursor_) / clip_.samples.size();
-            diagnostics_.buffered_frames = (clip_.samples.size() - cursor_) / std::max<std::uint8_t>(1, format.channels);
-            xSemaphoreGive(mutex_);
-            if (esp_codec_dev_write(codec_, chunk.data(), count * sizeof(std::int16_t)) != ESP_CODEC_DEV_OK) {
-                failed = true;
-                break;
-            }
-        }
-        if (alert) {
-            // Back to the owner's level for everything else.
-            xSemaphoreTake(mutex_, portMAX_DELAY);
-            const float volume = diagnostics_.volume;
-            xSemaphoreGive(mutex_);
-            esp_codec_dev_set_out_vol(codec_, static_cast<int>(volume * 100.0F));
-        }
-        amplifier_.disable();
-        esp_codec_dev_close(codec_);
-        xSemaphoreTake(mutex_, portMAX_DELAY);
-        if (generation == generation_) {
-            if (failed) set_error_locked("I2S_WRITE_FAILED");
-            else if (machine_.state() == AudioState::Playing) machine_.dispatch(AudioCommand::Complete);
-            diagnostics_.state = machine_.state();
-            diagnostics_.envelope = 0.0F;
-            diagnostics_.buffered_frames = 0;
-            clip_.samples.clear();
-            cursor_ = 0;
-        }
+        clip_ = std::move(loaded);
+        cursor_ = 0;
+        diagnostics_.format = clip_.format;
+        diagnostics_.buffered_frames = clip_.samples.size() /
+            std::max<std::uint8_t>(1, clip_.format.channels);
         xSemaphoreGive(mutex_);
     }
+
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (shutting_down_ || generation != generation_ || clip_.samples.empty()) {
+        xSemaphoreGive(mutex_);
+        return;
+    }
+    const AudioFormat format = clip_.format;
+    xSemaphoreGive(mutex_);
+
+    // C++ requires designated initializers in declaration order
+    // (bits_per_sample, channel, channel_mask, sample_rate, ...); assign instead.
+    esp_codec_dev_sample_info_t sample_info{};
+    sample_info.bits_per_sample = format.bits_per_sample;
+    sample_info.channel = format.channels;
+    sample_info.sample_rate = format.sample_rate;
+    if (esp_codec_dev_open(codec_, &sample_info) != ESP_CODEC_DEV_OK) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        set_error_locked("ES8311_OPEN_FAILED");
+        // Not tried again in a loop: the clip is dropped.
+        if (generation == generation_) clip_.samples.clear();
+        xSemaphoreGive(mutex_);
+        return;
+    }
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    machine_.dispatch(AudioCommand::BeginPlayback);
+    diagnostics_.state = machine_.state();
+    const bool muted = diagnostics_.muted;
+    const bool alert = alert_clip_;
+    const float owner_volume = diagnostics_.volume;
+    xSemaphoreGive(mutex_);
+    // A muted device stays muted for new clips (set_muted(false) unmutes),
+    // except a clock alert: it rings through mute, never below the alert minimum.
+    if (alert) {
+        esp_codec_dev_set_out_vol(codec_, static_cast<int>(playback_gain(owner_volume, muted, true) * 100.0F));
+    }
+    if (!muted || alert) amplifier_.enable();
+
+    bool failed = false;
+    for (;;) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (shutting_down_ || generation != generation_) {
+            xSemaphoreGive(mutex_);
+            break;
+        }
+        if (machine_.state() == AudioState::Paused) {
+            xSemaphoreGive(mutex_);
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        if (cursor_ >= clip_.samples.size()) {
+            xSemaphoreGive(mutex_);
+            break;
+        }
+        const std::size_t count = std::min(kChunkSamples, clip_.samples.size() - cursor_);
+        std::copy_n(clip_.samples.data() + cursor_, count, chunk.data());
+        cursor_ += count;
+        float peak = 0.0F;
+        for (std::size_t i = 0; i < count; ++i) peak = std::max(peak, std::abs(static_cast<float>(chunk[i])) / 32768.0F);
+        diagnostics_.envelope = diagnostics_.muted && !alert ? 0.0F : diagnostics_.envelope * 0.7F + peak * 0.3F;
+        diagnostics_.progress = static_cast<float>(cursor_) / clip_.samples.size();
+        diagnostics_.buffered_frames = (clip_.samples.size() - cursor_) / std::max<std::uint8_t>(1, format.channels);
+        xSemaphoreGive(mutex_);
+        if (esp_codec_dev_write(codec_, chunk.data(), count * sizeof(std::int16_t)) != ESP_CODEC_DEV_OK) {
+            failed = true;
+            break;
+        }
+    }
+    if (alert) {
+        // Back to the owner's level for everything else.
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        const float volume = diagnostics_.volume;
+        xSemaphoreGive(mutex_);
+        esp_codec_dev_set_out_vol(codec_, static_cast<int>(volume * 100.0F));
+    }
+    amplifier_.disable();
+    esp_codec_dev_close(codec_);
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    if (generation == generation_) {
+        if (failed) set_error_locked("I2S_WRITE_FAILED");
+        else if (machine_.state() == AudioState::Playing) machine_.dispatch(AudioCommand::Complete);
+        diagnostics_.state = machine_.state();
+        diagnostics_.envelope = 0.0F;
+        diagnostics_.buffered_frames = 0;
+        clip_.samples.clear();
+        cursor_ = 0;
+    }
+    xSemaphoreGive(mutex_);
+}
+
+// The radio, until a clip comes, the stream closes or is held, or the network
+// is late for longer than kStreamUnderrunMs.
+void Esp32AudioBackend::play_stream_now() {
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const AudioFormat format = stream_format_;
+    const std::uint32_t stream_generation = stream_generation_;
+    const bool muted = diagnostics_.muted;
+    xSemaphoreGive(mutex_);
+    esp_codec_dev_sample_info_t sample_info{};
+    sample_info.bits_per_sample = 16;
+    sample_info.channel = format.channels;
+    sample_info.sample_rate = format.sample_rate;
+    if (esp_codec_dev_open(codec_, &sample_info) != ESP_CODEC_DEV_OK) {
+        // The radio's next push then fails, and it tells the owner.
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        std::int16_t* ring = ring_;
+        ring_ = nullptr;
+        ring_capacity_ = ring_read_ = ring_size_ = 0;
+        stream_open_ = false;
+        diagnostics_.error_code = "ES8311_OPEN_FAILED";
+        xSemaphoreGive(mutex_);
+        heap_caps_free(ring);
+        return;
+    }
+    if (!muted) amplifier_.enable();
+    std::array<std::int16_t, kChunkSamples> chunk{};
+    const std::size_t whole = kChunkSamples - kChunkSamples % format.channels;
+    const std::uint32_t chunk_ms = static_cast<std::uint32_t>(whole / format.channels * 1000U / format.sample_rate);
+    std::uint32_t late_ms = 0;
+    for (;;) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (shutting_down_ || stream_generation != stream_generation_ || !stream_open_ || stream_hold_ ||
+            clip_pending_locked()) {
+            xSemaphoreGive(mutex_);
+            break;
+        }
+        std::size_t count = std::min(whole, ring_size_);
+        count -= count % format.channels;
+        const std::size_t first = std::min(count, ring_capacity_ - ring_read_);
+        std::copy_n(ring_ + ring_read_, first, chunk.data());
+        std::copy_n(ring_, count - first, chunk.data() + first);
+        ring_read_ = ring_capacity_ ? (ring_read_ + count) % ring_capacity_ : 0;
+        ring_size_ -= count;
+        xSemaphoreGive(mutex_);
+        if (count == 0) {
+            // Silence keeps the codec clocked (no buzz from a repeated buffer).
+            late_ms += std::max<std::uint32_t>(1, chunk_ms);
+            if (late_ms > kStreamUnderrunMs) break;
+            chunk.fill(0);
+            count = whole;
+        } else {
+            late_ms = 0;
+        }
+        if (esp_codec_dev_write(codec_, chunk.data(), count * sizeof(std::int16_t)) != ESP_CODEC_DEV_OK) break;
+    }
+    amplifier_.disable();
+    esp_codec_dev_close(codec_);
+}
+
+bool Esp32AudioBackend::stream_open(std::uint32_t sample_rate, std::uint8_t channels) {
+    if (!mutex_ || !codec_ || sample_rate < 8000 || sample_rate > 48000 || channels < 1 || channels > 2) return false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const bool same = stream_open_ && stream_format_.sample_rate == sample_rate && stream_format_.channels == channels;
+    xSemaphoreGive(mutex_);
+    if (same) return true;
+    const std::size_t capacity = static_cast<std::size_t>(sample_rate) * channels * kStreamSeconds;
+    auto* ring = static_cast<std::int16_t*>(
+        heap_caps_malloc(capacity * sizeof(std::int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!ring) return false;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    std::int16_t* old = ring_;
+    ring_ = ring;
+    ring_capacity_ = capacity;
+    ring_read_ = ring_size_ = 0;
+    stream_format_.sample_rate = sample_rate;
+    stream_format_.channels = channels;
+    stream_format_.bits_per_sample = 16;
+    stream_open_ = true;
+    ++stream_generation_;
+    const TaskHandle_t task = task_;
+    xSemaphoreGive(mutex_);
+    heap_caps_free(old);  // the output task copies under the lock, never from a stale ring
+    if (task) xTaskNotifyGive(task);
+    return true;
+}
+
+bool Esp32AudioBackend::stream_push(const std::int16_t* samples, std::size_t frames) {
+    if (!mutex_ || !samples || frames == 0 || frames > kMaxPushFrames) return false;
+    for (std::uint32_t waited = 0;; waited += 10) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+        if (!stream_open_) {
+            xSemaphoreGive(mutex_);
+            return false;
+        }
+        const std::size_t count = frames * stream_format_.channels;
+        if (ring_capacity_ - ring_size_ >= count) {
+            const std::size_t write = (ring_read_ + ring_size_) % ring_capacity_;
+            const std::size_t first = std::min(count, ring_capacity_ - write);
+            std::copy_n(samples, first, ring_ + write);
+            std::copy_n(samples + first, count - first, ring_);
+            ring_size_ += count;
+            const TaskHandle_t task = task_;
+            xSemaphoreGive(mutex_);
+            if (task) xTaskNotifyGive(task);
+            return true;
+        }
+        xSemaphoreGive(mutex_);
+        if (waited >= 1000) return false;  // the output has stalled
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+std::uint32_t Esp32AudioBackend::stream_buffered_ms() const {
+    if (!mutex_) return 0;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    const std::uint32_t buffered = stream_open_ && stream_format_.sample_rate > 0 && stream_format_.channels > 0
+        ? static_cast<std::uint32_t>(ring_size_ / stream_format_.channels * 1000U / stream_format_.sample_rate)
+        : 0U;
+    xSemaphoreGive(mutex_);
+    return buffered;
+}
+
+void Esp32AudioBackend::stream_close() {
+    if (!mutex_) return;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    std::int16_t* ring = ring_;
+    ring_ = nullptr;
+    ring_capacity_ = ring_read_ = ring_size_ = 0;
+    stream_open_ = false;
+    ++stream_generation_;
+    const TaskHandle_t task = task_;
+    xSemaphoreGive(mutex_);
+    heap_caps_free(ring);
+    if (task) xTaskNotifyGive(task);
+}
+
+void Esp32AudioBackend::stream_hold(bool hold) {
+    if (!mutex_) return;
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    stream_hold_ = hold;
+    const TaskHandle_t task = task_;
+    xSemaphoreGive(mutex_);
+    if (task) xTaskNotifyGive(task);
 }
 
 void Esp32AudioBackend::set_error_locked(const char* code) {

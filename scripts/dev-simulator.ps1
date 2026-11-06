@@ -6,7 +6,10 @@ param(
     [switch]$EnableIphoneAncs,
     [switch]$TraceIphoneAncs,
     [switch]$NoBrowser,
-    [switch]$Smoke
+    [switch]$Smoke,
+    # The Aoraton account signs in the way the board does: through
+    # scripts\aoraton-device-sign-in.mjs over File transfer (ADR 0010).
+    [switch]$AoratonDevice
 )
 
 $ErrorActionPreference = 'Stop'
@@ -117,6 +120,11 @@ $env:AURA_BRIDGE_WORKDIR = Join-Path $repo 'bridge\runtime\assistant_sandbox'
 # Your own aoraton.com account: config\aoraton.local.json comes from setup-aoraton.ps1
 # (public Supabase URL and anon key only). Without it the Aoraton screens show DEMO rooms.
 $aoratonConfig = Join-Path $repo 'config\aoraton.local.json'
+if ($AoratonDevice -and -not $Smoke) {
+    # Like the board: the project settings come from the PC helper, not from here.
+    $env:AURA_AORATON_MODE = 'live'
+    $env:AURA_AORATON_SIGN_IN = 'device'
+}
 if (-not $Smoke -and -not $env:AURA_AORATON_MODE -and (Test-Path -LiteralPath $aoratonConfig)) {
     $aoraton = Get-Content -LiteralPath $aoratonConfig -Raw -Encoding UTF8 | ConvertFrom-Json
     $env:AURA_AORATON_URL = $aoraton.url
@@ -155,7 +163,12 @@ try {
     Write-Host "Speech recognition: $SpeechProvider"
     Write-Host "Speech synthesis: $TtsProvider"
     if ($EnableIphoneAncs) { Write-Host 'iPhone ANCS: ON (private in-memory Windows transport)' }
-    if ($env:AURA_AORATON_MODE -eq 'live') {
+    if ($env:AURA_AORATON_SIGN_IN -eq 'device') {
+        Write-Host 'Aoraton: device mode, signed in the way the board is:'
+        Write-Host '  1. In AURA: Messages > account > Sign in with Google (it opens File transfer).'
+        Write-Host '  2. On this PC: node scripts\aoraton-device-sign-in.mjs --address <address> --code <code>'
+        Write-Host '     (the address and the six digits File transfer shows; add --invite "<link>" for a room).'
+    } elseif ($env:AURA_AORATON_MODE -eq 'live') {
         Write-Host 'Aoraton: your aoraton.com account (Aoraton > Sign in with Google)'
         if ($env:AURA_INCO_ENABLED -eq '1') {
             Write-Host 'inco: ON - AURA answers its own @inco messages (sent to Gemini through inco-ai)'

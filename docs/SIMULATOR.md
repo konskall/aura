@@ -55,6 +55,16 @@ Rooms refresh every 10 s (polling, not realtime). Sending always goes through th
 
 Then a message like «@inco τι ώρα είναι;» sent from AURA, in a room where inco is enabled, gets inco's reply in a few seconds. The reply can also be read on aoraton.com. The terminal shows `AURA inco: answered <id>`, or a code such as `RATE_LIMITED (429)`.
 
+### Signing in the way the board does (`run.bat device`)
+
+`run.bat device` (or `run.bat mock device`, or `dev-simulator.ps1 -AoratonDevice`) runs the account exactly as the board does ([ADR 0010](ADR/0010-device-aoraton-account.md)): the simulator does not read `config\aoraton.local.json` and does not open the browser itself.
+
+1. In AURA: Messages → account → **Σύνδεση με Google**. It opens File transfer with an address and a six-digit code.
+2. On the same PC: `node scripts\aoraton-device-sign-in.mjs --address <address> --code <code>`. The helper sends the project settings, Google's page opens in the browser, and the code goes back to the simulator, which completes the sign-in with its own PKCE verifier.
+3. Unlock the room keys in AURA, or add `--invite "<link>"` to the helper for a room.
+
+The settings and the session are kept apart from the usual sign-in (`%LOCALAPPDATA%\AURA\aoraton-device-settings.txt` and `aoraton-device.dpapi`), as the board keeps them in its NVS. A restart signs in again without the PC. `aura_aoraton_device_mode_interop` runs the same path against a local fake.
+
 ## Voice and companion features (v13)
 
 For repeat Groq + Azure tests, put newly rotated credentials in the repository's ignored `.env`:

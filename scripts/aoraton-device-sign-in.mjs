@@ -105,14 +105,18 @@ export function openInBrowser(url) {
   child.unref();
 }
 
+// `allowLoopbackProject` is for the tests' local fake Supabase over
+// http://127.0.0.1 only; the command line never sets it.
 export async function signInDevice({ address, code, config, invite, openBrowser = openInBrowser,
-  log = (line) => console.log(line), timeouts = {} }) {
+  log = (line) => console.log(line), timeouts = {}, allowLoopbackProject = false }) {
   const limits = { ...DEFAULT_TIMEOUTS, ...timeouts };
   if (!ADDRESS_RE.test(address ?? '')) {
     throw new DeviceSignInError('Give the address the device shows, for example http://192.168.1.23:8788');
   }
   if (!CODE_RE.test(code ?? '')) throw new DeviceSignInError('The code is the six digits the device shows.');
-  if (typeof config?.url !== 'string' || !config.url.startsWith('https://') || typeof config.anon_key !== 'string') {
+  const projectOk = typeof config?.url === 'string' &&
+    (config.url.startsWith('https://') || (allowLoopbackProject && /^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(config.url)));
+  if (!projectOk || typeof config.anon_key !== 'string') {
     throw new DeviceSignInError('config/aoraton.local.json needs the project url and anon_key (scripts/setup-aoraton.ps1).');
   }
   let session;

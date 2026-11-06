@@ -1,6 +1,7 @@
 #include "aura/radio.hpp"
 
 #include "aura/json_reader.hpp"
+#include "aura/mp3_decoder.hpp"
 #include "aura/text_util.hpp"
 
 #include <algorithm>
@@ -136,6 +137,140 @@ RadioIntent analyze_radio_intent(std::string_view text) {
     // Without a request verb only a bare "ραδιόφωνο (παρακαλώ)" is a command; a
     // sentence or question about the radio belongs to the assistant.
     if (radio && std::all_of(words.begin(), words.end(), request_filler)) return {RadioIntentKind::Open, true};
+    return {};
+}
+
+bool split_stream_url(std::string_view url, StreamUrl& out) {
+    out = {};
+    if (url.empty() || url.size() > 2048) return false;
+    for (const unsigned char ch : url) {
+        if (ch < 0x21 || ch > 0x7E) return false;
+    }
+    std::string_view rest;
+    if (url.rfind("https://", 0) == 0) {
+        out.secure = true;
+        rest = url.substr(8);
+    } else if (url.rfind("http://", 0) == 0) {
+        rest = url.substr(7);
+    } else {
+        return false;
+    }
+    const auto fragment = rest.find('#');
+    if (fragment != std::string_view::npos) rest = rest.substr(0, fragment);
+    const auto path_at = rest.find_first_of("/?");
+    auto authority = rest.substr(0, path_at);
+    std::string path(path_at == std::string_view::npos ? std::string_view("/") : rest.substr(path_at));
+    if (path.front() == '?') path.insert(path.begin(), '/');
+    if (authority.empty() || authority.find_first_of("@[]") != std::string_view::npos) return false;
+    std::uint32_t port = out.secure ? 443U : 80U;
+    const auto colon = authority.find(':');
+    if (colon != std::string_view::npos) {
+        const auto digits = authority.substr(colon + 1);
+        if (digits.empty() || digits.size() > 5) return false;
+        port = 0;
+        for (const char ch : digits) {
+            if (ch < '0' || ch > '9') return false;
+            port = port * 10U + static_cast<std::uint32_t>(ch - '0');
+        }
+        if (port == 0 || port > 65535) return false;
+        authority = authority.substr(0, colon);
+    }
+    if (authority.empty()) return false;
+    out.host.assign(authority);
+    out.port = static_cast<std::uint16_t>(port);
+    out.path = std::move(path);
+    return true;
+}
+
+std::string stream_request(const StreamUrl& url) {
+    std::string host = url.host;
+    if (url.port != (url.secure ? 443 : 80)) host += ":" + std::to_string(url.port);
+    return "GET " + url.path + " HTTP/1.0\r\nHost: " + host +
+           "\r\nUser-Agent: AURA-Radio/1.0\r\nAccept: audio/mpeg,*/*;q=0.5\r\nIcy-MetaData: 1\r\n"
+           "Connection: close\r\n\r\n";
+}
+
+bool parse_stream_redirect(std::string_view head, std::string& location) {
+    location.clear();
+    const auto line_end = head.find("\r\n");
+    const auto status_line = head.substr(0, line_end);
+    if (status_line.rfind("HTTP/1.0 ", 0) != 0 && status_line.rfind("HTTP/1.1 ", 0) != 0) return false;
+    const auto status = status_line.substr(9, 3);
+    if (status != "301" && status != "302" && status != "303" && status != "307" && status != "308") return false;
+    if (status_line.size() > 12 && status_line[12] != ' ') return false;
+    if (line_end == std::string_view::npos) return false;
+    std::size_t position = line_end + 2;
+    while (position < head.size()) {
+        const auto end = head.find("\r\n", position);
+        const auto line = head.substr(position, end == std::string_view::npos ? std::string_view::npos : end - position);
+        if (line.empty()) break;
+        const auto colon = line.find(':');
+        if (colon != std::string_view::npos) {
+            std::string name(line.substr(0, colon));
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) {
+                return static_cast<char>(ch >= 'A' && ch <= 'Z' ? ch + 32 : ch);
+            });
+            if (name == "location") {
+                auto value = line.substr(colon + 1);
+                while (!value.empty() && value.front() == ' ') value.remove_prefix(1);
+                while (!value.empty() && value.back() == ' ') value.remove_suffix(1);
+                if (value.empty() || value.size() > 2048 ||
+                    (value.rfind("http://", 0) != 0 && value.rfind("https://", 0) != 0))
+                    return false;
+                for (const unsigned char ch : value) {
+                    if (ch < 0x21 || ch > 0x7E) return false;
+                }
+                location.assign(value);
+                return true;
+            }
+        }
+        if (end == std::string_view::npos) break;
+        position = end + 2;
+    }
+    return false;
+}
+
+std::string radio_pump(std::size_t metaint, IRadioAudioSink& sink, const RadioPumpIo& io,
+                       const RadioPumpLimits& limits, bool& heard_audio) {
+    IcyStreamReader icy(metaint);
+    Mp3StreamDecoder decoder;
+    std::vector<std::uint8_t> input(16U * 1024U);
+    std::vector<std::uint8_t> audio_bytes;
+    std::size_t received_total = 0;
+    int quiet_reads = 0;
+    while (io.current()) {
+        const int received = io.read(input.data(), static_cast<int>(input.size()));
+        if (received == kRadioReadTimeout) {
+            if (++quiet_reads >= limits.max_quiet_reads) return "RADIO_TIMEOUT";
+            continue;
+        }
+        if (received < 0) return "RADIO_NETWORK";
+        if (received == 0) return heard_audio ? "RADIO_STREAM_ENDED" : "RADIO_DECODE";
+        quiet_reads = 0;
+        received_total += static_cast<std::size_t>(received);
+        if (!heard_audio && received_total > limits.max_bytes_before_audio) return "RADIO_DECODE";
+        audio_bytes.clear();
+        icy.feed(input.data(), static_cast<std::size_t>(received), audio_bytes);
+        std::string title;
+        if (icy.take_title(title) && !title.empty()) io.title(std::move(title));
+        decoder.feed(audio_bytes.data(), audio_bytes.size());
+        while (io.current()) {
+            Mp3Pcm pcm;
+            const auto frames = decoder.decode(pcm, 1152U * 8U);
+            if (frames == 0) break;
+            if (!sink.open(pcm.sample_rate, pcm.channels) || !sink.push(pcm.samples.data(), frames)) {
+                return io.current() ? "RADIO_AUDIO" : std::string{};
+            }
+            if (!heard_audio) {
+                heard_audio = true;
+                io.playing();
+            }
+            while (io.current() && sink.buffered_ms() > limits.high_water_ms) {
+                io.wait(40);
+                if (sink.buffered_ms() <= limits.low_water_ms) break;
+            }
+        }
+    }
     return {};
 }
 

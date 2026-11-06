@@ -46,4 +46,12 @@ foreach ($source in $sources) {
 if ($failed.Count -gt 0) {
     throw "Shared sources fail under ESP-IDF 5.5 C++ flags: $($failed -join ', ')"
 }
-Write-Host "ESP-IDF flag check passed for $($sources.Count) shared sources (gnu++2b, no exceptions/RTTI, -Wall -Wextra -Werror)."
+# MP3 decoding runs on the device's small task stacks (the assistant's
+# worker has 12 KB): no function of the decoder may need more than 6 KB.
+$stackObject = Join-Path ([System.IO.Path]::GetTempPath()) 'aura-mp3-stack-check.o'
+& $gxx -std=gnu++2b -O2 -fno-exceptions -fno-rtti '-Werror=stack-usage=6144' @includes -c `
+    (Join-Path $repo 'shared\core\src\mp3_decoder.cpp') -o $stackObject
+$stackExit = $LASTEXITCODE
+Remove-Item -LiteralPath $stackObject -ErrorAction SilentlyContinue
+if ($stackExit -ne 0) { throw 'The MP3 decoder needs more than 6 KB of stack (shared/core/src/mp3_decoder.cpp).' }
+Write-Host "ESP-IDF flag check passed for $($sources.Count) shared sources (gnu++2b, no exceptions/RTTI, -Wall -Wextra -Werror); the MP3 decoder fits a 6 KB stack."

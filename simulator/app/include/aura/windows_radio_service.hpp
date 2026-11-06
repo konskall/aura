@@ -17,14 +17,9 @@ namespace aura::simulator {
 
 class WindowsAudioBackend;
 
-// Reconnecting: the stream dropped and is being joined again (text: why).
-enum class RadioWorkerEventType { Playing, Title, Reconnecting, Failed };
-
-struct RadioWorkerEvent {
-    RadioWorkerEventType type{RadioWorkerEventType::Failed};
-    std::uint64_t generation{0};
-    std::string text;
-};
+// Shared with the device (aura/radio.hpp).
+using aura::RadioWorkerEvent;
+using aura::RadioWorkerEventType;
 
 // Blocking WinHTTP and MP3 work lives on this worker. It communicates with
 // the UI thread through a bounded event queue and feeds only the thread-safe

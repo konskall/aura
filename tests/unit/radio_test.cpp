@@ -1,6 +1,8 @@
 #include "aura/mp3_decoder.hpp"
 #include "aura/radio.hpp"
 
+#include <algorithm>
+#include <functional>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -273,6 +275,201 @@ void mp3_tests() {
     expect(none.samples.size() < 1152U * 4U, "noise is not music");
 }
 
+
+// The platform's music output, stood in: it drains `wait` milliseconds at a time.
+struct FakeSink final : aura::IRadioAudioSink {
+    std::uint32_t rate{0};
+    std::uint8_t channels{0};
+    std::size_t frames{0};
+    std::uint32_t buffered{0};
+    std::uint32_t peak{0};
+    bool refuse{false};
+    bool open(std::uint32_t sample_rate, std::uint8_t channel_count) override {
+        if (refuse) return false;
+        rate = sample_rate;
+        channels = channel_count;
+        return true;
+    }
+    bool push(const std::int16_t* samples, std::size_t count) override {
+        if (!samples || refuse) return false;
+        frames += count;
+        buffered += static_cast<std::uint32_t>(count * 1000U / rate);
+        peak = std::max(peak, buffered);
+        return true;
+    }
+    std::uint32_t buffered_ms() const override { return buffered; }
+};
+
+// An ICY stream of `count` silent frames with a title every `metaint` bytes.
+std::vector<std::uint8_t> icy_stream(int count, std::size_t metaint, const std::string& title) {
+    const auto audio = silent_frames(count);
+    std::string meta = "StreamTitle='" + title + "';";
+    meta.resize((meta.size() + 15) / 16 * 16, '\0');
+    std::vector<std::uint8_t> stream;
+    for (std::size_t at = 0; at < audio.size(); at += metaint) {
+        const auto take = std::min(metaint, audio.size() - at);
+        stream.insert(stream.end(), audio.begin() + static_cast<std::ptrdiff_t>(at),
+                      audio.begin() + static_cast<std::ptrdiff_t>(at + take));
+        if (take == metaint) {
+            stream.push_back(static_cast<std::uint8_t>(meta.size() / 16));
+            stream.insert(stream.end(), meta.begin(), meta.end());
+        }
+    }
+    return stream;
+}
+
+void pump_tests() {
+    using namespace aura;
+    RadioPumpLimits limits;
+    limits.high_water_ms = 300;
+    limits.low_water_ms = 100;
+    limits.max_quiet_reads = 3;
+    limits.max_bytes_before_audio = 64U * 1024U;
+
+    {
+        // A whole stream: titles go to the owner, MP3 to the output, which is
+        // kept between the water marks; the end of the stream ends the pump.
+        const auto stream = icy_stream(40, 1000, "Νίκος - Τραγούδι");
+        std::size_t at = 0;
+        FakeSink sink;
+        std::vector<std::string> titles;
+        int playing = 0;
+        int waits = 0;
+        RadioPumpIo io;
+        io.read = [&](std::uint8_t* buffer, int size) {
+            const auto take = std::min<std::size_t>({stream.size() - at, static_cast<std::size_t>(size), 777});
+            std::copy_n(stream.data() + at, take, buffer);
+            at += take;
+            return static_cast<int>(take);
+        };
+        io.current = [] { return true; };
+        io.title = [&](std::string title) { titles.push_back(std::move(title)); };
+        io.playing = [&] { ++playing; };
+        io.wait = [&](std::uint32_t ms) {
+            ++waits;
+            sink.buffered = sink.buffered > ms ? sink.buffered - ms : 0;
+        };
+        bool heard = false;
+        const auto code = radio_pump(1000, sink, io, limits, heard);
+        expect(code == "RADIO_STREAM_ENDED" && heard && playing == 1, "the end of a heard stream is reported once");
+        expect(!titles.empty() && titles.front() == "Νίκος - Τραγούδι", "the title reaches the owner");
+        expect(sink.rate == 44100 && sink.channels == 2, "the output opens at the stream's format");
+        // The decoder holds back two of the largest frames (2,882 bytes) for more
+        // data; at the end of a live stream they are not drained (about 0.2 s).
+        expect(sink.frames == 1152U * 34U, "every frame reaches the output, but the few the decoder holds back");
+        expect(waits > 0 && sink.peak <= limits.high_water_ms + 1152U * 8U * 1000U / 44100U,
+               "the output is kept near the high water mark");
+    }
+
+    const auto run = [&](const std::function<int(std::uint8_t*, int)>& read, FakeSink& sink, bool& heard,
+                         const std::function<bool()>& current = [] { return true; }) {
+        RadioPumpIo io;
+        io.read = read;
+        io.current = current;
+        io.title = [](std::string) {};
+        io.playing = [] {};
+        io.wait = [&](std::uint32_t ms) { sink.buffered = sink.buffered > ms ? sink.buffered - ms : 0; };
+        return radio_pump(0, sink, io, limits, heard);
+    };
+    {
+        FakeSink sink;
+        bool heard = false;
+        std::size_t sent = 0;
+        const auto code = run([&](std::uint8_t* buffer, int size) {
+            for (int index = 0; index < size; ++index) buffer[index] = static_cast<std::uint8_t>(sent + index * 37 + 11);
+            sent += static_cast<std::size_t>(size);
+            return size;
+        }, sink, heard);
+        expect(code == "RADIO_DECODE" && !heard && sink.frames == 0, "a stream that is not MP3 is refused");
+    }
+    {
+        FakeSink sink;
+        bool heard = false;
+        int reads = 0;
+        expect(run([&](std::uint8_t*, int) { ++reads; return kRadioReadTimeout; }, sink, heard) == "RADIO_TIMEOUT" &&
+                   reads == 3,
+               "a silent server ends the attempt after the quiet reads");
+        expect(run([](std::uint8_t*, int) { return kRadioReadError; }, sink, heard) == "RADIO_NETWORK",
+               "a broken connection is a network error");
+        expect(run([](std::uint8_t*, int) { return 0; }, sink, heard) == "RADIO_DECODE",
+               "a stream that ends before any audio is not playable");
+    }
+    {
+        // Another station was chosen: the pump stops without a code and feeds nothing more.
+        const auto stream = silent_frames(40);
+        std::size_t at = 0;
+        bool current = true;
+        FakeSink sink;
+        bool heard = false;
+        const auto code = run([&](std::uint8_t* buffer, int size) {
+            const auto take = std::min<std::size_t>({stream.size() - at, static_cast<std::size_t>(size), 4000});
+            std::copy_n(stream.data() + at, take, buffer);
+            at += take;
+            if (at > 6000) current = false;
+            return static_cast<int>(take);
+        }, sink, heard, [&] { return current; });
+        const auto frames = sink.frames;
+        expect(code.empty() && frames < 1152U * 40U, "a changed station ends the pump quietly");
+    }
+    {
+        FakeSink sink;
+        sink.refuse = true;
+        const auto stream = silent_frames(20);
+        std::size_t at = 0;
+        bool heard = false;
+        const auto code = run([&](std::uint8_t* buffer, int size) {
+            const auto take = std::min<std::size_t>(stream.size() - at, static_cast<std::size_t>(size));
+            std::copy_n(stream.data() + at, take, buffer);
+            at += take;
+            return static_cast<int>(take);
+        }, sink, heard);
+        expect(code == "RADIO_AUDIO" && !heard, "an output that refuses the audio is reported");
+    }
+
+    std::string location;
+    expect(parse_stream_redirect("HTTP/1.1 302 Found\r\nServer: x\r\nlocation:  https://cdn.example/live.mp3 \r\n\r\n",
+                                 location) &&
+               location == "https://cdn.example/live.mp3",
+           "a redirect gives its new address");
+    expect(parse_stream_redirect("HTTP/1.0 301 Moved\r\nLocation: http://other.example:8000/;\r\n\r\n", location) &&
+               location == "http://other.example:8000/;",
+           "a permanent move too");
+    expect(!parse_stream_redirect("HTTP/1.1 200 OK\r\nLocation: https://x.example/\r\n\r\n", location) &&
+               !parse_stream_redirect("ICY 200 OK\r\n\r\n", location) &&
+               !parse_stream_redirect("HTTP/1.1 302 Found\r\nLocation: /relative\r\n\r\n", location) &&
+               !parse_stream_redirect("HTTP/1.1 302 Found\r\nLocation: ftp://x.example/\r\n\r\n", location) &&
+               !parse_stream_redirect("HTTP/1.1 302 Found\r\n\r\n", location),
+           "anything else is not a redirect to follow");
+}
+
+
+void url_tests() {
+    using namespace aura;
+    StreamUrl url;
+    expect(split_stream_url("http://stream.example.gr:8000/live.mp3", url) && !url.secure &&
+               url.host == "stream.example.gr" && url.port == 8000 && url.path == "/live.mp3",
+           "an http stream with its port");
+    expect(split_stream_url("https://cdn.example/radio?quality=high#player", url) && url.secure && url.port == 443 &&
+               url.host == "cdn.example" && url.path == "/radio?quality=high",
+           "https, the default port, the query kept and the fragment dropped");
+    expect(split_stream_url("http://host.example", url) && url.port == 80 && url.path == "/", "a bare host asks for /");
+    for (const char* bad : {"ftp://host.example/", "http://", "http://host:/x", "http://host:70000/",
+                            "http://user@host.example/", "http://[::1]/stream", "http://host example/",
+                            "http://host.example/\x7f"}) {
+        expect(!split_stream_url(bad, url), "an address the device does not open");
+    }
+    expect(!split_stream_url("http://h.example/" + std::string(2100, 'a'), url), "a bounded address");
+
+    expect(split_stream_url("http://stream.example.gr:8000/live.mp3", url) &&
+               stream_request(url) ==
+                   "GET /live.mp3 HTTP/1.0\r\nHost: stream.example.gr:8000\r\nUser-Agent: AURA-Radio/1.0\r\n"
+                   "Accept: audio/mpeg,*/*;q=0.5\r\nIcy-MetaData: 1\r\nConnection: close\r\n\r\n",
+           "HTTP/1.0 with ICY titles asked for, and the port in Host");
+    expect(split_stream_url("https://cdn.example/radio", url) &&
+               stream_request(url).find("\r\nHost: cdn.example\r\n") != std::string::npos,
+           "no default port in Host");
+}
+
 }  // namespace
 
 int main() {
@@ -280,6 +477,8 @@ int main() {
     model_tests();
     icy_tests();
     mp3_tests();
+    pump_tests();
+    url_tests();
     if (failures == 0) std::cout << "aura_radio_tests passed\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

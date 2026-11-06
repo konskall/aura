@@ -16,6 +16,7 @@
 #include "aura/control_events.hpp"
 #include "aura/device_status.hpp"
 #include "aura/aoraton_account_transport.hpp"
+#include "aura/aoraton_device_mode.hpp"
 #include "aura/fail_closed_aoraton_transport.hpp"
 #include "aura/local_codex_provider.hpp"
 #include "aura/mock_provider.hpp"
@@ -345,6 +346,36 @@ bool write_text_store(const std::filesystem::path& path, const std::string& data
 #endif
     return true;
 }
+
+// An icon-only button (one image, no layout) holds its icon in its middle: a
+// platter's 16 px padding otherwise leaves the icon at the top left (the chat's
+// voice-message microphone sat 5 px up and to the left, 2026-11-06).
+void find_off_centre_icons(lv_obj_t* object, const std::string& view, std::vector<std::string>& found) {
+    if (lv_obj_is_hidden(object)) return;
+    const std::uint32_t count = lv_obj_get_child_count(object);
+    if (count == 1 && lv_obj_is_clickable(object) &&
+        lv_obj_get_style_layout(object, LV_PART_MAIN) == LV_LAYOUT_NONE) {
+        lv_obj_t* icon = lv_obj_get_child(object, 0);
+        if (lv_obj_check_type(icon, &lv_image_class) && !lv_obj_is_hidden(icon)) {
+            lv_area_t outer{};
+            lv_area_t inner{};
+            lv_obj_get_coords(object, &outer);
+            lv_obj_get_coords(icon, &inner);
+            // Twice the distance between the centres: 1 px of rounding is allowed.
+            const int dx = (inner.x1 + inner.x2) - (outer.x1 + outer.x2);
+            const int dy = (inner.y1 + inner.y2) - (outer.y1 + outer.y2);
+            if (std::abs(dx) > 2 || std::abs(dy) > 2) {
+                found.push_back(view + ": a " + std::to_string(lv_area_get_width(&inner)) + " px icon at (" +
+                                std::to_string(inner.x1) + "," + std::to_string(inner.y1) + ") in a " +
+                                std::to_string(lv_area_get_width(&outer)) + "x" +
+                                std::to_string(lv_area_get_height(&outer)) + " button at (" +
+                                std::to_string(outer.x1) + "," + std::to_string(outer.y1) + ")");
+            }
+        }
+    }
+    for (std::uint32_t index = 0; index < count; ++index)
+        find_off_centre_icons(lv_obj_get_child(object, static_cast<std::int32_t>(index)), view, found);
+}
 }
 
 int main(int argc, char** argv) {
@@ -427,6 +458,10 @@ int main(int argc, char** argv) {
     std::unique_ptr<aura::IAoratonService> aoraton_service;
     std::unique_ptr<aura::simulator::FailClosedAoratonTransport> aoraton_fail_closed_transport;
     std::unique_ptr<aura::simulator::AoratonAccountTransport> aoraton_account_transport;
+    // AURA_AORATON_SIGN_IN=device: the account signs in the way the board does,
+    // through the PC helper over File transfer (ADR 0010).
+    std::unique_ptr<aura::simulator::AoratonDeviceMode> aoraton_device_mode;
+    const bool aoraton_device_sign_in = aura::simulator::aoraton_device_sign_in_requested();
     aura::WindowsAoratonAccountCrypto aoraton_id_crypto;
     if (aoraton_mode_name == "mock") {
         aoraton_service = std::make_unique<aura::MockAoratonService>();
@@ -436,11 +471,26 @@ int main(int argc, char** argv) {
         aoraton_mailbox = std::make_unique<aura::AoratonMailbox>();
         aura::simulator::AoratonTransportOptions aoraton_options;
         std::string aoraton_config_error;
+        aura::simulator::AoratonDeviceModeOptions device_options;
+        if (aoraton_device_sign_in &&
+            aura::simulator::load_aoraton_device_mode_options(device_options, aoraton_config_error)) {
+            aoraton_service = std::make_unique<aura::RealAoratonService>(
+                *aoraton_mailbox, runtime_mode, [&aoraton_id_crypto] {
+                    return aura::aoraton_new_client_message_id(aoraton_id_crypto);
+                });
+            aoraton_device_mode =
+                std::make_unique<aura::simulator::AoratonDeviceMode>(*aoraton_mailbox, std::move(device_options));
+            std::cerr << "AURA Aoraton " << (runtime_mode == aura::AoratonRuntimeMode::IntegrationTest ? "TEST" : "LIVE")
+                      << ": device mode, signed in through scripts\\aoraton-device-sign-in.mjs over File transfer\n";
+        }
         // The owner's own aoraton.com account (docs/design/AURA_AORATON_ACCOUNT_LOGIN_DESIGN.md);
         // capture and interaction runs never sign in, so they keep the fail-closed adapter.
-        const bool account_configured = aura::simulator::load_aoraton_transport_options(aoraton_options,
+        const bool account_configured = !aoraton_device_sign_in &&
+                                        aura::simulator::load_aoraton_transport_options(aoraton_options,
                                                                                         aoraton_config_error);
-        if (account_configured) {
+        if (aoraton_device_mode) {
+            // The device mode, set up above.
+        } else if (account_configured) {
             aoraton_service = std::make_unique<aura::RealAoratonService>(
                 *aoraton_mailbox, runtime_mode, [&aoraton_id_crypto] {
                     return aura::aoraton_new_client_message_id(aoraton_id_crypto);
@@ -600,6 +650,10 @@ int main(int argc, char** argv) {
             aoraton_account_transport->set_location_city(weather.has_saved_location ? weather.saved_location.name
                                                                                     : std::string{});
         }
+        if (aoraton_device_mode) {
+            aoraton_device_mode->set_location_city(weather.has_saved_location ? weather.saved_location.name
+                                                                              : std::string{});
+        }
     };
     auto same_weather_location = [](const aura::WeatherLocation& left, const aura::WeatherLocation& right) {
         return left.name == right.name && std::fabs(left.latitude - right.latitude) < 0.0001 &&
@@ -730,6 +784,7 @@ int main(int argc, char** argv) {
     }
     // Deterministic runs never sign in to the owner's account.
     if (aoraton_account_transport && !deterministic_run) aoraton_account_transport->start();
+    if (aoraton_device_mode && !deterministic_run) aoraton_device_mode->start();
     aura::WifiModel wifi_model;
     aura::simulator::WindowsWifiService wifi_service;
     aura::simulator::WifiHostScan wifi_host;
@@ -1151,7 +1206,10 @@ int main(int argc, char** argv) {
     };
     companion_context.deterministic = deterministic_run;
     companion_context.store_dir = companion_store_dir;
+    companion_context.aoraton_link = aoraton_device_mode ? aoraton_device_mode->endpoint() : nullptr;
     aura::simulator::CompanionRuntime companion(std::move(companion_context));
+    // As on the board: the account's Google button opens File transfer.
+    if (aoraton_device_mode) ui.set_aoraton_sign_in_relay(true);
     if (language_override) companion.set_language(*language_override);
     ui.set_language(companion.language());
     ui.set_appearance(appearance_override ? *appearance_override : companion.appearance());
@@ -2096,8 +2154,16 @@ int main(int argc, char** argv) {
             aura::UiView::DisplaySettings, aura::UiView::AppearanceSettings, aura::UiView::Update,
             aura::UiView::Radio, aura::UiView::RadioSearch, aura::UiView::Home,
         };
+        std::vector<std::string> off_centre;
         for (int pass = 0; pass < 10; ++pass) {
-            for (const auto view : views) ui.show(view);
+            for (const auto view : views) {
+                ui.show(view);
+                if (pass != 0) continue;
+                // Each screen once: every icon-only button centres its icon.
+                lv_obj_update_layout(lv_screen_active());
+                const std::string name = "view " + std::to_string(static_cast<int>(view));
+                find_off_centre_icons(lv_screen_active(), name, off_centre);
+            }
         }
         ui.show(aura::UiView::Home);
         lv_mem_monitor_t memory_after{};
@@ -2108,6 +2174,9 @@ int main(int argc, char** argv) {
                   << " shared-LVGL view transitions completed; LVGL used "
                   << used_before << " -> " << used_after << " bytes; fragmentation "
                   << static_cast<int>(memory_after.frag_pct) << "%\n";
+        for (const auto& line : off_centre) std::cerr << "AURA UI stress: an off-centre icon in " << line << '\n';
+        if (!off_centre.empty()) return 16;
+        std::cout << "AURA UI stress: every icon-only button centres its icon\n";
     }
 
     if (aoraton_pairing_smoke) {
@@ -7066,6 +7135,7 @@ int main(int argc, char** argv) {
         companion.poll(capture_scenario.empty() ? std::min<std::uint32_t>(elapsed, 100) : 0U);
         if (aoraton_fail_closed_transport) aoraton_fail_closed_transport->poll();
         aoraton.tick(std::min<std::uint32_t>(elapsed, 100));
+        if (aoraton_device_mode && !deterministic_run) aoraton_device_mode->pump(aoraton);
         const long long clock_second = runtime_ms / 1000;
         if (capture_scenario.empty() && clock_second != last_clock_second) {
             last_clock_second = clock_second;

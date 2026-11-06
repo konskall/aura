@@ -197,11 +197,11 @@ The authoritative suite runs everything that can be checked on a PC. It contacts
   - A native Release build.
   - An ESP-IDF-compatible compile of every shared source (`-Wall -Wextra -Werror`, no exceptions or RTTI).
 - **Tests.**
-  - 51 CTest suites, including loopback tests for streaming, Shoutcast radio, the realtime WebSocket and file transfer.
+  - 52 CTest suites, including loopback tests for streaming, Shoutcast radio, the realtime WebSocket and file transfer.
   - Interoperability checks against the Node tools:
     - the device's assistant instructions match the bridge's;
     - update signatures made by `scripts/update-signing.mjs` verify on the device's parser;
-    - `scripts/aoraton-device-sign-in.mjs` signs a stand-in device in through the real transfer server.
+    - `scripts/aoraton-device-sign-in.mjs` signs a stand-in device in through the real transfer server, and the simulator's device mode in against a local fake Supabase.
   - Media Foundation decodes voice messages (AAC, and Opus where installed) back to the encoded tone.
   - A check of the firmware's configuration: LVGL's memory, power management, encrypted NVS and the production security profile.
   - Bridge and control-page tests (`node --test`).
@@ -238,6 +238,7 @@ See [docs/HARDWARE.md](docs/HARDWARE.md).
 - Its own assistant: Groq listens and answers, Azure speaks ([ADR 0009](docs/ADR/0009-device-direct-cloud-assistant.md)).
 - The owner's aoraton.com account ([ADR 0010](docs/ADR/0010-device-aoraton-account.md)): the PC signs it in, it reads, sends, shows photos, plays and sends voice messages, and keeps the encrypted files on the microSD card, with the hybrid sync above.
 - Local file transfer over Wi-Fi (`esp_http_server`), which also receives the assistant's keys.
+- Internet radio: the Ράδιο app's stations, search and favourites (on the card), MP3 over http or https with Shoutcast's titles. A clip (speech, a chime, an alarm) pauses the station, which goes on after it.
 - Signed OTA updates with rollback, and iPhone ANCS through NimBLE.
 - Encrypted NVS from the first boot. Its key is an HMAC key that the first boot burns into eFuse block 5; this is permanent, but it does not stop reflashing.
 - Power management: 240 MHz while the screen is lit, 80 MHz otherwise, and a main loop that slows down with the screen.
@@ -265,12 +266,12 @@ Until the public key is set, the device refuses every update.
 node scripts/aoraton-device-sign-in.mjs --address http://<device address>:<port> --code <six digits>
 ```
 
-Google's page opens in the PC's browser; the device keeps its own session, and the PC never sees it. Unlock the room keys on the device itself; `--invite <link>` adds a room from an invite link.
+Google's page opens in the PC's browser; the device keeps its own session, and the PC never sees it. Unlock the room keys on the device itself; `--invite <link>` adds a room from an invite link. Before the board arrives, `run.bat device` makes the simulator sign in the same way ([docs/SIMULATOR.md](docs/SIMULATOR.md)).
 
 **What is not available on the device yet.**
 
 - **Needs more work.**
-  - Radio playback.
+  - Radio by voice: the device plays stations from the Ράδιο app, but "βάλε Σφαίρα" is understood only in the simulator.
   - Translation, and confirming the assistant's proposed actions.
 - **Needs the board.** Everything physical still has to be validated: display, touch, audio, battery and Wi-Fi/TLS behaviour.
 
@@ -302,7 +303,7 @@ Details: [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md) and the [Aoraton s
 - **There is no wake word.** No trained and measured Greek "Αύρα" model exists yet, so listening starts with a tap.
 - **Echo cancellation is untuned.** It works in tests, but still needs tuning in a real room and on the device's microphones.
 - **iPhone disconnect handling is untested live.** Detecting that the phone has gone, and reconnecting, needs a session with a paired iPhone.
-- **Radio has two limits.** Only MP3 stations are supported, and radio on the device waits for a playback backend.
+- **Radio has two limits.** Only MP3 stations are supported, and on the device it is built but not yet heard: it needs the board.
 
 ## Documentation
 

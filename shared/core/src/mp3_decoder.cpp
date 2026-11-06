@@ -4,6 +4,8 @@
 
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_ONLY_MP3
+// The per-frame scratch lives in State, not on the stack (see minimp3.h).
+#define MINIMP3_EXTERNAL_SCRATCH
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsign-compare"
@@ -22,15 +24,20 @@ namespace aura {
 
 struct Mp3StreamDecoder::State {
     mp3dec_t decoder{};
+    mp3dec_scratch_t scratch{};
     mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME]{};
 };
 
-Mp3StreamDecoder::Mp3StreamDecoder() : state_(std::make_unique<State>()) { mp3dec_init(&state_->decoder); }
+Mp3StreamDecoder::Mp3StreamDecoder() : state_(std::make_unique<State>()) {
+    mp3dec_init(&state_->decoder);
+    state_->decoder.external_scratch = &state_->scratch;
+}
 
 Mp3StreamDecoder::~Mp3StreamDecoder() = default;
 
 void Mp3StreamDecoder::reset() {
     mp3dec_init(&state_->decoder);
+    state_->decoder.external_scratch = &state_->scratch;
     input_.clear();
     consumed_ = 0;
 }

@@ -1,4 +1,5 @@
 #include "aura/aoraton_device_link.hpp"
+#include "aura/aoraton_real.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -142,6 +143,61 @@ int main() {
     long_room.keys.push_back(aura::AoratonUnlockedKey{});
     long_room.keys[0].room_key = std::string(129, 'r');
     expect(!aura::aoraton_encode_secrets(long_room, record), "a room key name has a bounded length");
+
+    {
+        // The UI thread's pump, between new settings and the account's restart:
+        // the PC's sign-in is accepted at once and starts when the account is
+        // ready; invites wait for it too.
+        aura::AoratonMailbox mailbox;
+        aura::RealAoratonService service(mailbox, aura::AoratonRuntimeMode::Live, [] { return std::string("p-1"); });
+        aura::AoratonDeviceLink pumped([](const aura::AoratonLinkConfig&) { return true; });
+        expect(pumped.configure(config(kUrl, anon_key())), "settings from the PC");
+        aura::aoraton_link_pump(pumped, service, true, false);
+        expect(pumped.request_sign_in() && pumped.status().state == AoratonLinkState::Starting,
+               "a sign-in asked for while the account restarts is accepted");
+        aura::aoraton_link_pump(pumped, service, true, false);
+        aura::AoratonCommand command;
+        expect(!mailbox.pop_command(command) && pumped.status().state == AoratonLinkState::Starting,
+               "and waits for the account");
+        aura::aoraton_link_pump(pumped, service, true, true);
+        expect(mailbox.pop_command(command) && command.type == aura::AoratonCommandType::BeginPairing,
+               "then the account starts it");
+        aura::AoratonEvent paired;
+        paired.type = aura::AoratonEventType::Paired;
+        expect(mailbox.push_event(std::move(paired)), "sign-in finished");
+        service.tick(1);
+        aura::aoraton_link_pump(pumped, service, true, true);
+        expect(pumped.status().state == AoratonLinkState::SignedIn, "the PC sees the account signed in");
+        expect(pumped.add_invite(kInvite), "an invite from the PC");
+        aura::aoraton_link_pump(pumped, service, true, false);
+        expect(!mailbox.pop_command(command), "an invite waits while the account restarts");
+        aura::aoraton_link_pump(pumped, service, true, true);
+        expect(mailbox.pop_command(command) && command.type == aura::AoratonCommandType::AddInviteKey &&
+                   command.plaintext == kInvite,
+               "then it reaches the account, inside its command");
+        command.clear_plaintext();
+        aura::aoraton_link_pump(pumped, service, false, false);
+        expect(pumped.status().state == AoratonLinkState::NotConfigured, "no settings: the PC is told so");
+    }
+
+    {
+        // Only a test's local fake may be plain http on 127.0.0.1, and only when
+        // the platform asks for it (the simulator's AURA_AORATON_ALLOW_LOOPBACK=1;
+        // the device never does).
+        const auto loopback = config("http://127.0.0.1:47123", anon_key());
+        expect(!aura::aoraton_link_config_valid(loopback), "loopback http is refused by default");
+        expect(aura::aoraton_link_config_valid(loopback, true), "a local fake is taken when asked for");
+        expect(!aura::aoraton_link_config_valid(config("http://127.0.0.1.example.com:47123", anon_key()), true) &&
+                   !aura::aoraton_link_config_valid(config("http://192.168.1.5:47123", anon_key()), true) &&
+                   !aura::aoraton_link_config_valid(config("http://127.0.0.1:47123/rest", anon_key()), true),
+               "and nothing else");
+        const std::string authorize = "http://127.0.0.1:47123/auth/v1/authorize?provider=google";
+        aura::AoratonDeviceLink strict([](const aura::AoratonLinkConfig&) { return true; });
+        expect(!strict.configure(loopback) && !strict.open(authorize), "a device link refuses it");
+        aura::AoratonDeviceLink test_link([](const aura::AoratonLinkConfig&) { return true; }, true);
+        expect(test_link.configure(loopback) && test_link.open(authorize), "a test's link takes it");
+        test_link.close();
+    }
 
     std::cout << "aoraton device link tests passed\n";
     return 0;

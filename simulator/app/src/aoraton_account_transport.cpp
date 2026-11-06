@@ -133,8 +133,9 @@ AoratonAccountTransport::AoratonAccountTransport(AoratonMailbox& mailbox, Aorato
       cache_files_(options_.store_path.empty() ? std::filesystem::path()
                                                : options_.store_path.parent_path() / L"aoraton-cache"),
       attachment_cache_(cache_files_),
-      worker_(mailbox, options_.config, http_, account_crypto_, message_crypto_, store_, channel_, &realtime_,
-              &voice_decoder_, &attachment_cache_) {}
+      worker_(mailbox, options_.config, http_, account_crypto_, message_crypto_, store_,
+              options_.sign_in_channel ? *options_.sign_in_channel : static_cast<IAoratonSignInChannel&>(channel_),
+              &realtime_, &voice_decoder_, &attachment_cache_) {}
 
 AoratonAccountTransport::~AoratonAccountTransport() { stop(); }
 

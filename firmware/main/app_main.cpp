@@ -20,6 +20,7 @@
 #include "esp32_https_client.hpp"
 #include "esp32_companion.hpp"
 #include "esp32_network.hpp"
+#include "esp32_radio_service.hpp"
 #include "esp32_weather_backend.hpp"
 
 #include "bsp/esp-bsp.h"
@@ -188,13 +189,19 @@ extern "C" void app_main(void) {
     static aura::RealAoratonService aoraton(aoraton_mailbox, aura::AoratonRuntimeMode::Live,
                                             [] { return aura::aoraton_new_client_message_id(aoraton_ids); });
     static std::atomic<bool> aoraton_config_changed{false};
+    // The PC's settings are stored: the PC is told so at once, even while the
+    // account restarts with them (a sign-in it asks for then waits).
+    static std::atomic<bool> aoraton_configured{false};
     static aura::AoratonDeviceLink aoraton_link([](const aura::AoratonLinkConfig& config) {
         // The helper sends the settings on every run: only a change restarts the account.
         aura::AoratonLinkConfig stored;
         if (aura::firmware::esp32_aoraton_load_config(stored) && stored.base_url == config.base_url &&
-            stored.anon_key == config.anon_key && stored.inco_enabled == config.inco_enabled)
+            stored.anon_key == config.anon_key && stored.inco_enabled == config.inco_enabled) {
+            aoraton_configured = true;
             return true;
+        }
         if (!aura::firmware::esp32_aoraton_save_config(config)) return false;
+        aoraton_configured = true;
         aoraton_config_changed = true;
         return true;
     });
@@ -206,6 +213,12 @@ extern "C" void app_main(void) {
     static aura::WifiModel wifi;
     static aura::AuraUi ui;
     static aura::firmware::Esp32Companion companion(audio, device_status);
+    // The internet radio (the owner's request, 2026-11-06): stations stream
+    // through the audio backend's continuous channel; favourites on the card.
+    static aura::RadioModel radio_model;
+    static std::unique_ptr<aura::firmware::Esp32RadioService> radio;
+    static std::uint64_t radio_generation = 0;
+    static bool radio_held = false;
     static aura::firmware::Esp32HttpsClient cloud_https;
     static aura::firmware::Esp32CloudKeyStore cloud_keys;
     static std::unique_ptr<aura::CloudWorker> cloud_worker = start_cloud_worker();
@@ -222,6 +235,11 @@ extern "C" void app_main(void) {
              weather_backend_ready && weather_backend.configured() ? "ready" : "unavailable");
     ESP_LOGI(kTag, "Network: %s", network_started ? "Wi-Fi radio started" : "radio unavailable");
     companion.start();
+    if (audio_ready) radio = std::make_unique<aura::firmware::Esp32RadioService>(audio);
+    if (const std::string saved = companion.load_text("radio.txt");
+        !saved.empty() && !radio_model.restore_favorites(saved)) {
+        ESP_LOGW(kTag, "Radio: the saved favourites were not readable");
+    }
     if (network_started) {
         wifi.set_radio_available(true);
         wifi.set_saved_network(network.saved_ssid());
@@ -373,6 +391,39 @@ extern "C" void app_main(void) {
         companion.set_message_sink([](std::vector<std::uint8_t> wav) {
             aoraton.prepare_voice(voice_message_room, std::move(wav));
         });
+        // The radio (no output: the app stays greyed out, as before).
+        if (radio) {
+            callbacks.on_radio_play = [](const aura::RadioStation& station) {
+                radio_model.begin_connect(station);
+                radio_generation = radio->play(station);
+                ui.apply_radio(radio_model.snapshot());
+            };
+            callbacks.on_radio_stop = [] {
+                radio->stop();
+                radio_generation = radio->generation();
+                radio_model.stop();
+                ui.apply_radio(radio_model.snapshot());
+            };
+            callbacks.on_radio_search = [](const std::string& query) {
+                radio_model.begin_search(query);
+                if (!radio->search(query)) radio_model.search_finished({}, "RADIO_BUSY");
+                ui.apply_radio(radio_model.snapshot());
+            };
+            callbacks.on_radio_favorite = [](const aura::RadioStation& station) {
+                if (radio_model.toggle_favorite(station) &&
+                    !companion.save_text("radio.txt", radio_model.serialize_favorites())) {
+                    ESP_LOGW(kTag, "Radio: could not save the favourites");
+                }
+                ui.apply_radio(radio_model.snapshot());
+            };
+            callbacks.on_radio_move = [](std::size_t index, int direction) {
+                if (radio_model.move_favorite(index, direction) &&
+                    !companion.save_text("radio.txt", radio_model.serialize_favorites())) {
+                    ESP_LOGW(kTag, "Radio: could not save the favourites");
+                }
+                ui.apply_radio(radio_model.snapshot());
+            };
+        }
         // The assistant's spoken question: the companion records it with the
         // microphone it shares with notes; the turn transcribes, asks and speaks.
         callbacks.on_ask = [] {
@@ -412,6 +463,7 @@ extern "C" void app_main(void) {
         ui.apply_aoraton(aoraton.snapshot());
         ui.apply_weather(weather.snapshot());
         ui.apply_wifi(wifi.snapshot());
+        ui.apply_radio(radio_model.snapshot());
         lv_display_add_event_cb(display, on_render_start, LV_EVENT_RENDER_START, nullptr);
         lv_display_add_event_cb(display, on_render_ready, LV_EVENT_RENDER_READY, nullptr);
         ESP_LOGI(kTag, "UI ready %lu ms after boot", static_cast<unsigned long>(esp_timer_get_time() / 1000));
@@ -466,6 +518,7 @@ extern "C" void app_main(void) {
         aoraton_account.reset();
         aura::AoratonLinkConfig config;
         if (!aura::firmware::esp32_aoraton_load_config(config)) return;
+        aoraton_configured = true;
         auto account = std::make_unique<aura::firmware::Esp32AoratonAccount>(aoraton_mailbox, config, aoraton_link);
         if (account->start()) aoraton_account = std::move(account);
     };
@@ -497,14 +550,33 @@ extern "C" void app_main(void) {
             // Aoraton: settings and requests from the PC helper, then the
             // hybrid sync (realtime while lit or on USB, a 5-minute check
             // otherwise; the owner's choice).
-            if (aoraton_link.take_sign_in_request()) aoraton.begin_pairing();
-            std::string invite;
-            while (aoraton_link.take_invite(invite)) {
-                aoraton.add_invite_key(invite);
-                std::fill(invite.begin(), invite.end(), '\0');
-                invite.clear();
+            aura::aoraton_link_pump(aoraton_link, aoraton, aoraton_configured, aoraton_account != nullptr);
+            // The radio: its worker's events and a finished search; silent while
+            // the microphone records.
+            if (radio) {
+                bool radio_changed = false;
+                aura::RadioWorkerEvent event;
+                while (radio->poll(event)) {
+                    if (event.generation != radio_generation) continue;
+                    if (event.type == aura::RadioWorkerEventType::Playing) radio_model.set_playing();
+                    else if (event.type == aura::RadioWorkerEventType::Title) radio_model.set_title(event.text);
+                    else if (event.type == aura::RadioWorkerEventType::Reconnecting)
+                        radio_model.begin_connect(radio_model.snapshot().station);
+                    else radio_model.fail(event.text);
+                    radio_changed = true;
+                }
+                aura::RadioSearchResult found;
+                if (radio->take_search_result(found)) {
+                    radio_model.search_finished(std::move(found.stations),
+                                                found.ok ? std::string{} : found.error_code);
+                    radio_changed = true;
+                }
+                if (radio_changed) ui.apply_radio(radio_model.snapshot());
+                if (const bool hold = companion.microphone_active(); hold != radio_held) {
+                    radio_held = hold;
+                    radio->set_hold(hold);
+                }
             }
-            aoraton_link.publish(aoraton_account != nullptr, aoraton.snapshot().pairing, aoraton.snapshot().last_error);
             aoraton.set_power_saving(!aura::realtime_sync_allowed(companion.display_mode(), external_power));
             // A decoded voice message plays once; stopping or leaving it stops the
             // sound, and the end of the sound closes it.

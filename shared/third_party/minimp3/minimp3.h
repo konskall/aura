@@ -20,6 +20,12 @@ typedef struct
     float mdct_overlap[2][9*32], qmf_state[15*2*32];
     int reserv, free_format_bytes;
     unsigned char header[4], reserv_buf[511];
+#ifdef MINIMP3_EXTERNAL_SCRATCH
+    /* AURA patch (C++ only): room for mp3dec_decode_frame's scratch (about
+       16 KB), set by the caller, so the scratch stays off small task stacks
+       (the device's threads have 12 KB). */
+    void *external_scratch;
+#endif
 } mp3dec_t;
 
 #ifdef __cplusplus
@@ -1715,7 +1721,11 @@ int mp3dec_decode_frame(mp3dec_t *dec, const uint8_t *mp3, int mp3_bytes, mp3d_s
     int i = 0, igr, frame_size = 0, success = 1;
     const uint8_t *hdr;
     bs_t bs_frame[1];
+#ifdef MINIMP3_EXTERNAL_SCRATCH
+    mp3dec_scratch_t &scratch = *(mp3dec_scratch_t *)dec->external_scratch; /* AURA patch */
+#else
     mp3dec_scratch_t scratch;
+#endif
 
     if (mp3_bytes > 4 && dec->header[0] == 0xff && hdr_compare(dec->header, mp3))
     {
@@ -1728,6 +1738,9 @@ int mp3dec_decode_frame(mp3dec_t *dec, const uint8_t *mp3, int mp3_bytes, mp3d_s
     if (!frame_size)
     {
         memset(dec, 0, sizeof(mp3dec_t));
+#ifdef MINIMP3_EXTERNAL_SCRATCH
+        dec->external_scratch = &scratch; /* AURA patch: kept across this reset */
+#endif
         i = mp3d_find_frame(mp3, mp3_bytes, &dec->free_format_bytes, &frame_size);
         if (!frame_size || i + frame_size > mp3_bytes)
         {

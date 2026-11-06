@@ -34,10 +34,25 @@ public:
     void tick(std::uint32_t elapsed_ms) override;
     AudioDiagnostics diagnostics() const override;
 
+    // A continuous music channel (the radio). The board has one output, so a
+    // clip (speech, a chime, an alarm, a voice message) pauses it and it goes
+    // on after. Volume and mute apply to both. Safe to feed from another thread.
+    bool stream_open(std::uint32_t sample_rate, std::uint8_t channels);
+    // Interleaved samples; waits up to a second for room, false when closed.
+    bool stream_push(const std::int16_t* samples, std::size_t frames);
+    std::uint32_t stream_buffered_ms() const;
+    void stream_close();
+    // Silenced but kept (the microphone is open).
+    void stream_hold(bool hold);
+
 private:
     static void task_entry(void* context);
     void playback_task();
     bool play_clip(const PcmClip& clip, bool alert);
+    void play_clip_now(std::uint32_t generation, const std::string& wav_path);
+    void play_stream_now();
+    bool clip_pending_locked() const { return !clip_.samples.empty() || !pending_wav_path_.empty(); }
+    bool stream_ready_locked() const { return stream_open_ && !stream_hold_ && ring_size_ > 0; }
     bool load_pcm_wav(const std::string& path, PcmClip& clip);
     void set_error_locked(const char* code);
 
@@ -53,6 +68,15 @@ private:
     std::uint32_t generation_{0};
     bool alert_clip_{false};  // a clock alert: heard through mute (playback_gain)
     bool shutting_down_{false};
+    // The radio's ring of samples, in PSRAM, in the stream's own format.
+    std::int16_t* ring_{nullptr};
+    std::size_t ring_capacity_{0};
+    std::size_t ring_read_{0};
+    std::size_t ring_size_{0};
+    AudioFormat stream_format_{};
+    bool stream_open_{false};
+    bool stream_hold_{false};
+    std::uint32_t stream_generation_{0};
 };
 
 }  // namespace aura::firmware

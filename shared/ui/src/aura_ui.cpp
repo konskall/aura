@@ -2528,7 +2528,9 @@ struct AuraUi::Impl {
             ui::style_platter(microphone, ui::tokens::coral, LV_RADIUS_CIRCLE, false);
             lv_obj_set_size(microphone, 72, 72);
             lv_obj_set_pos(microphone, kGutter + kWidth - 72, 388);
-            icon_view(microphone, ui::IconRole::Microphone, 30, ui::tokens::coral);
+            // Centred: the platter's 16 px padding would leave it top left.
+            if (auto* icon = icon_view(microphone, ui::IconRole::Microphone, 30, ui::tokens::coral))
+                lv_obj_center(icon);
             lv_obj_add_event_cb(microphone, aoraton_voice_start_event, LV_EVENT_CLICKED, this);
         }
     }

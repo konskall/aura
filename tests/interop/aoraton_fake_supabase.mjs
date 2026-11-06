@@ -8,11 +8,14 @@ import { readFile } from 'node:fs/promises';
 const encoder = new TextEncoder();
 const b64url = (bytes) => Buffer.from(bytes).toString('base64url');
 export const USER_ID = 'user-1';
-export const ANON_KEY = 'anon-key-synthetic';
+// JWT-shaped, as the device link requires of a project's anon key; synthetic.
+export const ANON_KEY = 'eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.DEMO-synthetic-signature';
 export const ALPHA = 'v2.QUFBQUFBQUFBQUFBQUFBQUFB';
 export const BETA = 'demo_room_1234';
 export const INCO_UID = '00000000-0000-0000-0000-000000000000';
 export const INCO_ANSWER = 'DEMO inco: γεια σου';
+// Shaped like Supabase's PKCE codes (a UUID); synthetic.
+export const AUTH_CODE = 'de300000-0000-4000-8000-00000000c0de';
 
 async function messageKey(rkByte) {
   const raw = new Uint8Array(32).fill(rkByte);
@@ -90,7 +93,7 @@ export async function startFakeSupabase() {
       }
       state.challenge = url.searchParams.get('code_challenge');
       state.redirect = url.searchParams.get('redirect_to');
-      response.writeHead(302, { Location: `${state.redirect}?code=code-1` });
+      response.writeHead(302, { Location: `${state.redirect}?code=${AUTH_CODE}` });
       return response.end();
     }
     if (request.headers.apikey !== ANON_KEY) return json(response, 401, { message: 'no apikey' });
@@ -98,7 +101,7 @@ export async function startFakeSupabase() {
       const payload = JSON.parse(body || '{}');
       if (url.searchParams.get('grant_type') === 'pkce') {
         const expected = createHash('sha256').update(payload.code_verifier ?? '').digest('base64url');
-        if (payload.auth_code !== 'code-1' || expected !== state.challenge) return json(response, 400, { error: 'invalid_grant' });
+        if (payload.auth_code !== AUTH_CODE || expected !== state.challenge) return json(response, 400, { error: 'invalid_grant' });
         return json(response, 200, session());
       }
       if (url.searchParams.get('grant_type') === 'refresh_token') {

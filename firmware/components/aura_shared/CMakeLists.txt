@@ -120,3 +120,8 @@ target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_17)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)
 # ESP-IDF 5.5 compiles C++ as gnu++2b with -Werror. The shared sources are kept
 # clean for that mode; scripts/check-firmware-flags.ps1 verifies it on Windows.
+
+# MP3 decoding runs on small task stacks (the assistant's worker has 12 KB):
+# the decoder's scratch lives on the heap, and the compiler checks it.
+set_source_files_properties("${AURA_ROOT}/shared/core/src/mp3_decoder.cpp"
+    PROPERTIES COMPILE_OPTIONS "-Werror=stack-usage=6144")

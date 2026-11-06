@@ -191,6 +191,7 @@ add_executable(aura_simulator
     simulator/app/src/windows_aoraton_realtime.cpp
     simulator/app/src/windows_voice_decoder.cpp
     simulator/app/src/windows_aoraton_cache_files.cpp
+    simulator/app/src/aoraton_device_mode.cpp
 )
 target_include_directories(aura_simulator PRIVATE simulator/app/include)
 target_compile_definitions(aura_simulator PRIVATE LV_CONF_INCLUDE_SIMPLE LV_LVGL_H_INCLUDE_SIMPLE SDL_MAIN_HANDLED)
@@ -489,6 +490,29 @@ if(BUILD_TESTING)
             add_test(NAME aura_aoraton_account_smoke
                 COMMAND ${AURA_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/interop/run_aoraton_account_smoke.mjs
                         $<TARGET_FILE:aura_aoraton_account_smoke>)
+        endif()
+        add_executable(aura_aoraton_device_mode_host
+            tests/interop/aoraton_device_mode_host.cpp
+            simulator/app/src/aoraton_device_mode.cpp
+            simulator/app/src/winhttp_client.cpp
+            simulator/app/src/loopback_sign_in.cpp
+            simulator/app/src/aoraton_account_transport.cpp
+            simulator/app/src/windows_aoraton_realtime.cpp
+            simulator/app/src/windows_voice_decoder.cpp
+            simulator/app/src/windows_aoraton_cache_files.cpp
+            simulator/app/src/windows_aoraton_crypto.cpp
+            simulator/app/src/windows_aoraton_vault.cpp
+            simulator/app/src/file_transfer_runtime.cpp
+            simulator/app/src/photo_runtime.cpp
+        )
+        target_include_directories(aura_aoraton_device_mode_host PRIVATE simulator/app/include)
+        target_link_libraries(aura_aoraton_device_mode_host PRIVATE aura_core winhttp ws2_32 iphlpapi shell32 bcrypt
+                              crypt32 mfplat mfuuid ole32)
+        if(AURA_NODE_EXECUTABLE)
+            add_test(NAME aura_aoraton_device_mode_interop
+                COMMAND ${AURA_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/interop/run_aoraton_device_mode_test.mjs
+                        $<TARGET_FILE:aura_aoraton_device_mode_host>)
+            set_tests_properties(aura_aoraton_device_mode_interop PROPERTIES TIMEOUT 150)
         endif()
         add_executable(aura_aoraton_vault_tests
             tests/unit/aoraton_vault_test.cpp
