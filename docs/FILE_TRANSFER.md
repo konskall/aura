@@ -33,6 +33,13 @@ ignored `.env`, signs in with the code and posts them to `POST /api/keys`. The d
 checks their format and keeps them in encrypted NVS; no response echoes them and
 nothing logs them. The simulator has no such endpoint (it reads `.env` itself).
 
+On the device the same session also signs it in to aoraton.com (ADR 0010). `node scripts/aoraton-device-sign-in.mjs
+--address <address> --code <code>` posts the project's public values from `config/aoraton.local.json`
+(`POST /api/aoraton/config`), asks for a sign-in (`/api/aoraton/sign-in`), reads the authorize URL
+(`/api/aoraton/status`), opens it in the PC browser, listens on 127.0.0.1:4779 and hands Google's
+one-time code back (`/api/aoraton/code`). An invite link goes to `/api/aoraton/invite`. Every call needs
+the session; none echoes a key, code or invite.
+
 After code login, **Αποθηκευμένα στη συσκευή / Saved on the device** lists photos
 or other files, 128 per page. Select the destination, refresh or use Next page.
 Press Delete beside an exact filename, then confirm it in the dialog. Cancel

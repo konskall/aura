@@ -2,4 +2,5 @@ dependencies:
   idf: "==5.5.5"
   waveshare/esp32_s3_touch_amoled_2_16: "==2.0.1"
   lvgl/lvgl: "==9.6.0"
-
+  # Voice messages: the AAC and Opus decoders (Espressif-only license, ADR 0010).
+  espressif/esp_audio_codec: "==2.6.2"

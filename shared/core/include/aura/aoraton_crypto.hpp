@@ -61,6 +61,9 @@ struct AoratonV2Envelope {
 bool aoraton_is_valid_utf8(const std::string& value) noexcept;
 std::string aoraton_base64url_encode(const std::uint8_t* data, std::size_t size);
 bool aoraton_base64url_decode(const std::string& encoded, std::vector<std::uint8_t>& decoded) noexcept;
+// Standard base64 with padding (the web client's btoa): attachment ivs.
+std::string aoraton_base64_encode(const std::uint8_t* data, std::size_t size);
+bool aoraton_base64_decode(const std::string& encoded, std::vector<std::uint8_t>& decoded) noexcept;
 bool aoraton_parse_v2_envelope(const std::string& wire,
                                AoratonV2Envelope& envelope,
                                AoratonCryptoError& error) noexcept;
@@ -87,6 +90,20 @@ public:
                                    std::string& verifier) = 0;
     virtual bool safety_code_material(const AoratonRoomKey& room_key,
                                       std::string& material) = 0;
+
+    // Attachments, exactly as the web client makes them (utils/attachmentCrypto.ts):
+    // a per-file key wrapped under HKDF(RK, 'inco/e2ee/v2/file') as a v2 wire
+    // string, and the file as AES-256-GCM(file key, iv) with the tag appended.
+    // The 12-byte iv travels as standard base64. A failure leaves nothing behind.
+    virtual bool unwrap_file_key(const std::string& wrapped, const AoratonRoomKey& room_key,
+                                 std::array<std::uint8_t, 32>& file_key) = 0;
+    virtual bool wrap_file_key(const std::array<std::uint8_t, 32>& file_key, const AoratonRoomKey& room_key,
+                               std::string& wrapped) = 0;
+    virtual bool open_file(const std::array<std::uint8_t, 32>& file_key, const std::string& iv,
+                           const std::uint8_t* data, std::size_t size, std::vector<std::uint8_t>& plaintext) = 0;
+    // A new file key and iv for each file.
+    virtual bool seal_file(const std::uint8_t* data, std::size_t size, std::array<std::uint8_t, 32>& file_key,
+                           std::string& iv, std::vector<std::uint8_t>& sealed) = 0;
 };
 
 }  // namespace aura

@@ -31,6 +31,8 @@ public:
     TransferSession& session() { return session_; }
     // Where POST /api/keys puts the assistant's keys (encrypted NVS); set before start().
     void set_key_sink(ICloudKeySink* sink) { key_sink_ = sink; }
+    // The PC-assisted aoraton.com sign-in (POST /api/aoraton/*, ADR 0010).
+    void set_aoraton_link(IAoratonLinkEndpoint* link) { aoraton_link_ = link; }
 
 private:
     static void manager_entry(void* context);
@@ -40,6 +42,7 @@ private:
     TransferSession session_;
     Esp32TransferStorage storage_;
     ICloudKeySink* key_sink_{nullptr};
+    IAoratonLinkEndpoint* aoraton_link_{nullptr};
     std::atomic<bool> available_{false}, listening_{false};
 };
 }  // namespace aura::firmware

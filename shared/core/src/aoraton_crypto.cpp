@@ -104,6 +104,60 @@ std::string aoraton_base64url_encode(const std::uint8_t* data, std::size_t size)
     return result;
 }
 
+std::string aoraton_base64_encode(const std::uint8_t* data, std::size_t size) {
+    static constexpr char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string result;
+    result.reserve((size + 2) / 3 * 4);
+    for (std::size_t index = 0; index < size; index += 3) {
+        const std::uint32_t chunk = (static_cast<std::uint32_t>(data[index]) << 16) |
+                                    (index + 1 < size ? static_cast<std::uint32_t>(data[index + 1]) << 8 : 0U) |
+                                    (index + 2 < size ? static_cast<std::uint32_t>(data[index + 2]) : 0U);
+        result.push_back(alphabet[(chunk >> 18) & 63]);
+        result.push_back(alphabet[(chunk >> 12) & 63]);
+        result.push_back(index + 1 < size ? alphabet[(chunk >> 6) & 63] : '=');
+        result.push_back(index + 2 < size ? alphabet[chunk & 63] : '=');
+    }
+    return result;
+}
+
+bool aoraton_base64_decode(const std::string& encoded, std::vector<std::uint8_t>& decoded) noexcept {
+    decoded.clear();
+    if (encoded.empty() || encoded.size() % 4 != 0) return false;
+    const auto value = [](char c) -> int {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return -1;
+    };
+    std::size_t padding = 0;
+    if (encoded[encoded.size() - 1] == '=') ++padding;
+    if (encoded[encoded.size() - 2] == '=') ++padding;
+    for (std::size_t index = 0; index < encoded.size(); index += 4) {
+        const bool last = index + 4 == encoded.size();
+        std::uint32_t chunk = 0;
+        for (std::size_t offset = 0; offset < 4; ++offset) {
+            const char c = encoded[index + offset];
+            int bits = 0;
+            if (c == '=') {
+                if (!last || offset < 4 - padding) {
+                    decoded.clear();
+                    return false;
+                }
+            } else if ((bits = value(c)) < 0 || (last && offset >= 4 - padding)) {
+                decoded.clear();
+                return false;
+            }
+            chunk = (chunk << 6) | static_cast<std::uint32_t>(bits);
+        }
+        decoded.push_back(static_cast<std::uint8_t>(chunk >> 16));
+        if (!last || padding < 2) decoded.push_back(static_cast<std::uint8_t>(chunk >> 8));
+        if (!last || padding < 1) decoded.push_back(static_cast<std::uint8_t>(chunk));
+    }
+    return true;
+}
+
 bool aoraton_base64url_decode(const std::string& encoded,
                               std::vector<std::uint8_t>& decoded) noexcept {
     decoded.clear();

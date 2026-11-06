@@ -100,6 +100,8 @@ enum class UiView {
     PhotoSettings,
     FileTransfer,
     PhotoDelete,
+    AoratonAttachment,
+    AoratonVoiceRecord,
 };
 
 // Power actions from Settings > System. PowerOn comes from a long press on the
@@ -172,6 +174,14 @@ struct AuraUiCallbacks {
     // link is read by the platform (the PC clipboard) and never shown.
     std::function<bool(const std::string& passphrase)> on_aoraton_unlock;
     std::function<bool()> on_aoraton_paste_invite;
+    // A message's photo, full screen; leaving the view closes it.
+    std::function<bool(const std::string& message_id)> on_aoraton_open_attachment;
+    std::function<void()> on_aoraton_close_attachment;
+    // A voice message: the platform records it; the recording reaches the
+    // service, and the UI moves to the confirmation when the snapshot asks.
+    std::function<bool(const std::string& room_id)> on_aoraton_voice_start;
+    std::function<void()> on_aoraton_voice_stop;
+    std::function<void()> on_aoraton_voice_cancel;
     // Explicit per-message consent, after displaying the exact selected text.
     // The platform treats this as a read-only, isolated assistant turn.
     std::function<void(const std::string& text)> on_aoraton_assist;
@@ -303,6 +313,9 @@ public:
     void set_input_amplitude(float amplitude, bool simulated);
     void tick(std::uint32_t elapsed_ms);
     void show(UiView view);
+    // The device cannot open Google's page: its sign-in button opens File
+    // transfer for the PC helper instead (ADR 0010).
+    void set_aoraton_sign_in_relay(bool relay);
     // Opens `view` as if from Home: Back returns Home, never to a screen
     // that happened to be open before.
     void show_from_home(UiView view);

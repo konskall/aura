@@ -26,6 +26,9 @@ enum class AoratonCommandType {
     UnlockVault,
     AddInviteKey,
     ConfigureSync,
+    PowerSaving,
+    OpenAttachment,
+    SendVoice,
 };
 
 class AoratonCommand final {
@@ -42,6 +45,10 @@ public:
     std::string client_message_id;
     std::string plaintext;
     AoratonSyncSettings sync_settings;
+    bool power_saving{false};
+    std::string message_id;
+    std::vector<std::uint8_t> bytes;  // a voice message's WAV
+    std::vector<std::string> message_ids;  // photos whose previews to fetch again
 
     void clear_plaintext() noexcept;
 };
@@ -64,6 +71,10 @@ enum class AoratonEventType {
     PairingExpired,
     PairingFailed,
     KeysChanged,
+    AttachmentThumbnail,
+    AttachmentOpened,
+    AttachmentAudio,
+    AttachmentFailed,
     Failure,
 };
 
@@ -86,6 +97,9 @@ struct AoratonEvent {
     std::uint32_t pairing_seconds_remaining{0};
     AoratonKeyState key_state{AoratonKeyState::Unknown};
     std::uint32_t key_count{0};
+    std::string message_id;
+    std::shared_ptr<const PhotoImage> image;
+    std::shared_ptr<const PcmClip> clip;
 };
 
 class AoratonMailbox final {
@@ -134,6 +148,10 @@ public:
     bool unlock_keys(const std::string& passphrase) override;
     bool add_invite_key(const std::string& invite) override;
     bool set_sync_settings(const AoratonSyncSettings& settings) override;
+    bool set_power_saving(bool saving) override;
+    bool open_attachment(const std::string& message_id) override;
+    bool prepare_voice(const std::string& room_id, std::vector<std::uint8_t> wav) override;
+    void close_attachment() override;
     const AoratonSnapshot& snapshot() const noexcept override { return snapshot_; }
 
 private:
@@ -149,12 +167,17 @@ private:
     bool message_exists(const AoratonMessage& message) const;
     void add_message(AoratonMessage message, bool notify);
     void sort_messages();
+    void bound_thumbnails();
 
     AoratonMailbox& mailbox_;
     ClientMessageIdSource client_message_id_source_;
     AoratonSnapshot snapshot_{};
     bool network_available_{true};
     std::uint32_t pairing_elapsed_ms_{0};
+    bool power_saving_{false};
+    std::vector<std::uint8_t> pending_voice_;
+    // Photos whose previews were let go to bound memory, oldest first.
+    std::vector<std::string> dropped_thumbnails_;
 };
 
 }  // namespace aura

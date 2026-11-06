@@ -1,6 +1,7 @@
 #include "aura/aoraton_account_worker.hpp"
 
 #include "aura/json_reader.hpp"
+#include "aura/photos.hpp"
 #include "aura/text_util.hpp"
 
 #include <algorithm>
@@ -11,6 +12,16 @@ namespace {
 
 constexpr std::size_t kMaxRooms = 64;
 constexpr std::size_t kMaxSeenIds = 120;
+constexpr std::size_t kMaxAttachments = 100;
+constexpr std::size_t kThumbnailsPerRoom = 6;
+constexpr unsigned kThumbnailEdge = 216;
+constexpr std::uint32_t kAttachmentTimeoutMs = 30000;
+
+AoratonAttachmentKind attachment_kind(const std::string& type) {
+    if (type.rfind("image/", 0) == 0) return AoratonAttachmentKind::Image;
+    if (type.rfind("audio/", 0) == 0) return AoratonAttachmentKind::Voice;
+    return AoratonAttachmentKind::File;
+}
 constexpr std::size_t kMaxPendingSends = 16;
 constexpr std::size_t kMaxNotifiedPerPoll = 8;
 constexpr std::size_t kCommandsPerStep = 8;
@@ -89,14 +100,16 @@ AoratonAccountWorker::AoratonAccountWorker(AoratonMailbox& mailbox,
                                            IAoratonCryptoV2& message_crypto,
                                            IAoratonSecretStore& store,
                                            IAoratonSignInChannel& channel,
-                                           IAoratonRealtime* realtime)
+                                           IAoratonRealtime* realtime,
+                                           IVoiceDecoder* voice_decoder,
+                                           IAoratonAttachmentCache* attachment_cache)
     : mailbox_(mailbox),
       config_(std::move(config)),
       http_(http),
       account_crypto_(account_crypto),
       message_crypto_(message_crypto),
       store_(store),
-      channel_(channel), realtime_(realtime) {
+      channel_(channel), realtime_(realtime), voice_decoder_(voice_decoder), attachment_cache_(attachment_cache) {
     config_.base_url = trim_base(config_.base_url);
 }
 
@@ -173,12 +186,13 @@ void AoratonAccountWorker::step(std::int64_t now_ms, std::int64_t now_unix) {
         if (refreshed == RefreshResult::Ok) configure_realtime();
         else { connection_lost(); next_poll_ms_ = now_ms_ + kRetryIntervalMs; }
     }
-    if (signed_in_ && connected_ && realtime_) {
+    if (signed_in_ && connected_ && realtime_ && !power_saving_) {
         const auto update = realtime_->poll();
         realtime_status(update.active && !reconnecting_);
         realtime_refresh = update.refresh_required;
     }
-    const bool periodic_due = sync_settings_.polling_enabled && now_ms_ >= next_poll_ms_;
+    if (signed_in_ && connected_ && !thumbnail_queue_.empty()) load_next_thumbnail();
+    const bool periodic_due = (sync_settings_.polling_enabled || power_saving_) && now_ms_ >= next_poll_ms_;
     const bool recovery_due = reconnecting_ && now_ms_ >= next_poll_ms_;
     if (signed_in_ && connected_ && (sync_requested_ || periodic_due || recovery_due || realtime_refresh)) {
         sync_requested_ = false;
@@ -191,8 +205,8 @@ void AoratonAccountWorker::step(std::int64_t now_ms, std::int64_t now_unix) {
                 emit(std::move(event));
             }
         }
-        next_poll_ms_ = now_ms_ + (reconnecting_ && !sync_settings_.polling_enabled ?
-                                  kRetryIntervalMs : sync_settings_.interval_seconds * 1000LL);
+        next_poll_ms_ = now_ms_ + (reconnecting_ && !sync_settings_.polling_enabled && !power_saving_ ?
+                                  kRetryIntervalMs : poll_interval_ms());
     }
 }
 
@@ -216,10 +230,14 @@ void AoratonAccountWorker::handle(AoratonCommand& command) {
             if (signed_in_) {
                 refresh_rooms();
                 sync_requested_ = false;
-                next_poll_ms_ = now_ms_ + sync_settings_.interval_seconds * 1000LL;
+                next_poll_ms_ = now_ms_ + poll_interval_ms();
             }
             break;
         case AoratonCommandType::FetchRecentMessages:
+            for (const auto& id : command.message_ids) {
+                thumbnails_fetched_.erase(std::remove(thumbnails_fetched_.begin(), thumbnails_fetched_.end(), id),
+                                          thumbnails_fetched_.end());
+            }
             if (signed_in_) fetch_history(command.room_id);
             break;
         case AoratonCommandType::MarkRoomRead: {
@@ -236,8 +254,13 @@ void AoratonAccountWorker::handle(AoratonCommand& command) {
             if (aoraton_sync_settings_valid(command.sync_settings)) {
                 sync_requested_ = sync_requested_ || (!sync_settings_.polling_enabled && command.sync_settings.polling_enabled);
                 sync_settings_ = command.sync_settings;
-                next_poll_ms_ = now_ms_ + sync_settings_.interval_seconds * 1000LL;
+                next_poll_ms_ = now_ms_ + poll_interval_ms();
             }
+            break;
+        case AoratonCommandType::PowerSaving: set_power_saving(command.power_saving); break;
+        case AoratonCommandType::SendVoice: send_voice(command); break;
+        case AoratonCommandType::OpenAttachment:
+            if (signed_in_) open_attachment(command);
             break;
     }
     command.clear_plaintext();
@@ -336,8 +359,27 @@ void AoratonAccountWorker::connect() {
     emit(std::move(event));
 }
 
+std::int64_t AoratonAccountWorker::poll_interval_ms() const {
+    const std::int64_t chosen = sync_settings_.interval_seconds * 1000LL;
+    return power_saving_ && chosen < kPowerSavingPollMs ? kPowerSavingPollMs : chosen;
+}
+
+void AoratonAccountWorker::set_power_saving(bool saving) {
+    if (saving == power_saving_) return;
+    power_saving_ = saving;
+    if (saving) {
+        if (realtime_) realtime_->stop();
+        realtime_status(false);
+        next_poll_ms_ = now_ms_ + kPowerSavingPollMs;
+        return;
+    }
+    // Waking: catch up at once, then realtime takes over again.
+    sync_requested_ = true;
+    configure_realtime();
+}
+
 void AoratonAccountWorker::configure_realtime() {
-    if (!realtime_ || !signed_in_ || !connected_) return;
+    if (!realtime_ || !signed_in_ || !connected_ || power_saving_) return;
     std::vector<std::string> keys;
     for (const auto& room : rooms_) keys.push_back(room.room_key);
     std::sort(keys.begin(), keys.end());
@@ -478,6 +520,7 @@ void AoratonAccountWorker::sign_out() {
     session_.clear();
     secrets_.clear();
     store_.erase();
+    if (attachment_cache_) attachment_cache_->clear();
     rooms_.clear();
     tracks_.clear();
     pending_sends_.clear();
@@ -665,18 +708,11 @@ bool AoratonAccountWorker::fetch_history(const std::string& room_key) {
         if (newer(row.created_at, track.last_seen_at)) track.last_seen_at = row.created_at;
         const bool mine = row.uid == session_.user_id;
         if (mine && !row.username.empty()) track.my_username = row.username;
-        if (row.type != "text") continue;
         AoratonMessage message;
-        if (!decrypt(room_key, row.text, message.local_display_text)) continue;
-        message.id = row.id;
-        message.room_id = room_key;
-        message.author = row.username;
-        message.received_at = row.created_at;
-        message.client_message_id = row.client_msg_id;
-        message.direction = mine ? AoratonDirection::Outgoing : AoratonDirection::Incoming;
-        message.delivery = mine ? AoratonDelivery::Acknowledged : AoratonDelivery::Received;
+        if (!build_message(room_key, row, mine, message)) continue;
         history.messages.push_back(std::move(message));
     }
+    queue_thumbnails(history.messages);
     if (!history.messages.empty()) emit(std::move(history));
     return true;
 }
@@ -713,19 +749,13 @@ void AoratonAccountWorker::deliver_new_messages(const std::string& room_key) {
             pending_sends_.erase(pending);
             continue;
         }
-        if (row.type != "text") continue;
         AoratonMessage message;
-        if (!decrypt(room_key, row.text, message.local_display_text)) continue;
-        message.id = row.id;
-        message.room_id = room_key;
-        message.author = row.username;
-        message.received_at = row.created_at;
-        message.client_message_id = row.client_msg_id;
-        message.direction = mine ? AoratonDirection::Outgoing : AoratonDirection::Incoming;
-        message.delivery = mine ? AoratonDelivery::Acknowledged : AoratonDelivery::Received;
+        if (!build_message(room_key, row, mine, message)) continue;
         if (mine) history.messages.push_back(std::move(message));
         else incoming.push_back(std::move(message));
     }
+    queue_thumbnails(history.messages);
+    queue_thumbnails(incoming);
     // A long absence must not become a burst of notifications: only the newest
     // few notify, the rest arrive as plain history.
     const std::size_t quiet = incoming.size() > kMaxNotifiedPerPoll ? incoming.size() - kMaxNotifiedPerPoll : 0;
@@ -738,6 +768,180 @@ void AoratonAccountWorker::deliver_new_messages(const std::string& room_key) {
         event.timestamp = now_iso();
         emit(std::move(event));
     }
+}
+
+bool AoratonAccountWorker::build_message(const std::string& room_key, const AoratonRemoteMessage& row, bool mine,
+                                         AoratonMessage& message) {
+    if (row.type != "text") return false;
+    // A file may come without a caption; text that does not open is skipped.
+    if ((!row.text.empty() || !row.has_attachment) && !decrypt(room_key, row.text, message.local_display_text))
+        return false;
+    message.id = row.id;
+    message.room_id = room_key;
+    message.author = row.username;
+    message.received_at = row.created_at;
+    message.client_message_id = row.client_msg_id;
+    message.direction = mine ? AoratonDirection::Outgoing : AoratonDirection::Incoming;
+    message.delivery = mine ? AoratonDelivery::Acknowledged : AoratonDelivery::Received;
+    if (row.has_attachment) {
+        message.attachment = attachment_kind(row.attachment.type);
+        message.attachment_name = row.attachment.name;
+        if (attachments_.find(row.id) == attachments_.end()) {
+            attachments_[row.id] = {room_key, row.attachment};
+            attachment_order_.push_back(row.id);
+            if (attachment_order_.size() > kMaxAttachments) {
+                attachments_.erase(attachment_order_.front());
+                attachment_order_.pop_front();
+            }
+        }
+    }
+    return true;
+}
+
+// The newest few photos of what was just delivered, newest first.
+void AoratonAccountWorker::queue_thumbnails(const std::vector<AoratonMessage>& messages) {
+    std::size_t queued = 0;
+    for (auto message = messages.rbegin(); message != messages.rend() && queued < kThumbnailsPerRoom; ++message) {
+        if (message->attachment != AoratonAttachmentKind::Image || contains(thumbnails_fetched_, message->id) ||
+            std::find(thumbnail_queue_.begin(), thumbnail_queue_.end(), message->id) != thumbnail_queue_.end())
+            continue;
+        thumbnail_queue_.push_back(message->id);
+        ++queued;
+    }
+    while (thumbnail_queue_.size() > kThumbnailsPerRoom * 2) thumbnail_queue_.pop_front();
+}
+
+void AoratonAccountWorker::load_next_thumbnail() {
+    const std::string id = thumbnail_queue_.front();
+    thumbnail_queue_.pop_front();
+    const auto found = attachments_.find(id);
+    if (found == attachments_.end()) return;
+    remember(thumbnails_fetched_, id);
+    std::vector<std::uint8_t> plaintext;
+    std::string error;
+    if (!fetch_attachment(found->second, plaintext, error)) return;  // the bubble keeps its placeholder
+    PhotoError photo_error = PhotoError::None;
+    const auto image = decode_photo(plaintext.data(), plaintext.size(), photo_error);
+    std::fill(plaintext.begin(), plaintext.end(), std::uint8_t{0});
+    if (!image) return;
+    AoratonEvent event;
+    event.type = AoratonEventType::AttachmentThumbnail;
+    event.room_id = found->second.room_key;
+    event.message_id = id;
+    event.image = photo_thumbnail(*image, kThumbnailEdge);
+    if (event.image) emit(std::move(event));
+}
+
+void AoratonAccountWorker::open_attachment(const AoratonCommand& command) {
+    AoratonEvent failed;
+    failed.type = AoratonEventType::AttachmentFailed;
+    failed.message_id = command.message_id;
+    const auto found = attachments_.find(command.message_id);
+    const auto kind = found == attachments_.end() ? AoratonAttachmentKind::None : attachment_kind(found->second.file.type);
+    if (kind == AoratonAttachmentKind::Voice) {
+        std::vector<std::uint8_t> sound;
+        if (!fetch_attachment(found->second, sound, failed.error)) {
+            emit(std::move(failed));
+            return;
+        }
+        auto clip = std::make_shared<PcmClip>();
+        // Two minutes at most: decoded at 16 kHz that is under 4 MiB of PSRAM.
+        const bool decoded = voice_decode(sound.data(), sound.size(), voice_decoder_, *clip, failed.error, 120);
+        std::fill(sound.begin(), sound.end(), std::uint8_t{0});
+        if (!decoded) {
+            emit(std::move(failed));
+            return;
+        }
+        AoratonEvent audio;
+        audio.type = AoratonEventType::AttachmentAudio;
+        audio.room_id = found->second.room_key;
+        audio.message_id = command.message_id;
+        audio.clip = std::move(clip);
+        emit(std::move(audio));
+        return;
+    }
+    if (kind != AoratonAttachmentKind::Image) {
+        failed.error = "ATTACHMENT_UNSUPPORTED";
+        emit(std::move(failed));
+        return;
+    }
+    std::vector<std::uint8_t> plaintext;
+    if (!fetch_attachment(found->second, plaintext, failed.error)) {
+        emit(std::move(failed));
+        return;
+    }
+    PhotoError photo_error = PhotoError::None;
+    auto image = decode_photo(plaintext.data(), plaintext.size(), photo_error);
+    std::fill(plaintext.begin(), plaintext.end(), std::uint8_t{0});
+    if (!image) {
+        failed.error = "ATTACHMENT_UNSUPPORTED";
+        emit(std::move(failed));
+        return;
+    }
+    AoratonEvent opened;
+    opened.type = AoratonEventType::AttachmentOpened;
+    opened.room_id = found->second.room_key;
+    opened.message_id = command.message_id;
+    opened.image = std::move(image);
+    emit(std::move(opened));
+}
+
+// Only an encrypted file in the project's bucket, of at most 4 MiB, opened
+// with the room's key; a code for every other outcome.
+bool AoratonAccountWorker::fetch_attachment(const AttachmentRef& ref, std::vector<std::uint8_t>& plaintext,
+                                            std::string& error) {
+    plaintext.clear();
+    const auto& file = ref.file;
+    if (!file.encrypted || file.wrapped_key.empty() || file.iv.empty() ||
+        !aoraton_attachment_url_valid(config_.base_url, file.url)) {
+        error = "ATTACHMENT_UNSUPPORTED";
+        return false;
+    }
+    const auto* stored = key_for(ref.room_key);
+    if (!stored) {
+        error = "ATTACHMENT_LOCKED";
+        return false;
+    }
+    const std::size_t limit = (file.size > 0 && file.size <= kMaxPhotoFileBytes ? file.size : kMaxPhotoFileBytes) +
+                              kAoratonGcmTagBytes;
+    const auto open = [&](const std::string& sealed) {
+        AoratonRoomKey key(stored->rk);
+        std::array<std::uint8_t, 32> file_key{};
+        const bool opened = message_crypto_.unwrap_file_key(file.wrapped_key, key, file_key) &&
+                            message_crypto_.open_file(file_key, file.iv,
+                                                      reinterpret_cast<const std::uint8_t*>(sealed.data()),
+                                                      sealed.size(), plaintext);
+        std::fill(file_key.begin(), file_key.end(), std::uint8_t{0});
+        if (!opened) plaintext.clear();
+        return opened;
+    };
+    // A copy on the card opens like a download: the same sealed bytes, checked
+    // by AES-GCM. One that no longer opens is dropped and fetched again.
+    const std::string cache_name = attachment_cache_ ? aoraton_sha256_hex(file.url, account_crypto_) : std::string();
+    if (!cache_name.empty()) {
+        std::string sealed;
+        if (attachment_cache_->load(cache_name, limit, sealed)) {
+            if (open(sealed)) return true;
+            attachment_cache_->erase(cache_name);
+        }
+    }
+    AoratonHttpRequest request;
+    request.method = "GET";
+    request.url = file.url;
+    request.headers.push_back({"apikey", config_.anon_key});
+    request.timeout_ms = kAttachmentTimeoutMs;
+    request.max_response_bytes = limit;
+    auto response = http_.send(request);
+    if (response.status == 0 || !ok_status(response.status) || response.body.size() > limit) {
+        error = "ATTACHMENT_UNAVAILABLE";
+        return false;
+    }
+    if (!open(response.body)) {
+        error = "ATTACHMENT_DAMAGED";
+        return false;
+    }
+    if (!cache_name.empty()) attachment_cache_->store(cache_name, response.body);
+    return true;
 }
 
 void AoratonAccountWorker::send_text(AoratonCommand& command) {
@@ -815,6 +1019,110 @@ void AoratonAccountWorker::send_text(AoratonCommand& command) {
     ack.timestamp = created_at;
     emit(std::move(ack));
     if (!question.empty()) answer_inco(command.room_id, id, username, question);
+}
+
+// A recording as the web client sends a file: sealed with its own key, the
+// key wrapped with the room's, uploaded to the public bucket under the
+// hashed room folder (never overwriting), then a row with the attachment.
+void AoratonAccountWorker::send_voice(AoratonCommand& command) {
+    AoratonEvent failed;
+    failed.type = AoratonEventType::SendFailed;
+    failed.client_message_id = command.client_message_id;
+    const auto* stored = key_for(command.room_id);
+    if (!signed_in_ || !stored || !is_member(command.room_id) || command.bytes.empty()) {
+        failed.error = "ROOM_ACCESS_CHANGED";
+        emit(std::move(failed));
+        return;
+    }
+    AoratonRemoteAttachment file;
+    std::vector<std::uint8_t> sealed;
+    {
+        AoratonRoomKey key(stored->rk);
+        std::array<std::uint8_t, 32> file_key{};
+        const bool ok = message_crypto_.seal_file(command.bytes.data(), command.bytes.size(), file_key, file.iv,
+                                                  sealed) &&
+                        message_crypto_.wrap_file_key(file_key, key, file.wrapped_key);
+        std::fill(file_key.begin(), file_key.end(), std::uint8_t{0});
+        if (!ok) {
+            failed.error = "ENCRYPTION_FAILED";
+            emit(std::move(failed));
+            return;
+        }
+    }
+    file.size = command.bytes.size();
+    command.clear_plaintext();
+    // Math.random()-like digits, as the web client names its files.
+    std::array<std::uint8_t, 8> random{};
+    account_crypto_.random_bytes(random.data(), random.size());
+    std::string name = "0.";
+    for (const auto byte : random) name += std::to_string(byte % 100);
+    const std::string folder = aoraton_storage_folder(command.room_id, account_crypto_);
+    const std::string object = folder + "/" + name + ".enc";
+    file.url = config_.base_url + "/storage/v1/object/public/attachments/" + object;
+    file.type = "audio/wav";
+    file.name = "voice_" + std::to_string(now_unix_ * 1000) + ".wav";
+    file.encrypted = true;
+    AoratonEvent submitted;
+    submitted.type = AoratonEventType::SendSubmitted;
+    submitted.client_message_id = command.client_message_id;
+    emit(std::move(submitted));
+    AoratonHttpRequest upload;
+    upload.method = "POST";
+    upload.url = config_.base_url + "/storage/v1/object/attachments/" + object;
+    upload.headers.push_back({"apikey", config_.anon_key});
+    upload.headers.push_back({"Authorization", "Bearer " + session_.access_token});
+    upload.headers.push_back({"Content-Type", "application/octet-stream"});
+    upload.headers.push_back({"cache-control", "max-age=31536000"});
+    upload.headers.push_back({"x-upsert", "false"});
+    upload.body.assign(sealed.begin(), sealed.end());
+    upload.timeout_ms = kAttachmentTimeoutMs;
+    const auto stored_file = http_.send(upload);
+    for (auto& header : upload.headers) wipe(header.second);
+    if (folder.empty() || stored_file.status == 0 || !ok_status(stored_file.status)) {
+        failed.error = stored_file.status == 401 ? "SESSION_REVOKED" : "UPLOAD_FAILED";
+        emit(std::move(failed));
+        if (stored_file.status == 0) connection_lost();
+        return;
+    }
+    const auto& track = tracks_[command.room_id];
+    const std::string username = !track.my_username.empty() ? track.my_username :
+                                 (!session_.display_name.empty() ? session_.display_name : std::string("AURA"));
+    auto result = rest("POST", "/rest/v1/messages?select=id,created_at",
+                       aoraton_insert_attachment_body(command.room_id, session_.user_id, username,
+                                                      command.client_message_id, file),
+                       "return=representation");
+    if (result.outcome == RestOutcome::Revoked) {
+        failed.error = "SESSION_REVOKED";
+        emit(std::move(failed));
+        session_revoked();
+        return;
+    }
+    if (result.outcome == RestOutcome::Transient) {
+        pending_sends_.push_back({command.client_message_id, command.room_id});
+        if (pending_sends_.size() > kMaxPendingSends) pending_sends_.erase(pending_sends_.begin());
+        AoratonEvent uncertain;
+        uncertain.type = AoratonEventType::SendUncertain;
+        uncertain.client_message_id = command.client_message_id;
+        emit(std::move(uncertain));
+        connection_lost();
+        return;
+    }
+    std::string id;
+    std::string created_at;
+    if (!ok_status(result.response.status) || !aoraton_parse_insert_ack(result.response.body, id, created_at)) {
+        failed.error = "SEND_REJECTED";
+        emit(std::move(failed));
+        return;
+    }
+    auto& sent_track = tracks_[command.room_id];
+    remember(sent_track.seen_ids, id);
+    if (newer(created_at, sent_track.last_seen_at)) sent_track.last_seen_at = created_at;
+    AoratonEvent ack;
+    ack.type = AoratonEventType::SendAcknowledged;
+    ack.client_message_id = command.client_message_id;
+    ack.server_message_id = id;
+    ack.timestamp = created_at;
+    emit(std::move(ack));
 }
 
 const AoratonRemoteRoom* AoratonAccountWorker::room_for(const std::string& room_key) const {

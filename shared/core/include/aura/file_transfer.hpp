@@ -8,6 +8,7 @@
 #include <string_view>
 
 namespace aura {
+class IAoratonLinkEndpoint;
 constexpr std::uint64_t kTransferLeaseMs = 600000;
 constexpr std::uint64_t kTransferFileLimit = 16U * 1024U * 1024U;
 enum class TransferState { Off, Starting, Ready, Receiving, Expired, Locked, Failed };
@@ -108,17 +109,21 @@ struct TransferResponse {
 class TransferProtocol {
 public:
     // `keys`, when the platform keeps the assistant's keys (the device), takes
-    // them from POST /api/keys within the signed-in session.
+    // them from POST /api/keys within the signed-in session. `aoraton`, when
+    // the platform cannot show Google's sign-in page (the device), lets the
+    // owner's PC sign it in through POST /api/aoraton/* (ADR 0010).
     TransferProtocol(TransferSession& session, ITransferStorage& storage, std::function<std::uint64_t()> clock,
-                     ICloudKeySink* keys = nullptr)
-        : session_(session), storage_(storage), clock_(std::move(clock)), keys_(keys) {}
+                     ICloudKeySink* keys = nullptr, IAoratonLinkEndpoint* aoraton = nullptr)
+        : session_(session), storage_(storage), clock_(std::move(clock)), keys_(keys), aoraton_(aoraton) {}
     TransferResponse handle(const TransferRequest& request, ITransferReader& reader);
 
 private:
     TransferResponse store_keys(const TransferRequest& request, ITransferReader& reader);
+    TransferResponse aoraton_request(const TransferRequest& request, ITransferReader& reader);
     TransferSession& session_;
     ITransferStorage& storage_;
     std::function<std::uint64_t()> clock_;
     ICloudKeySink* keys_;
+    IAoratonLinkEndpoint* aoraton_;
 };
 }  // namespace aura

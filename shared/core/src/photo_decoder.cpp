@@ -180,6 +180,41 @@ int jpeg_output(JDEC* jd, void* bytes, JRECT* rect) {
     return 1;
 }
 }  // namespace
+std::shared_ptr<const PhotoImage> photo_thumbnail(const PhotoImage& image, unsigned max_edge) {
+    if (!image.width || !image.height || !max_edge || image.pixels.size() < std::size_t{image.width} * image.height)
+        return {};
+    const unsigned longest = std::max(image.width, image.height);
+    const unsigned width = longest <= max_edge ? image.width
+                                               : std::max(1U, (image.width * max_edge + longest / 2) / longest);
+    const unsigned height = longest <= max_edge ? image.height
+                                                : std::max(1U, (image.height * max_edge + longest / 2) / longest);
+    auto thumb = std::make_shared<PhotoImage>();
+    thumb->width = width;
+    thumb->height = height;
+    if (!thumb->pixels.resize(std::size_t{width} * height)) return {};
+    for (unsigned y = 0; y < height; ++y) {
+        const unsigned top = y * image.height / height;
+        const unsigned bottom = std::max(top + 1, (y + 1) * image.height / height);
+        for (unsigned x = 0; x < width; ++x) {
+            const unsigned left = x * image.width / width;
+            const unsigned right = std::max(left + 1, (x + 1) * image.width / width);
+            std::uint32_t red = 0, green = 0, blue = 0, count = 0;
+            for (unsigned sy = top; sy < bottom; ++sy)
+                for (unsigned sx = left; sx < right; ++sx) {
+                    const std::uint16_t pixel = image.pixels[std::size_t{sy} * image.width + sx];
+                    red += (pixel >> 11) & 31U;
+                    green += (pixel >> 5) & 63U;
+                    blue += pixel & 31U;
+                    ++count;
+                }
+            thumb->pixels[std::size_t{y} * width + x] =
+                static_cast<std::uint16_t>((((red + count / 2) / count) << 11) |
+                                           (((green + count / 2) / count) << 5) | ((blue + count / 2) / count));
+        }
+    }
+    return thumb;
+}
+
 std::shared_ptr<const PhotoImage> decode_photo(const std::uint8_t* data, std::size_t size, PhotoError& error) {
     const Input bytes{data, size};
     error = PhotoError::Format;

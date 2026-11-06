@@ -1,4 +1,6 @@
 #include "aura/file_transfer.hpp"
+#include "aura/aoraton_account.hpp"
+#include "aura/aoraton_device_link.hpp"
 #include "aura/text_util.hpp"
 #include "aura/transfer_page.hpp"
 #include <algorithm>
@@ -400,6 +402,99 @@ TransferResponse TransferProtocol::store_keys(const TransferRequest& r, ITransfe
     return stored ? TransferResponse{200, "{\"ok\":true}", false} : error_response(507, TransferError::Storage);
 }
 
+// The owner's PC signs the device in to aoraton.com through these calls
+// (scripts/aoraton-device-sign-in.mjs, ADR 0010): small JSON bodies within the
+// signed-in session. Nothing secret is echoed; the status carries only the
+// state, the authorize URL while a sign-in waits, and an error code.
+TransferResponse TransferProtocol::aoraton_request(const TransferRequest& r, ITransferReader& reader) {
+    const auto ticket = session_.authorize(r.authorization, clock_());
+    if (!ticket) return error_response(401, TransferError::Auth);
+    if (r.length < 2 || r.length > 4096 || r.content_type.substr(0, 16) != "application/json")
+        return error_response(400, TransferError::Name);
+    std::string body(static_cast<std::size_t>(r.length), '\0');
+    std::size_t done = 0;
+    while (done < body.size()) {
+        const int n = reader.read(reinterpret_cast<std::uint8_t*>(&body[done]), body.size() - done);
+        if (n <= 0 || static_cast<std::size_t>(n) > body.size() - done) {
+            wipe(body);
+            return error_response(400, TransferError::Interrupted);
+        }
+        done += static_cast<std::size_t>(n);
+    }
+    auto json = parse_flat_json(body, 4096);
+    wipe(body);
+    if (!json) return error_response(400, TransferError::Name);
+    if (!session_.valid(ticket, clock_())) return error_response(410, TransferError::Interrupted);
+    const TransferResponse ok{200, "{\"ok\":true}", false};
+    if (r.path == "/api/aoraton/status") {
+        if (json->size() != 0) return error_response(400, TransferError::Name);
+        const auto status = aoraton_->status();
+        const char* state = "not_configured";
+        switch (status.state) {
+            case AoratonLinkState::NotConfigured: state = "not_configured"; break;
+            case AoratonLinkState::SignedOut: state = "signed_out"; break;
+            case AoratonLinkState::Starting: state = "starting"; break;
+            case AoratonLinkState::Waiting: state = "waiting"; break;
+            case AoratonLinkState::SignedIn: state = "signed_in"; break;
+            case AoratonLinkState::Failed: state = "failed"; break;
+        }
+        std::string out = std::string("{\"state\":\"") + state + "\"";
+        if (!status.authorize_url.empty()) out += ",\"authorize_url\":\"" + json_escape(status.authorize_url) + "\"";
+        if (!status.error.empty()) out += ",\"error\":\"" + json_escape(status.error) + "\"";
+        return {200, out + "}", false};
+    }
+    if (r.path == "/api/aoraton/config") {
+        const auto url = json->string("url");
+        auto key = json->string("anon_key");
+        const auto inco = json->boolean("inco_enabled");
+        AoratonLinkConfig config;
+        const bool shaped = json->size() == 3 && url && key && inco;
+        if (shaped) {
+            config.base_url = *url;
+            config.anon_key = *key;
+            config.inco_enabled = *inco;
+        }
+        if (key) wipe(*key);
+        json.reset();
+        const bool stored = shaped && aoraton_->configure(config);
+        wipe(config.anon_key);
+        return stored ? ok : error_response(400, TransferError::Name);
+    }
+    if (r.path == "/api/aoraton/sign-in") {
+        if (json->size() != 0) return error_response(400, TransferError::Name);
+        return aoraton_->request_sign_in() ? ok : error_response(409, TransferError::Missing);
+    }
+    if (r.path == "/api/aoraton/code") {
+        auto code = json->string("code");
+        const auto refusal = json->string("error");
+        json.reset();
+        const bool answered = (code && !refusal) || (!code && refusal);
+        if (!answered || (code && !aoraton_link_code_valid(*code)) || (refusal && refusal->size() > 64)) {
+            if (code) wipe(*code);
+            return error_response(400, TransferError::Name);
+        }
+        const bool delivered = code ? aoraton_->deliver(*code, false) : aoraton_->deliver(std::string{}, true);
+        if (code) wipe(*code);
+        return delivered ? ok : error_response(409, TransferError::Missing);
+    }
+    if (r.path == "/api/aoraton/invite") {
+        auto invite = json->string("invite");
+        const bool single = json->size() == 1;
+        json.reset();
+        AoratonInvite parsed;
+        const bool valid = single && invite && aoraton_parse_invite(*invite, parsed);
+        parsed.clear();
+        if (!valid) {
+            if (invite) wipe(*invite);
+            return error_response(400, TransferError::Name);
+        }
+        const bool queued = aoraton_->add_invite(*invite);
+        wipe(*invite);
+        return queued ? ok : error_response(409, TransferError::Limit);
+    }
+    return error_response(404, TransferError::Name);
+}
+
 TransferResponse TransferProtocol::handle(const TransferRequest& r, ITransferReader& reader) {
     if (!r.local_peer) return error_response(403, TransferError::Auth);
     session_.tick(clock_());
@@ -430,6 +525,7 @@ TransferResponse TransferProtocol::handle(const TransferRequest& r, ITransferRea
                              : TransferResponse{200, "{\"token\":\"" + token + "\"}", false};
     }
     if (r.path == "/api/keys" && keys_) return store_keys(r, reader);
+    if (r.path.rfind("/api/aoraton/", 0) == 0 && aoraton_) return aoraton_request(r, reader);
     if (r.path != "/api/upload" && r.path != "/api/files" && r.path != "/api/delete")
         return error_response(404, TransferError::Name);
     const auto ticket = session_.authorize(r.authorization, clock_());

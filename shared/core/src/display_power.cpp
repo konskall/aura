@@ -242,6 +242,10 @@ bool needs_full_speed(DisplayMode mode) noexcept {
     return mode == DisplayMode::Active || mode == DisplayMode::Dimmed;
 }
 
+bool realtime_sync_allowed(DisplayMode mode, bool external_power) noexcept {
+    return external_power || needs_full_speed(mode);
+}
+
 int DisplayPowerModel::brightness_for(DisplayMode mode) const noexcept {
     const int active = snapshot_.settings.active_brightness_percent;
     switch (mode) {

@@ -755,13 +755,15 @@ bool CompanionRuntime::begin_voice(VoiceJob job, TranslateSide side, ListenOrigi
         return false;
     }
     if (ctx_.on_voice_active) ctx_.on_voice_active(true);
-    // A note is dictated: it may pause to think and may last half a minute.
-    recorder_.start(job == VoiceJob::Note ? VoiceRecorder::Mode::Dictation : VoiceRecorder::Mode::Turn);
+    // A note or a voice message is dictated: it may pause to think and may last half a minute.
+    recorder_.start(job == VoiceJob::Note || job == VoiceJob::Message ? VoiceRecorder::Mode::Dictation
+                                                                      : VoiceRecorder::Mode::Turn);
     job_ = job;
     listen_origin_ = job == VoiceJob::Assistant ? origin : ListenOrigin::Manual;
     translate_side_ = side;
     voice_.state = VoiceCaptureState::Recording;
     voice_.purpose = job == VoiceJob::Note ? VoicePurpose::Note :
+                     job == VoiceJob::Message ? VoicePurpose::Message :
                      (job == VoiceJob::Translate ? VoicePurpose::Translate : VoicePurpose::Assistant);
     voice_.level = 0.0F;
     voice_.elapsed_ms = 0;
@@ -770,6 +772,16 @@ bool CompanionRuntime::begin_voice(VoiceJob job, TranslateSide side, ListenOrigi
     bump_voice();
     if (job == VoiceJob::Translate) translate_entry_ = translation_.begin(side, TranslationStatus::Listening);
     return true;
+}
+
+bool CompanionRuntime::begin_voice_message() { return begin_voice(VoiceJob::Message, TranslateSide::Mine); }
+
+void CompanionRuntime::finish_voice_message() {
+    if (job_ == VoiceJob::Message) finish_voice();
+}
+
+void CompanionRuntime::cancel_voice_message() {
+    if (job_ == VoiceJob::Message) cancel_voice();
 }
 
 bool CompanionRuntime::begin_listening() {
@@ -872,6 +884,10 @@ void CompanionRuntime::finish_voice() {
             voice_.state = VoiceCaptureState::Idle;
             break;
         }
+        case VoiceJob::Message:
+            voice_.state = VoiceCaptureState::Idle;
+            if (ctx_.on_voice_message && !wav.empty()) ctx_.on_voice_message(std::move(wav));
+            break;
         case VoiceJob::Translate:
             if (!heard) {
                 translation_.fail(translate_entry_, "NO_SPEECH");

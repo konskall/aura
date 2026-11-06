@@ -1,3 +1,4 @@
+#include "aura/aoraton_account.hpp"
 #include "aura/aoraton_crypto.hpp"
 #include "aura/windows_aoraton_crypto.hpp"
 
@@ -115,6 +116,67 @@ int main() {
     expect(first != second, "CSPRNG produces a fresh IV per encryption");
     expect(production_random.decrypt_text(first, key, decoded, error) && decoded == "nonce check",
            "production random ciphertext decrypts");
+
+    // Attachments, as the aoraton web client makes them: a per-file key CK
+    // wrapped under HKDF(RK, 'inco/e2ee/v2/file') as a v2 wire string, and the
+    // file as AES-256-GCM(CK, iv) with the tag appended. Node made the vector.
+    {
+        const auto room = sequential_key();
+        std::array<std::uint8_t, 32> file_key{};
+        expect(deterministic.unwrap_file_key(
+                   "v2:sLGys7S1tre4ubq7:_rt37cUkf34HcY_uuE1kWWzxGHnjgwyf6kkiWB_21x1avOgQ_ZlidbvMq52HVd9i", room,
+                   file_key),
+               "the web client's wrapped file key opens");
+        std::array<std::uint8_t, 32> expected_key{};
+        for (std::size_t index = 0; index < expected_key.size(); ++index)
+            expected_key[index] = static_cast<std::uint8_t>(0x20 + index);
+        expect(file_key == expected_key, "to exactly the web client's file key");
+        expect(!deterministic.unwrap_file_key(
+                   "v2:sLGys7S1tre4ubq7:_rt37cUkf34HcY_uuE1kWWzxGHnjgwyf6kkiWB_21x1avOgQ_ZlidbvMq52HVd9j", room,
+                   file_key),
+               "a damaged wrap is refused");
+        const std::vector<std::uint8_t> cipher = {
+            0x2e, 0xd6, 0x74, 0xbe, 0xa3, 0x0e, 0x3f, 0x9f, 0x1b, 0x46, 0x36, 0xd6, 0x4c, 0xb3, 0xb7, 0x2c, 0xe3,
+            0x35, 0xf6, 0xb5, 0x6f, 0x87, 0xa9, 0x6d, 0x78, 0x8d, 0x6e, 0x25, 0x56, 0x95, 0x66, 0xd1, 0x9f, 0x45,
+            0x4f, 0x1e, 0xf1, 0x5a, 0xc4, 0x45, 0x83};
+        const std::string plain_hex = "44454d4f206174746163686d656e7420627974657320ff0001";
+        std::vector<std::uint8_t> plain;
+        expect(deterministic.open_file(expected_key, "wMHCw8TFxsfIycrL", cipher.data(), cipher.size(), plain),
+               "the web client's encrypted file opens with its standard-base64 iv");
+        std::string hex;
+        for (auto byte : plain) {
+            static constexpr char kHex[] = "0123456789abcdef";
+            hex += kHex[byte >> 4];
+            hex += kHex[byte & 15];
+        }
+        expect(hex == plain_hex, "to exactly the file's bytes");
+        auto tampered = cipher;
+        tampered[3] ^= 1;
+        expect(!deterministic.open_file(expected_key, "wMHCw8TFxsfIycrL", tampered.data(), tampered.size(), plain) &&
+                   plain.empty(),
+               "a changed file is refused and nothing is returned");
+        expect(!deterministic.open_file(expected_key, "not base64", cipher.data(), cipher.size(), plain),
+               "a malformed iv is refused");
+
+        WindowsAoratonCryptoV2 random;
+        std::array<std::uint8_t, 32> new_key{};
+        std::string wrapped;
+        std::string iv;
+        std::vector<std::uint8_t> sealed;
+        const std::vector<std::uint8_t> voice = {'R', 'I', 'F', 'F', 0, 1, 2, 3, 250};
+        expect(random.seal_file(voice.data(), voice.size(), new_key, iv, sealed) && sealed.size() == voice.size() + 16 &&
+                   iv.size() == 16 && random.wrap_file_key(new_key, room, wrapped),
+               "a new file gets its own key, a standard-base64 iv and a wrapped key");
+        std::array<std::uint8_t, 32> reopened_key{};
+        expect(random.unwrap_file_key(wrapped, room, reopened_key) && reopened_key == new_key &&
+                   random.open_file(reopened_key, iv, sealed.data(), sealed.size(), plain) && plain == voice,
+               "and the round trip gives the file back");
+        expect(!random.unwrap_file_key(wrapped, sequential_key(1), reopened_key), "another room's key cannot unwrap it");
+    }
+    WindowsAoratonAccountCrypto account;
+    expect(aoraton_storage_folder("v2.demo-room", account) ==
+               "a630c4b0d00615267e032aa6096b6748481746224c9cbeb1d9291e314184ac48",
+           "the storage folder is the lower-case SHA-256 of the room key, as the web client and its cleanup use");
 
     std::cout << "aoraton_crypto_test: PASS\n";
     return 0;

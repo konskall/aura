@@ -1,6 +1,7 @@
 #include "aura/assistant_state.hpp"
 #include "aura/assistant_stream.hpp"
 #include "aura/aoraton.hpp"
+#include "aura/voice_container.hpp"
 #include "aura/aoraton_real.hpp"
 #include "aura/aura_appearance.hpp"
 #include "aura/aura_theme.hpp"
@@ -67,6 +68,22 @@
 
 namespace {
 constexpr std::size_t kMaximumRetiredRequests = 4;
+
+// A decoded photo on screen: an image drawn from an RGB565 descriptor at
+// least `min_width` wide (a conversation's thumbnail, or the photo itself).
+lv_obj_t* find_photo(lv_obj_t* object, std::uint32_t min_width) {
+    if (lv_obj_check_type(object, &lv_image_class)) {
+        const void* source = lv_image_get_src(object);
+        if (source && lv_image_src_get_type(source) == LV_IMAGE_SRC_VARIABLE) {
+            const auto* image = static_cast<const lv_image_dsc_t*>(source);
+            if (image->header.cf == LV_COLOR_FORMAT_RGB565 && image->header.w >= min_width) return object;
+        }
+    }
+    for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+        if (auto* found = find_photo(lv_obj_get_child(object, static_cast<int32_t>(index)), min_width)) return found;
+    }
+    return nullptr;
+}
 
 template <typename T>
 void prune_finished(std::vector<std::future<T>>& futures) {
@@ -450,6 +467,8 @@ int main(int argc, char** argv) {
     }
     aura::IAoratonService& aoraton = *aoraton_service;
     std::optional<aura::AoratonSnapshot> aoraton_capture_override;
+    std::shared_ptr<const aura::PcmClip> voice_message_playing;
+    std::string voice_message_room;
     aura::simulator::WindowsAudioBackend audio;
     audio.initialize();
     aura::simulator::WindowsRadioService radio_service(audio);
@@ -544,6 +563,8 @@ int main(int argc, char** argv) {
         int aoraton_unlock_bytes{0};
         int aoraton_paste{0};
         int aoraton_sign_in{0};
+        int aoraton_open_attachment{0};
+        int aoraton_voice_start{0};
         int aoraton_sign_out{0};
     } interaction_counts;
 
@@ -1093,6 +1114,9 @@ int main(int argc, char** argv) {
         pending = false;
     };
     companion_context.on_voice_active = [&radio_service](bool active) { radio_service.set_hold(active); };
+    companion_context.on_voice_message = [&](std::vector<std::uint8_t> wav) {
+        aoraton.prepare_voice(voice_message_room, std::move(wav));
+    };
     companion_context.assistant_provider_name = [&]() {
         return provider ? std::string(provider->name()) : std::string{};
     };
@@ -1240,6 +1264,20 @@ int main(int argc, char** argv) {
         ++interaction_counts.aoraton_cancel;
         aoraton.cancel_send();
     };
+    ui_callbacks.on_aoraton_open_attachment = [&](const std::string& message_id) {
+        ++interaction_counts.aoraton_open_attachment;
+        return aoraton.open_attachment(message_id);
+    };
+    ui_callbacks.on_aoraton_close_attachment = [&] { aoraton.close_attachment(); };
+    // A voice message: the companion records it like a note; the recording
+    // goes to the service, which waits for the confirmation.
+    ui_callbacks.on_aoraton_voice_start = [&](const std::string& room_id) {
+        ++interaction_counts.aoraton_voice_start;
+        voice_message_room = room_id;
+        return companion.begin_voice_message();
+    };
+    ui_callbacks.on_aoraton_voice_stop = [&] { companion.finish_voice_message(); };
+    ui_callbacks.on_aoraton_voice_cancel = [&] { companion.cancel_voice_message(); };
     ui_callbacks.on_aoraton_pair_start = [&] {
         ++interaction_counts.aoraton_sign_in;
         return aoraton.begin_pairing();
@@ -1748,6 +1786,18 @@ int main(int argc, char** argv) {
             aoraton.select_room("demo-family");
             ui.apply_aoraton(aoraton.snapshot());
             ui.show(aura::UiView::AoratonConversation);
+        } else if (capture_scenario == "aoraton-photo" || capture_scenario == "aoraton-photo-viewer") {
+            aoraton.select_room("demo-lab");
+            ui.apply_aoraton(aoraton.snapshot());
+            ui.show(aura::UiView::AoratonConversation);
+            if (capture_scenario == "aoraton-photo-viewer" && aoraton.open_attachment("fixture-4")) {
+                ui.apply_aoraton(aoraton.snapshot());
+                ui.show(aura::UiView::AoratonAttachment);
+            } else if (auto* thumbnail = find_photo(ui.root(), 100)) {
+                // The whole bubble from its top: the author, then the photo.
+                lv_obj_t* bubble = lv_obj_get_parent(thumbnail);
+                lv_obj_scroll_to_view_recursive(bubble ? bubble : thumbnail, LV_ANIM_OFF);
+            }
         } else if (capture_scenario == "aoraton-confirm") {
             aoraton.select_room("demo-family");
             aoraton.prepare_send("demo-family", text().capture_message);
@@ -3202,6 +3252,114 @@ int main(int argc, char** argv) {
                ui.view() == aura::UiView::AoratonConversation,
                std::to_string(static_cast<int>(ui.view())));
 
+        // A photo in a conversation: its thumbnail sits in the bubble, a tap opens
+        // it full screen, and back closes it and frees the image.
+        {
+            aoraton.reset_mock();
+            aoraton.select_room("demo-lab");
+            ui.apply_aoraton(aoraton.snapshot());
+            reset_to(aura::UiView::AoratonConversation);
+            auto* thumbnail = find_photo(ui.root(), 100);
+            if (thumbnail) {  // the conversation opens at its newest message
+                lv_obj_scroll_to_view_recursive(thumbnail, LV_ANIM_OFF);
+                lv_obj_update_layout(ui.root());
+            }
+            bool opened = false;
+            bool closed = false;
+            std::string detail = thumbnail ? "thumbnail" : "no-thumbnail";
+            if (thumbnail) {
+                lv_area_t area{};
+                lv_obj_get_coords(thumbnail, &area);
+                const int opens_before = interaction_counts.aoraton_open_attachment;
+                tap((area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2);
+                ui.apply_aoraton(aoraton.snapshot());
+                pump(2);
+                opened = ui.view() == aura::UiView::AoratonAttachment &&
+                         interaction_counts.aoraton_open_attachment == opens_before + 1 &&
+                         find_photo(ui.root(), 400) != nullptr;
+                detail += ":" + std::to_string(static_cast<int>(ui.view()));
+                tap(56, 56);
+                closed = ui.view() == aura::UiView::AoratonConversation &&
+                         aoraton.snapshot().opened_attachment_id.empty() && !aoraton.snapshot().opened_image;
+                detail += ":" + std::to_string(static_cast<int>(ui.view()));
+            }
+            record("aoraton.photo_open", "thumbnail-opens-full-screen", thumbnail && opened && closed, detail);
+        }
+        // A voice message plays on a tap and stops on the next; its bubble says which.
+        {
+            aoraton.reset_mock();
+            aoraton.select_room("demo-lab");
+            ui.apply_aoraton(aoraton.snapshot());
+            reset_to(aura::UiView::AoratonConversation);
+            const auto& copy = aura::l10n::companion_el_gr();
+            std::function<lv_obj_t*(lv_obj_t*, const char*)> label_with = [&](lv_obj_t* object,
+                                                                              const char* wanted) -> lv_obj_t* {
+                if (lv_obj_check_type(object, &lv_label_class) && std::strcmp(lv_label_get_text(object), wanted) == 0)
+                    return object;
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    if (auto* found = label_with(lv_obj_get_child(object, static_cast<int32_t>(index)), wanted))
+                        return found;
+                }
+                return nullptr;
+            };
+            auto* idle = label_with(ui.root(), copy.aoraton_voice_message);
+            bool played = false;
+            bool stopped = false;
+            if (idle) {
+                lv_obj_scroll_to_view_recursive(idle, LV_ANIM_OFF);
+                lv_obj_update_layout(ui.root());
+                lv_area_t area{};
+                lv_obj_get_coords(idle, &area);
+                const int x = (area.x1 + area.x2) / 2;
+                const int y = (area.y1 + area.y2) / 2;
+                tap(x, y);
+                ui.apply_aoraton(aoraton.snapshot());
+                pump(1);
+                played = aoraton.snapshot().opened_attachment_id == "fixture-5" && aoraton.snapshot().voice_clip &&
+                         label_with(ui.root(), copy.aoraton_voice_playing) != nullptr;
+                tap(x, y);
+                ui.apply_aoraton(aoraton.snapshot());
+                pump(1);
+                stopped = !aoraton.snapshot().voice_clip && label_with(ui.root(), copy.aoraton_voice_message) != nullptr;
+            }
+            record("aoraton.voice_play", "tap-plays-tap-stops", idle && played && stopped,
+                   std::to_string(idle != nullptr) + std::to_string(played) + std::to_string(stopped));
+            audio.stop();
+        }
+        // Recording a voice message: the conversation's microphone starts the
+        // platform's recorder, and a recording reaches the confirmation screen
+        // with its length (here the DEMO recording goes straight to the service).
+        {
+            aoraton.reset_mock();
+            aoraton.select_room("demo-family");
+            ui.apply_aoraton(aoraton.snapshot());
+            reset_to(aura::UiView::AoratonConversation);
+            const int starts = interaction_counts.aoraton_voice_start;
+            tap(420, 424);
+            const bool started = interaction_counts.aoraton_voice_start == starts + 1;
+            std::vector<std::int16_t> samples(16000 * 7, 0);
+            std::vector<std::uint8_t> wav;
+            const bool prepared = aura::voice_wav(samples.data(), samples.size(), 16000, wav) &&
+                                  aoraton.prepare_voice("demo-family", wav);
+            ui.apply_aoraton(aoraton.snapshot());
+            ui.show(aura::UiView::AoratonConfirm);
+            pump(2);
+            char expected[64];
+            std::snprintf(expected, sizeof(expected), aura::l10n::companion_el_gr().aoraton_voice_length_format, 0U, 7U);
+            std::function<bool(lv_obj_t*)> shows = [&](lv_obj_t* object) -> bool {
+                if (lv_obj_check_type(object, &lv_label_class) && std::strcmp(lv_label_get_text(object), expected) == 0)
+                    return true;
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    if (shows(lv_obj_get_child(object, static_cast<int32_t>(index)))) return true;
+                }
+                return false;
+            };
+            const bool shown = shows(ui.root());
+            aoraton.cancel_send();
+            record("aoraton.voice_record", "microphone-and-confirmation", started && prepared && shown,
+                   std::to_string(started) + std::to_string(prepared) + std::to_string(shown));
+        }
+
         // aoraton.com account screens, shown through a live-mode snapshot (DEMO label).
         std::uint64_t account_serial = 0;
         auto account_snapshot = [&](aura::AoratonPairingState pairing) {
@@ -3297,6 +3455,32 @@ int main(int argc, char** argv) {
         tap(240, 420);
         record("aoraton.sign_in", "button-center", interaction_counts.aoraton_sign_in == sign_in_before + 1,
                std::to_string(interaction_counts.aoraton_sign_in - sign_in_before));
+        // The device cannot open Google's page, so its button opens File transfer
+        // for the PC helper (scripts/aoraton-device-sign-in.mjs, ADR 0010) and
+        // says so; no sign-in starts on the device itself.
+        {
+            std::function<bool(lv_obj_t*, const char*)> shows = [&](lv_obj_t* object, const char* text) -> bool {
+                if (lv_obj_check_type(object, &lv_label_class) && std::strcmp(lv_label_get_text(object), text) == 0)
+                    return true;
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    if (shows(lv_obj_get_child(object, static_cast<int32_t>(index)), text)) return true;
+                }
+                return false;
+            };
+            account_snapshot(aura::AoratonPairingState::NotPaired);
+            ui.set_aoraton_sign_in_relay(true);
+            reset_to(aura::UiView::AoratonRooms);
+            const bool relay_copy = shows(ui.root(), aura::l10n::companion_el_gr().aoraton_sign_in_relay_help);
+            const int relay_before = interaction_counts.aoraton_sign_in;
+            tap(240, 420);
+            const bool relayed = ui.view() == aura::UiView::FileTransfer &&
+                                 interaction_counts.aoraton_sign_in == relay_before &&
+                                 companion.transfer().session().snapshot().state == aura::TransferState::Ready;
+            record("aoraton.sign_in_relay", "button-opens-file-transfer", relay_copy && relayed,
+                   std::to_string(relay_copy) + ":" + std::to_string(static_cast<int>(ui.view())));
+            companion.transfer().stop();
+            ui.set_aoraton_sign_in_relay(false);
+        }
         account_snapshot(aura::AoratonPairingState::Paired);
         reset_to(aura::UiView::AoratonPair);
         const int paste_before = interaction_counts.aoraton_paste;
@@ -6897,6 +7081,17 @@ int main(int argc, char** argv) {
         }
         apply();
         ui.apply_audio(audio.diagnostics());
+        // A decoded voice message plays once; stopping or leaving it stops the
+        // sound, and the end of the sound closes it.
+        if (const auto& clip = aoraton.snapshot().voice_clip; clip != voice_message_playing) {
+            if (clip) audio.play_pcm(*clip);
+            else if (voice_message_playing) audio.stop();
+            voice_message_playing = clip;
+        } else if (voice_message_playing && audio.diagnostics().state != aura::AudioState::Playing &&
+                   audio.diagnostics().state != aura::AudioState::Buffering) {
+            voice_message_playing.reset();
+            aoraton.close_attachment();
+        }
         ui.apply_aoraton(aoraton_capture_override ? *aoraton_capture_override : aoraton.snapshot());
         ui.apply_status(device_status.snapshot());
         ui.apply_weather(weather_model.snapshot());

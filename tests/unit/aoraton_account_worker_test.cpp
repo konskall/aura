@@ -1,4 +1,5 @@
 #include "aura/aoraton_account_worker.hpp"
+#include "aura/voice_container.hpp"
 #include "aura/aoraton_real.hpp"
 #include "aura/json_reader.hpp"
 #include "aura/text_util.hpp"
@@ -77,6 +78,55 @@ public:
                         std::string(type) == "text" ? wire(room_key, text) : std::string{}, type, stamp(), client});
     }
 
+    // A photo the way the web client sends one: the file sealed with its own
+    // key, the key wrapped with the room's, the ciphertext in the public bucket
+    // under the hashed room folder and the metadata in the row.
+    std::string add_photo(const char* room_key, const char* uid, const char* username, const std::string& bytes,
+                          const std::string& caption, const std::string& url_override = {}) {
+        AoratonRoomKey key(filled(std::string(room_key) == kAlpha ? 0x11 : (std::string(room_key) == kBeta ? 0x22 : 0x33)));
+        std::array<std::uint8_t, 32> file_key{};
+        std::string iv;
+        std::vector<std::uint8_t> sealed;
+        std::string wrapped;
+        expect(crypto.seal_file(reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), file_key, iv, sealed) &&
+                   crypto.wrap_file_key(file_key, key, wrapped),
+               "the fake seals a photo");
+        WindowsAoratonAccountCrypto account;
+        const std::string path = "/storage/v1/object/public/attachments/" + aoraton_storage_folder(room_key, account) +
+                                 "/0." + std::to_string(++next_id) + ".enc";
+        files[path] = std::string(sealed.begin(), sealed.end());
+        const std::string url = url_override.empty() ? std::string(kBase) + path : url_override;
+        const std::string id = "m-" + std::to_string(++next_id);
+        rows.push_back({id, room_key, uid, username, caption.empty() ? std::string{} : wire(room_key, caption), "text",
+                        stamp(), {},
+                        R"("attachment":{"url":")" + url + R"(","name":"DEMO photo.jpg","type":"image/jpeg","size":)" +
+                            std::to_string(bytes.size()) + R"(,"enc":true,"iv":")" + iv + R"(","wrappedKey":")" +
+                            wrapped + R"(","width":320,"height":240})"});
+        return id;
+    }
+
+    // A voice message as a browser sends one (`type` audio/*), sealed like a photo.
+    std::string add_voice(const char* room_key, const std::string& bytes, const char* type, const char* name) {
+        AoratonRoomKey key(filled(std::string(room_key) == kAlpha ? 0x11 : (std::string(room_key) == kBeta ? 0x22 : 0x33)));
+        std::array<std::uint8_t, 32> file_key{};
+        std::string iv;
+        std::vector<std::uint8_t> sealed;
+        std::string wrapped;
+        expect(crypto.seal_file(reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), file_key, iv, sealed) &&
+                   crypto.wrap_file_key(file_key, key, wrapped),
+               "the fake seals a voice message");
+        WindowsAoratonAccountCrypto account;
+        const std::string path = "/storage/v1/object/public/attachments/" + aoraton_storage_folder(room_key, account) +
+                                 "/0." + std::to_string(++next_id) + ".enc";
+        files[path] = std::string(sealed.begin(), sealed.end());
+        const std::string id = "m-" + std::to_string(++next_id);
+        rows.push_back({id, room_key, "u-maria", "Maria", std::string{}, "text", stamp(), {},
+                        R"("attachment":{"url":")" + std::string(kBase) + path + R"(","name":")" + name +
+                            R"(","type":")" + type + R"(","size":)" + std::to_string(bytes.size()) +
+                            R"(,"enc":true,"iv":")" + iv + R"(","wrappedKey":")" + wrapped + R"("})"});
+        return id;
+    }
+
     std::string stamp() {
         char buffer[48];
         std::snprintf(buffer, sizeof(buffer), "2026-10-23T10:%02d:%02d.5+00:00", seconds / 60, seconds % 60);
@@ -128,9 +178,21 @@ public:
             ++logouts;
             return {204, {}};
         }
+        if (request.method == "GET" && path.rfind("/storage/v1/object/public/attachments/", 0) == 0) {
+            ++storage_requests;
+            largest_allowed = std::max(largest_allowed, request.max_response_bytes);
+            const auto found = files.find(path);
+            return found == files.end() ? AoratonHttpResponse{404, "{}"} : AoratonHttpResponse{200, found->second};
+        }
         if (header(request, "Authorization") != "Bearer " + access || access_expired) {
             access_expired = false;
             return {401, R"({"message":"JWT expired"})"};
+        }
+        if (request.method == "POST" && path.rfind("/storage/v1/object/attachments/", 0) == 0) {
+            const std::string rest = path.substr(std::string("/storage/v1/object/attachments/").size());
+            uploads.push_back({rest, request.body, header(request, "Content-Type"), header(request, "x-upsert")});
+            files["/storage/v1/object/public/attachments/" + rest] = request.body;
+            return {200, R"({"Key":"attachments/)" + rest + R"("})"};
         }
         if (request.method == "GET" && path.rfind("/rest/v1/rooms?select=*&created_by=eq.user-1", 0) == 0) {
             return {200, rooms_json(true, {})};
@@ -183,6 +245,11 @@ public:
                        body.find("avatar_url") && body.find("avatar_url")->is_null(),
                    "insert carries the web client's fields");
             last_insert_username = body.string_at("username");
+            if (const JsonValue* file = body.find("attachment"); file && file->type() == JsonType::Object) {
+                last_attachment = {file->string_at("url"), file->string_at("name"), file->string_at("type"),
+                                   file->string_at("iv"), file->string_at("wrappedKey"),
+                                   file->find("enc") && file->find("enc")->as_bool(false)};
+            }
             Row row{"m-" + std::to_string(++next_id), body.string_at("room_key"), kUser, last_insert_username,
                     body.string_at("text"), "text", stamp(), body.string_at("client_msg_id")};
             rows.push_back(row);
@@ -276,6 +343,18 @@ public:
         std::string avatar;
     };
     WindowsAoratonCryptoV2 crypto;
+    std::map<std::string, std::string> files;
+    struct Upload {
+        std::string path, body, content_type, upsert;
+    };
+    std::vector<Upload> uploads;
+    struct Attachment {
+        std::string url, name, type, iv, wrapped_key;
+        bool encrypted{false};
+    };
+    Attachment last_attachment;
+    int storage_requests{0};
+    std::size_t largest_allowed{0};
     std::vector<Room> rooms;
     std::vector<Row> rows;
     std::vector<std::string> inco_requests;
@@ -383,13 +462,37 @@ public:
     AoratonRealtimeUpdate update;
 };
 
+// The worker's view of the microSD cache, in memory.
+struct MemoryCache final : IAoratonAttachmentCache {
+    std::map<std::string, std::string> files;
+    int erased{0};
+    int cleared{0};
+    bool load(const std::string& name, std::size_t max_bytes, std::string& sealed) override {
+        sealed.clear();
+        const auto found = files.find(name);
+        if (found == files.end() || found->second.size() > max_bytes) return false;
+        sealed = found->second;
+        return true;
+    }
+    void store(const std::string& name, const std::string& sealed) override { files[name] = sealed; }
+    void erase(const std::string& name) override {
+        ++erased;
+        files.erase(name);
+    }
+    void clear() override {
+        ++cleared;
+        files.clear();
+    }
+};
+
 struct Rig {
-    explicit Rig(AoratonIncoConfig inco = {}, bool use_realtime = false)
+    explicit Rig(AoratonIncoConfig inco = {}, bool use_realtime = false, bool use_cache = false)
         : service(mailbox, AoratonRuntimeMode::Live, [this] {
               return aoraton_new_client_message_id(account);
           }),
           worker(mailbox, {kBase, kAnon, "http://127.0.0.1:4779/aoraton/callback", std::move(inco)}, server, account,
-                 messages, store, channel, use_realtime ? &realtime : nullptr) {}
+                 messages, store, channel, use_realtime ? &realtime : nullptr, nullptr,
+                 use_cache ? &cache : nullptr) {}
 
     void pump(int rounds = 6) {
         for (int index = 0; index < rounds; ++index) {
@@ -425,6 +528,7 @@ struct Rig {
     WindowsAoratonCryptoV2 messages;
     RealAoratonService service;
     FakeRealtime realtime;
+    MemoryCache cache;
     AoratonAccountWorker worker;
     std::int64_t now_ms{1000};
 };
@@ -446,6 +550,235 @@ std::string fixture_passphrase() {
 
 int main() {
     const std::string passphrase = fixture_passphrase();
+
+    {
+        // Sending a voice message: AURA's WAV waits for the confirmation, then
+        // goes sealed to the project's bucket and as a row with its attachment,
+        // exactly as the web client sends a file.
+        Rig rig;
+        rig.sign_in();
+        expect(rig.service.unlock_keys(passphrase), "unlock to send voice");
+        rig.pump();
+        std::vector<std::int16_t> tone(16000);
+        for (std::size_t index = 0; index < tone.size(); ++index)
+            tone[index] = static_cast<std::int16_t>(index % 40 < 20 ? 1500 : -1500);
+        std::vector<std::uint8_t> wav;
+        expect(voice_wav(tone.data(), tone.size(), 16000, wav), "a DEMO recording");
+        expect(rig.service.select_room(kAlpha), "the room");
+        rig.pump(10);
+        expect(!rig.service.prepare_voice(kAlpha, {'n', 'o', 't', ' ', 'a', ' ', 'w', 'a', 'v', 'e', ' ', '!'}),
+               "only a WAV recording");
+        expect(rig.service.prepare_voice(kAlpha, wav) && rig.service.snapshot().awaiting_confirmation &&
+                   rig.service.snapshot().pending_voice_ms == 1000,
+               "the recording waits for the confirmation, with its length");
+        rig.pump(5);
+        expect(rig.server.uploads.empty(), "nothing leaves before the confirmation");
+        expect(rig.service.confirm_send(), "confirmed");
+        rig.pump(10);
+        expect(rig.server.uploads.size() == 1, "one upload");
+        const auto& upload = rig.server.uploads.front();
+        WindowsAoratonAccountCrypto account;
+        expect(upload.content_type == "application/octet-stream" && upload.upsert == "false" &&
+                   upload.path.rfind(aoraton_storage_folder(kAlpha, account) + "/", 0) == 0 &&
+                   upload.path.size() > 4 && upload.path.compare(upload.path.size() - 4, 4, ".enc") == 0,
+               "sealed bytes under the room's hashed folder, never overwriting");
+        const auto& row = rig.server.last_attachment;
+        expect(row.encrypted && row.type == "audio/wav" && row.name.rfind("voice_", 0) == 0 &&
+                   row.url == std::string(kBase) + "/storage/v1/object/public/attachments/" + upload.path,
+               "the row carries the attachment as the web client writes it");
+        std::array<std::uint8_t, 32> file_key{};
+        std::vector<std::uint8_t> opened;
+        AoratonRoomKey key(filled(0x11));
+        expect(rig.server.crypto.unwrap_file_key(row.wrapped_key, key, file_key) &&
+                   rig.server.crypto.open_file(file_key, row.iv,
+                                               reinterpret_cast<const std::uint8_t*>(upload.body.data()),
+                                               upload.body.size(), opened) &&
+                   opened == wav,
+               "a browser holding the room key opens exactly the recording");
+        bool acknowledged = false;
+        for (const auto& message : rig.service.snapshot().messages) {
+            if (message.direction == AoratonDirection::Outgoing && message.attachment == AoratonAttachmentKind::Voice &&
+                message.delivery == AoratonDelivery::Acknowledged)
+                acknowledged = true;
+        }
+        expect(acknowledged, "and the sent message is acknowledged");
+    }
+
+    {
+        // Voice messages: a tap fetches, opens and decodes one for playback; a
+        // codec this platform cannot decode says so with a code.
+        Rig rig;
+        rig.sign_in();
+        expect(rig.service.unlock_keys(passphrase), "unlock for voice");
+        rig.pump();
+        std::vector<std::int16_t> tone(8000);
+        for (std::size_t index = 0; index < tone.size(); ++index)
+            tone[index] = static_cast<std::int16_t>(index % 32 < 16 ? 4000 : -4000);
+        std::vector<std::uint8_t> wav;
+        expect(voice_wav(tone.data(), tone.size(), 16000, wav), "a DEMO tone as AURA's WAV");
+        const std::string voice = rig.server.add_voice(kAlpha, std::string(wav.begin(), wav.end()), "audio/wav",
+                                                       "voice_DEMO.wav");
+        const std::string safari = rig.server.add_voice(kAlpha, std::string(64, 'x'), "audio/mp4", "voice_DEMO.mp4");
+        expect(rig.service.select_room(kAlpha), "open the room");
+        rig.pump(20);
+        const AoratonMessage* message = nullptr;
+        for (const auto& item : rig.service.snapshot().messages) {
+            if (item.id == voice) message = &item;
+        }
+        expect(message && message->attachment == AoratonAttachmentKind::Voice && !message->thumbnail,
+               "a voice message is a message, with no thumbnail to fetch");
+        const int before = rig.server.storage_requests;
+        expect(rig.service.open_attachment(voice), "a tap plays it");
+        rig.pump(10);
+        const auto& playing = rig.service.snapshot();
+        expect(rig.server.storage_requests == before + 1 && playing.opened_attachment_id == voice && playing.voice_clip &&
+                   playing.voice_clip->format.sample_rate == 16000 && playing.voice_clip->samples == tone,
+               "it arrives decoded, exactly");
+        rig.service.close_attachment();
+        expect(!rig.service.snapshot().voice_clip, "stopping frees the sound");
+        expect(rig.service.open_attachment(safari), "a browser's MP4 is tried");
+        rig.pump(10);
+        expect(!rig.service.snapshot().voice_clip && rig.service.snapshot().attachment_error == "VOICE_DAMAGED",
+               "an unreadable file says so");
+    }
+
+    {
+        // Photos in the conversation: an image shows its thumbnail when its
+        // room opens and opens full screen on demand. Nothing outside the
+        // project's attachments bucket is ever fetched.
+        Rig rig;
+        rig.sign_in();
+        expect(rig.service.unlock_keys(passphrase), "unlock for photos");
+        rig.pump();
+        const std::string jpeg = read_fixture("photos/DEMO-large-bars.jpg");
+        const std::string photo = rig.server.add_photo(kAlpha, "u-maria", "Maria", jpeg, "DEMO caption");
+        const std::string bare = rig.server.add_photo(kAlpha, "u-maria", "Maria", jpeg, "");
+        const std::string foreign = rig.server.add_photo(kAlpha, "u-maria", "Maria", jpeg, "",
+                                                          "https://other.example/storage/v1/object/public/attachments/" +
+                                                              std::string(64, 'a') + "/0.1.enc");
+        expect(rig.service.select_room(kAlpha), "open the room");
+        rig.pump(30);
+        const auto find = [&](const std::string& id) -> const AoratonMessage* {
+            for (const auto& message : rig.service.snapshot().messages) {
+                if (message.id == id) return &message;
+            }
+            return nullptr;
+        };
+        const auto* with_caption = find(photo);
+        const auto* without_caption = find(bare);
+        const auto* elsewhere = find(foreign);
+        expect(with_caption && with_caption->attachment == AoratonAttachmentKind::Image &&
+                   with_caption->local_display_text == "DEMO caption",
+               "a photo with its caption is a message");
+        expect(without_caption && without_caption->attachment == AoratonAttachmentKind::Image &&
+                   without_caption->local_display_text.empty(),
+               "a photo without a caption is a message too");
+        expect(with_caption->thumbnail && with_caption->thumbnail->width <= 216 &&
+                   with_caption->thumbnail->height <= 216 && with_caption->thumbnail->width > 0,
+               "its thumbnail arrives, at most 216 px");
+        expect(elsewhere && !elsewhere->thumbnail && rig.server.storage_requests == 2,
+               "a file outside the project's bucket is never fetched");
+        expect(rig.server.largest_allowed >= jpeg.size() + 16 && rig.server.largest_allowed <= 4U * 1024U * 1024U + 16,
+               "downloads are bounded by the file's size and 4 MiB");
+        expect(rig.service.select_room(kAlpha), "the room opens again");
+        rig.pump(20);
+        expect(rig.server.storage_requests == 2, "a preview already shown is not fetched again");
+        AoratonCommand again;
+        again.type = AoratonCommandType::FetchRecentMessages;
+        again.room_id = kAlpha;
+        again.message_ids = {photo};
+        expect(rig.mailbox.push_command(std::move(again)), "the service asks again for a preview it let go");
+        rig.pump(20);
+        expect(rig.server.storage_requests == 3 && find(photo) && find(photo)->thumbnail,
+               "only that preview is fetched again, and it arrives");
+
+        expect(rig.service.open_attachment(photo), "the photo opens full screen");
+        rig.pump(10);
+        const auto& opened = rig.service.snapshot();
+        expect(opened.opened_attachment_id == photo && opened.opened_image && opened.opened_image->width <= 480 &&
+                   opened.opened_image->height <= 480 && opened.opened_image->width > with_caption->thumbnail->width,
+               "at screen size");
+        rig.service.close_attachment();
+        expect(!rig.service.snapshot().opened_image && rig.service.snapshot().opened_attachment_id.empty(),
+               "closing frees the full image");
+
+        for (auto& file : rig.server.files) file.second[file.second.size() / 2] ^= 1;
+        expect(rig.service.open_attachment(bare), "a damaged file is tried");
+        rig.pump(10);
+        expect(!rig.service.snapshot().opened_image && rig.service.snapshot().attachment_error == "ATTACHMENT_DAMAGED",
+               "and refused with a code");
+    }
+
+    {
+        // With a microSD card: a photo downloaded once (for its thumbnail)
+        // opens from the card, as the very bytes the bucket serves; a damaged
+        // copy is downloaded again; signing out empties the cache.
+        Rig rig({}, false, true);
+        rig.sign_in();
+        expect(rig.service.unlock_keys(passphrase), "unlock for the card");
+        rig.pump();
+        const std::string jpeg = read_fixture("photos/DEMO-large-bars.jpg");
+        const std::string photo = rig.server.add_photo(kAlpha, "u-maria", "Maria", jpeg, "DEMO caption");
+        expect(rig.service.select_room(kAlpha), "open the room");
+        rig.pump(30);
+        expect(rig.server.storage_requests == 1 && rig.cache.files.size() == 1 && rig.server.files.size() == 1,
+               "the thumbnail's download is kept");
+        const auto kept = *rig.cache.files.begin();
+        expect(kept.first.size() == 64 && kept.first.find_first_not_of("0123456789abcdef") == std::string::npos &&
+                   kept.second == rig.server.files.begin()->second,
+               "the card holds exactly the sealed bytes, named by the SHA-256 of their address");
+        expect(rig.service.open_attachment(photo), "the photo opens");
+        rig.pump(10);
+        expect(rig.server.storage_requests == 1 && rig.service.snapshot().opened_image,
+               "from the card, without a second download");
+        rig.service.close_attachment();
+        rig.cache.files.begin()->second[10] ^= 1;
+        expect(rig.service.open_attachment(photo), "the photo opens again");
+        rig.pump(10);
+        expect(rig.server.storage_requests == 2 && rig.service.snapshot().opened_image && rig.cache.erased == 1 &&
+                   rig.cache.files.begin()->second == rig.server.files.begin()->second,
+               "a damaged copy is dropped, downloaded again and kept again");
+        rig.service.close_attachment();
+        expect(rig.service.unpair(), "sign out");
+        rig.pump();
+        expect(rig.cache.files.empty() && rig.cache.cleared == 1, "signing out empties the cache");
+    }
+
+    {
+        // The device's hybrid sync: on battery with the screen dark, realtime
+        // stops and the overview is checked every five minutes.
+        Rig rig({}, true);
+        rig.sign_in();
+        expect(rig.service.unlock_keys(passphrase), "unlock for power saving");
+        rig.pump();
+        rig.realtime.update = {true, false};
+        rig.pump();
+        expect(rig.realtime.enabled && rig.service.snapshot().realtime_active, "realtime while the screen is lit");
+        expect(rig.service.set_sync_settings({false, 60}), "periodic polling off: realtime only");
+        rig.pump();
+        expect(rig.service.set_power_saving(true), "the screen goes dark on battery");
+        rig.pump();
+        expect(!rig.realtime.enabled && !rig.service.snapshot().realtime_active, "realtime stops while saving power");
+        rig.realtime.update = {true, true};
+        const int asleep = rig.server.requests;
+        rig.server.add(kAlpha, "u-maria", "Maria", "DEMO while the screen is dark");
+        rig.advance(290000);
+        expect(rig.server.requests == asleep && rig.notifications() == 0,
+               "no realtime wake-ups and no check before five minutes");
+        rig.advance(15000);
+        expect(rig.server.requests > asleep && rig.notifications() == 1,
+               "a check every five minutes, even with periodic polling off");
+        const int checked = rig.server.requests;
+        expect(rig.service.set_power_saving(true), "repeating the same state is harmless");
+        rig.pump();
+        expect(rig.server.requests == checked, "and does not trigger a check");
+        rig.realtime.update = {};
+        rig.server.add(kAlpha, "u-maria", "Maria", "DEMO on waking");
+        expect(rig.service.set_power_saving(false), "the screen lights up");
+        rig.pump();
+        expect(rig.realtime.enabled && !rig.realtime.token.empty(), "waking reconnects realtime");
+        expect(rig.server.requests > checked && rig.notifications() == 2, "and catches up at once");
+    }
 
     {
         Rig rig({}, true);

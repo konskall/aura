@@ -1,9 +1,11 @@
 #include "aura/aoraton_account.hpp"
 #include "aura/aoraton_crypto.hpp"
+#include "aura/aoraton_self_test.hpp"
 #include "aura/json_reader.hpp"
 #include "aura/windows_aoraton_crypto.hpp"
 #include "aura/windows_local_time.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cwchar>
 #include <fstream>
@@ -63,9 +65,111 @@ public:
 
 }  // namespace
 
+// The known-answer self-test the device runs before its account starts. It
+// passes on the Windows adapters, which keeps its vectors honest; a broken
+// adapter fails it with a code.
+class BrokenSha final : public aura::IAoratonAccountCrypto {
+public:
+    explicit BrokenSha(aura::IAoratonAccountCrypto& inner) : inner_(inner) {}
+    bool random_bytes(std::uint8_t* destination, std::size_t size) override {
+        return inner_.random_bytes(destination, size);
+    }
+    bool sha256(const std::uint8_t* data, std::size_t size, std::array<std::uint8_t, 32>& digest) override {
+        const bool ok = inner_.sha256(data, size, digest);
+        digest[0] ^= 1;
+        return ok;
+    }
+    bool pbkdf2_sha256(const std::string& passphrase, const std::vector<std::uint8_t>& salt, std::uint32_t iterations,
+                       std::array<std::uint8_t, 32>& key) override {
+        return inner_.pbkdf2_sha256(passphrase, salt, iterations, key);
+    }
+    bool aes_gcm_open(const std::array<std::uint8_t, 32>& key, const std::string& wire, std::string& plaintext) override {
+        return inner_.aes_gcm_open(key, wire, plaintext);
+    }
+
+private:
+    aura::IAoratonAccountCrypto& inner_;
+};
+
+class StuckRandom final : public aura::IAoratonAccountCrypto {
+public:
+    explicit StuckRandom(aura::IAoratonAccountCrypto& inner) : inner_(inner) {}
+    bool random_bytes(std::uint8_t* destination, std::size_t size) override {
+        std::fill(destination, destination + size, std::uint8_t{7});
+        return true;
+    }
+    bool sha256(const std::uint8_t* data, std::size_t size, std::array<std::uint8_t, 32>& digest) override {
+        return inner_.sha256(data, size, digest);
+    }
+    bool pbkdf2_sha256(const std::string& passphrase, const std::vector<std::uint8_t>& salt, std::uint32_t iterations,
+                       std::array<std::uint8_t, 32>& key) override {
+        return inner_.pbkdf2_sha256(passphrase, salt, iterations, key);
+    }
+    bool aes_gcm_open(const std::array<std::uint8_t, 32>& key, const std::string& wire, std::string& plaintext) override {
+        return inner_.aes_gcm_open(key, wire, plaintext);
+    }
+
+private:
+    aura::IAoratonAccountCrypto& inner_;
+};
+
+void self_test_checks() {
+    aura::WindowsAoratonAccountCrypto account;
+    aura::WindowsAoratonCryptoV2 message;
+    expect(aura::aoraton_crypto_self_test(account, message) == aura::AoratonSelfTestResult::Passed,
+           "the Windows adapters pass the device's crypto self-test");
+    BrokenSha broken(account);
+    expect(aura::aoraton_crypto_self_test(broken, message) == aura::AoratonSelfTestResult::Sha256Failed,
+           "a wrong SHA-256 is caught");
+    StuckRandom stuck(account);
+    expect(aura::aoraton_crypto_self_test(stuck, message) == aura::AoratonSelfTestResult::RandomFailed,
+           "a random source that repeats itself is caught");
+    expect(std::string(aura::aoraton_self_test_name(aura::AoratonSelfTestResult::Pbkdf2Failed)) == "PBKDF2_FAILED",
+           "results have stable codes for the serial log");
+}
+
 int main() {
     using namespace aura;
+    self_test_checks();
     WindowsAoratonAccountCrypto crypto;
+
+    // Attachments: the row's `attachment` object, as the web client writes it.
+    {
+        const std::string folder(64, 'a');
+        const std::string base = "https://demo-project.supabase.co";
+        const std::string url = base + "/storage/v1/object/public/attachments/" + folder + "/0.4821.enc";
+        const std::string rows =
+            "[{\"id\":\"m1\",\"room_key\":\"v2.demo-room\",\"uid\":\"u1\",\"username\":\"DEMO\",\"text\":\"\","
+            "\"type\":\"text\",\"created_at\":\"2026-11-06T10:00:00Z\",\"client_msg_id\":\"c1\",\"attachment\":{"
+            "\"url\":\"" + url + "\",\"name\":\"DEMO photo.jpg\",\"type\":\"image/jpeg\",\"size\":12345,"
+            "\"enc\":true,\"iv\":\"wMHCw8TFxsfIycrL\",\"wrappedKey\":\"v2:sLGys7S1tre4ubq7:AAAA\","
+            "\"width\":800,\"height\":600,\"color\":\"#aabbcc\"}},"
+            "{\"id\":\"m2\",\"room_key\":\"v2.demo-room\",\"uid\":\"u2\",\"username\":\"DEMO\",\"text\":\"v2:x:y\","
+            "\"type\":\"text\",\"created_at\":\"2026-11-06T10:01:00Z\",\"client_msg_id\":\"c2\",\"attachment\":null}]";
+        std::vector<AoratonRemoteMessage> messages;
+        expect(aoraton_parse_messages(rows, messages) && messages.size() == 2, "rows with and without an attachment");
+        const auto& attachment = messages[0].attachment;
+        expect(messages[0].has_attachment && attachment.url == url && attachment.name == "DEMO photo.jpg" &&
+                   attachment.type == "image/jpeg" && attachment.size == 12345 && attachment.encrypted &&
+                   attachment.iv == "wMHCw8TFxsfIycrL" && attachment.wrapped_key == "v2:sLGys7S1tre4ubq7:AAAA" &&
+                   attachment.width == 800 && attachment.height == 600,
+               "the attachment's metadata is read");
+        expect(!messages[1].has_attachment, "a null attachment is none");
+        expect(aoraton_messages_path("v2.demo-room").find("attachment") != std::string::npos,
+               "the history asks for attachments");
+        expect(aoraton_attachment_url_valid(base, url), "the project's public attachments bucket");
+        expect(!aoraton_attachment_url_valid(base, "https://other.example/storage/v1/object/public/attachments/" +
+                                                       folder + "/0.4821.enc"),
+               "never another host");
+        expect(!aoraton_attachment_url_valid(base, base + "/storage/v1/object/public/attachments/v2.demo-room/x.enc"),
+               "never a legacy folder named after the room");
+        expect(!aoraton_attachment_url_valid(base, url + "?download=1") &&
+                   !aoraton_attachment_url_valid(base, base + "/storage/v1/object/public/attachments/" + folder +
+                                                           "/../x.enc") &&
+                   !aoraton_attachment_url_valid(base, base + "/storage/v1/object/public/attachments/" + folder +
+                                                           "/photo.jpg"),
+               "only an encrypted file name, no query and no dot segments");
+    }
 
     // pkce_rfc7636 (RFC 7636 Appendix B)
     expect(aoraton_pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", crypto) ==
@@ -94,7 +198,7 @@ int main() {
                    "/rest/v1/rooms?select=*&room_key=in.(%22v2.AbC%22,%22n_1%22)",
                "room keys are quoted and unsafe keys skipped");
         expect(aoraton_messages_path("v2.A b") ==
-                   "/rest/v1/messages?select=id,room_key,uid,username,text,type,created_at,client_msg_id"
+                   "/rest/v1/messages?select=id,room_key,uid,username,text,type,created_at,client_msg_id,attachment"
                    "&room_key=eq.v2.A%20b&order=created_at.desc,id.desc&limit=50",
                "messages path");
         expect(aoraton_overview_body({{"a", ""}, {"b\"", "2026-10-23T10:00:00Z"}}) ==

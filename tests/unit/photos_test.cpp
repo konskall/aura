@@ -2,6 +2,7 @@
 #include "aura/app_layout.hpp"
 #include <algorithm>
 #include <cstdlib>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -45,6 +46,31 @@ struct Files : IPhotoStorage {
 };
 }  // namespace
 int main() {
+    {
+        // A photo in a conversation shows as a thumbnail: the average of the
+        // pixels it covers, the aspect kept, within the bubble's edge.
+        PhotoError error = PhotoError::None;
+        const auto bytes = fixture("DEMO-large-bars.jpg");
+        const auto image = decode_photo(bytes, error);
+        expect(image && error == PhotoError::None, "the fixture decodes");
+        const auto thumb = photo_thumbnail(*image, 216);
+        expect(thumb && thumb->width <= 216 && thumb->height <= 216 &&
+                   (thumb->width == 216 || thumb->height == 216),
+               "a thumbnail fills 216 px on its long side");
+        const double source_ratio = static_cast<double>(image->width) / image->height;
+        const double thumb_ratio = static_cast<double>(thumb->width) / thumb->height;
+        expect(thumb_ratio > source_ratio * 0.97 && thumb_ratio < source_ratio * 1.03, "the aspect is kept");
+        const auto mean = [](const PhotoImage& picture) {
+            double sum = 0;
+            for (std::size_t index = 0; index < picture.pixels.size(); ++index)
+                sum += static_cast<double>((picture.pixels[index] >> 11) & 31);
+            return sum / static_cast<double>(picture.pixels.size());
+        };
+        expect(std::abs(mean(*thumb) - mean(*image)) < 1.0, "it averages the pixels it covers");
+        const auto small = photo_thumbnail(*thumb, 400);
+        expect(small && small->width == thumb->width && small->height == thumb->height,
+               "a picture already within the edge is never enlarged");
+    }
     expect(photo_filename_valid("DEMO Αθήνα.JPG") && photo_filename_valid("DEMO-image.png"),
            "Greek and uppercase extensions supported");
     for (const auto* name :

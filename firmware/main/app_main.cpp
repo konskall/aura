@@ -1,6 +1,10 @@
 #include "aura/assistant_companion.hpp"
 #include "aura/assistant_state.hpp"
 #include "aura/aoraton.hpp"
+#include "aura/aoraton_device_link.hpp"
+#include "aura/aoraton_real.hpp"
+#include "aura/display_power.hpp"
+#include "aura/esp32_aoraton_account.hpp"
 #include "aura/aura_frame_worker.hpp"
 #include "aura/aura_theme.hpp"
 #include "aura/aura_ui.hpp"
@@ -30,6 +34,7 @@
 #include "nvs_flash.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <ctime>
 #include <memory>
@@ -173,7 +178,27 @@ extern "C" void app_main(void) {
 
     static aura::AssistantController controller;
     static aura::DeviceStatusModel device_status;
-    static aura::MockAoratonService aoraton;
+    // The owner's own aoraton.com account (ADR 0010). The device cannot show
+    // Google's page: the owner's PC signs it in over File transfer's session
+    // (scripts/aoraton-device-sign-in.mjs); the session and the room keys stay
+    // here, in encrypted NVS. Until the PC has sent the project settings the
+    // account stays signed out, never DEMO.
+    static aura::AoratonMailbox aoraton_mailbox;
+    static aura::firmware::Esp32AoratonAccountCrypto aoraton_ids;
+    static aura::RealAoratonService aoraton(aoraton_mailbox, aura::AoratonRuntimeMode::Live,
+                                            [] { return aura::aoraton_new_client_message_id(aoraton_ids); });
+    static std::atomic<bool> aoraton_config_changed{false};
+    static aura::AoratonDeviceLink aoraton_link([](const aura::AoratonLinkConfig& config) {
+        // The helper sends the settings on every run: only a change restarts the account.
+        aura::AoratonLinkConfig stored;
+        if (aura::firmware::esp32_aoraton_load_config(stored) && stored.base_url == config.base_url &&
+            stored.anon_key == config.anon_key && stored.inco_enabled == config.inco_enabled)
+            return true;
+        if (!aura::firmware::esp32_aoraton_save_config(config)) return false;
+        aoraton_config_changed = true;
+        return true;
+    });
+    static std::unique_ptr<aura::firmware::Esp32AoratonAccount> aoraton_account;
     static aura::WeatherModel weather;
     static aura::firmware::Esp32AudioBackend audio;
     static aura::firmware::Esp32WeatherBackend weather_backend;
@@ -187,6 +212,7 @@ extern "C" void app_main(void) {
     static CloudAssistant assistant;
     static aura::InterfaceLanguage assistant_language = aura::InterfaceLanguage::Greek;
     companion.set_cloud_key_sink(&cloud_keys);
+    companion.set_aoraton_link(&aoraton_link);
     const bool audio_ready = audio.initialize();
     const bool weather_backend_ready = weather_backend.initialize();
     if (weather_backend_ready) weather.set_refresh_interval(weather_backend.refresh_interval());
@@ -330,6 +356,23 @@ extern "C" void app_main(void) {
             wifi.forget_saved_network();
         };
         companion.install(callbacks, &aoraton);
+        callbacks.on_aoraton_pair_cancel = [] { aoraton.cancel_pairing(); };
+        callbacks.on_aoraton_unpair = [] { aoraton.unpair(); };
+        callbacks.on_aoraton_unlock = [](const std::string& passphrase) { return aoraton.unlock_keys(passphrase); };
+        callbacks.on_aoraton_open_attachment = [](const std::string& id) { return aoraton.open_attachment(id); };
+        callbacks.on_aoraton_close_attachment = [] { aoraton.close_attachment(); };
+        // A voice message: the companion records it like a note; the WAV goes
+        // to the service, which waits for the confirmation.
+        static std::string voice_message_room;
+        callbacks.on_aoraton_voice_start = [](const std::string& room_id) {
+            voice_message_room = room_id;
+            return companion.begin_voice_message();
+        };
+        callbacks.on_aoraton_voice_stop = [] { companion.end_voice_message(); };
+        callbacks.on_aoraton_voice_cancel = [] { companion.cancel_voice_message(); };
+        companion.set_message_sink([](std::vector<std::uint8_t> wav) {
+            aoraton.prepare_voice(voice_message_room, std::move(wav));
+        });
         // The assistant's spoken question: the companion records it with the
         // microphone it shares with notes; the turn transcribes, asks and speaks.
         callbacks.on_ask = [] {
@@ -360,6 +403,7 @@ extern "C" void app_main(void) {
         });
         ui.set_language(companion.language());
         ui.set_appearance(companion.appearance());
+        ui.set_aoraton_sign_in_relay(true);
         ui.create(display, std::move(callbacks));
         companion.apply(ui);
         ui.apply(controller.snapshot());
@@ -417,6 +461,20 @@ extern "C" void app_main(void) {
         bsp_display_unlock();
     }
 
+    // (Re)starts the account with the project settings the PC sent last.
+    const auto start_aoraton = [] {
+        aoraton_account.reset();
+        aura::AoratonLinkConfig config;
+        if (!aura::firmware::esp32_aoraton_load_config(config)) return;
+        auto account = std::make_unique<aura::firmware::Esp32AoratonAccount>(aoraton_mailbox, config, aoraton_link);
+        if (account->start()) aoraton_account = std::move(account);
+    };
+    start_aoraton();
+    ESP_LOGI(kTag, "Aoraton: %s", aoraton_account ? "account ready" : "waiting for the PC's settings");
+    bool external_power = false;
+    std::string aoraton_city;
+    std::shared_ptr<const aura::PcmClip> voice_message_playing;
+
     esp_pm_lock_handle_t full_speed = start_power_management();
     std::uint32_t metrics_ms = 0;
     std::uint64_t presence_frames = 0;
@@ -436,6 +494,34 @@ extern "C" void app_main(void) {
             unapplied_ms = 0;
             audio.tick(elapsed_ms);
             aoraton.tick(elapsed_ms);
+            // Aoraton: settings and requests from the PC helper, then the
+            // hybrid sync (realtime while lit or on USB, a 5-minute check
+            // otherwise; the owner's choice).
+            if (aoraton_link.take_sign_in_request()) aoraton.begin_pairing();
+            std::string invite;
+            while (aoraton_link.take_invite(invite)) {
+                aoraton.add_invite_key(invite);
+                std::fill(invite.begin(), invite.end(), '\0');
+                invite.clear();
+            }
+            aoraton_link.publish(aoraton_account != nullptr, aoraton.snapshot().pairing, aoraton.snapshot().last_error);
+            aoraton.set_power_saving(!aura::realtime_sync_allowed(companion.display_mode(), external_power));
+            // A decoded voice message plays once; stopping or leaving it stops the
+            // sound, and the end of the sound closes it.
+            if (const auto& clip = aoraton.snapshot().voice_clip; clip != voice_message_playing) {
+                if (clip) audio.play_pcm(*clip);
+                else if (voice_message_playing) audio.stop();
+                voice_message_playing = clip;
+            } else if (voice_message_playing && audio.diagnostics().state != aura::AudioState::Playing &&
+                       audio.diagnostics().state != aura::AudioState::Buffering) {
+                voice_message_playing.reset();
+                aoraton.close_attachment();
+            }
+            if (aoraton_account && weather.snapshot().has_saved_location &&
+                weather.snapshot().saved_location.name != aoraton_city) {
+                aoraton_city = weather.snapshot().saved_location.name;
+                aoraton_account->set_location_city(aoraton_city);
+            }
             companion.poll(elapsed_ms);
             // New keys from the PC start the assistant again.
             if (cloud_keys.generation() != assistant_keys) {
@@ -490,7 +576,9 @@ extern "C" void app_main(void) {
             // The battery, every five seconds (the OTA rule and the status bar use it).
             if (board_power_ready && power_ms >= 5000) {
                 power_ms = 0;
-                if (const auto reading = board_power.read(); reading && reading->percent) {
+                const auto reading = board_power.read();
+                external_power = reading && reading->external_power;
+                if (reading && reading->percent) {
                     device_status.set_power(*reading->percent, reading->charging, aura::StatusOrigin::Live);
                 } else {
                     device_status.set_power_unavailable();
@@ -561,6 +649,9 @@ extern "C" void app_main(void) {
         // Confirmed power actions can block, restart or enter deep sleep. They
         // must never execute while the single LVGL/BSP display lock is held.
         companion.run_deferred_system_action();
+        // New aoraton settings from the PC restart the account, outside the
+        // display lock: stopping waits for a request in flight.
+        if (aoraton_config_changed.exchange(false)) start_aoraton();
         // A dark screen lets the loop slow down and the processor drop its clock.
         const aura::DisplayMode mode = companion.display_mode();
         if (full_speed && aura::needs_full_speed(mode) != at_full_speed) {

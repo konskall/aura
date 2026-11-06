@@ -6,6 +6,8 @@
 #include "aura/windows_aoraton_vault.hpp"
 #include "aura/winhttp_client.hpp"
 #include "aura/windows_aoraton_realtime.hpp"
+#include "aura/windows_voice_decoder.hpp"
+#include "aura/windows_aoraton_cache_files.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -72,6 +74,10 @@ private:
     WindowsAoratonStore store_;
     LoopbackSignInChannel channel_;
     WindowsAoratonRealtime realtime_;
+    WindowsVoiceDecoder voice_decoder_;
+    // Encrypted attachments beside the vault, as the device keeps them on its card.
+    WindowsAoratonCacheFiles cache_files_;
+    AoratonAttachmentCache attachment_cache_;
     AoratonAccountWorker worker_;
     std::thread thread_;
     std::atomic<bool> stopping_{false};

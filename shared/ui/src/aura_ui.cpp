@@ -197,6 +197,13 @@ struct AuraUi::Impl {
     bool thread_follow_tail{true};
     // The city picker shows presets first; the keyboard opens on request.
     bool weather_typing{false};
+    bool aoraton_sign_in_relay{false};  // the device: File transfer and the PC helper
+    // The conversation's photo thumbnails and the open photo: LVGL reads the
+    // pixels through these descriptors, so they live as long as the screen.
+    std::vector<std::unique_ptr<lv_image_dsc_t>> aoraton_thumb_descriptors;
+    std::vector<std::shared_ptr<const PhotoImage>> aoraton_thumb_images;
+    lv_image_dsc_t aoraton_photo_descriptor{};
+    std::shared_ptr<const PhotoImage> aoraton_photo_shown;
     NavigationStack<UiView> navigation{UiView::Home};
     MotionModel motion{};
     Appearance appearance{Appearance::Halo};
@@ -516,6 +523,15 @@ struct AuraUi::Impl {
     static void pairing_start_event(lv_event_t* event) {
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
         if (!self->accept_action()) return;
+        if (self->aoraton_sign_in_relay) {
+            // The PC helper drives the sign-in over File transfer's session.
+            if (self->callbacks.on_transfer_start && self->callbacks.on_transfer_start()) {
+                self->navigate(UiView::FileTransfer);
+            } else {
+                self->show_toast(self->f().failed, ui::tokens::coral);
+            }
+            return;
+        }
         if (self->callbacks.on_aoraton_pair_start && self->callbacks.on_aoraton_pair_start()) {
             self->navigate(UiView::AoratonPair);
         }
@@ -636,7 +652,22 @@ struct AuraUi::Impl {
         if (!self->accept_action()) return;
         const auto index = reinterpret_cast<std::uintptr_t>(lv_obj_get_user_data(lv_event_get_current_target_obj(event)));
         if (index >= self->aoraton.messages.size()) return;
-        self->selected_message = self->aoraton.messages[index];
+        const auto& message = self->aoraton.messages[index];
+        if (message.attachment == AoratonAttachmentKind::Image) {
+            if (self->callbacks.on_aoraton_open_attachment && self->callbacks.on_aoraton_open_attachment(message.id))
+                self->navigate(UiView::AoratonAttachment);
+            return;
+        }
+        if (message.attachment == AoratonAttachmentKind::Voice) {
+            // A tap plays the message; a tap while it plays (or loads) stops it.
+            if (self->aoraton.opened_attachment_id == message.id) {
+                if (self->callbacks.on_aoraton_close_attachment) self->callbacks.on_aoraton_close_attachment();
+            } else if (self->callbacks.on_aoraton_open_attachment) {
+                self->callbacks.on_aoraton_open_attachment(message.id);
+            }
+            return;
+        }
+        self->selected_message = message;
         self->navigate(UiView::AoratonMessage);
     }
 
@@ -949,6 +980,7 @@ struct AuraUi::Impl {
             case UiView::System:
             case UiView::Credits:
             case UiView::SystemConfirm:
+            case UiView::AoratonAttachment:
                 lv_indev_wait_release(lv_indev_active());
                 self->render_back(self->navigation.back());
                 break;
@@ -1440,6 +1472,10 @@ struct AuraUi::Impl {
         lv_obj_set_pos(image, (ui::tokens::display_width - size) / 2, y);
     }
 
+    const char* sign_in_help() const {
+        return aoraton_sign_in_relay ? c().aoraton_sign_in_relay_help : c().aoraton_sign_in_help;
+    }
+
     void google_sign_in_button() {
         auto* button = pill(content, c().aoraton_sign_in, ui::ButtonTone::Primary,
                             kGutter, kActionY, kWidth, pairing_start_event);
@@ -1462,7 +1498,8 @@ struct AuraUi::Impl {
         lv_obj_set_width(title, LV_SIZE_CONTENT);
         auto* mark = brand_image(button, &aura_brand_google, 32);
         lv_obj_move_to_index(mark, 0);
-        ui::set_button_disabled(button, !callbacks.on_aoraton_pair_start);
+        ui::set_button_disabled(button, aoraton_sign_in_relay ? !callbacks.on_transfer_start
+                                                              : !callbacks.on_aoraton_pair_start);
     }
 
     // Title + explanation, centred, stacked by their real heights.
@@ -1939,7 +1976,7 @@ struct AuraUi::Impl {
             aoraton_brand(96, 88);
             line(content, reauth ? c().aoraton_reauth : t().aoraton_connect, kGutter, 196, kWidth, ui::font_title(),
                  ui::tokens::text, LV_TEXT_ALIGN_CENTER);
-            label(content, reauth ? c().aoraton_reauth_detail : c().aoraton_sign_in_help, kGutter, 242, kWidth,
+            label(content, reauth ? c().aoraton_reauth_detail : sign_in_help(), kGutter, 242, kWidth,
                   ui::font_caption(), ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
             google_sign_in_button();
             return;
@@ -2198,7 +2235,7 @@ struct AuraUi::Impl {
             const bool reauth = state == AoratonPairingState::ReauthorizationRequired;
             aoraton_brand(100, 96);
             state_text(212, reauth ? c().aoraton_reauth : t().aoraton_connect,
-                       reauth ? c().aoraton_reauth_detail : c().aoraton_sign_in_help);
+                       reauth ? c().aoraton_reauth_detail : sign_in_help());
             google_sign_in_button();
             return;
         }
@@ -2293,7 +2330,75 @@ struct AuraUi::Impl {
         return nullptr;
     }
 
+    // A message's file inside its bubble: a photo's thumbnail once it has
+    // arrived, otherwise a labelled placeholder; voice messages and other
+    // files are named.
+    void attachment_preview(lv_obj_t* bubble, const AoratonMessage& message) {
+        if (message.attachment == AoratonAttachmentKind::None) return;
+        const auto& image = message.thumbnail;
+        if (message.attachment == AoratonAttachmentKind::Image && image && image->width && image->height &&
+            image->pixels.size() == std::size_t{image->width} * image->height) {
+            auto descriptor = std::make_unique<lv_image_dsc_t>();
+            descriptor->header.magic = LV_IMAGE_HEADER_MAGIC;
+            descriptor->header.cf = LV_COLOR_FORMAT_RGB565;
+            descriptor->header.w = image->width;
+            descriptor->header.h = image->height;
+            descriptor->header.stride = image->width * 2;
+            descriptor->data_size = static_cast<std::uint32_t>(image->pixels.size() * 2);
+            descriptor->data = reinterpret_cast<const std::uint8_t*>(image->pixels.data());
+            auto* picture = lv_image_create(bubble);
+            lv_image_set_src(picture, descriptor.get());
+            lv_obj_set_style_radius(picture, ui::tokens::radius_small, 0);
+            lv_obj_set_style_clip_corner(picture, true, 0);
+            lv_obj_set_clickable(picture, false);
+            aoraton_thumb_descriptors.push_back(std::move(descriptor));
+            aoraton_thumb_images.push_back(image);
+            return;
+        }
+        auto* line = lv_obj_create(bubble);
+        ui::reset(line);
+        lv_obj_set_size(line, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_layout(line, LV_LAYOUT_FLEX);
+        lv_obj_set_flex_flow(line, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(line, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(line, 10, 0);
+        lv_obj_set_clickable(line, false);
+        const bool photo = message.attachment == AoratonAttachmentKind::Image;
+        const bool voice = message.attachment == AoratonAttachmentKind::Voice;
+        const bool open = voice && aoraton.opened_attachment_id == message.id;
+        const bool playing = open && aoraton.voice_clip;
+        icon_view(line, photo ? ui::IconRole::Image : playing ? ui::IconRole::Stop :
+                        voice ? ui::IconRole::Play : ui::IconRole::File,
+                  26, playing ? ui::tokens::mint : ui::tokens::lilac);
+        const std::string label_text = photo ? c().aoraton_photo :
+                                       playing ? c().aoraton_voice_playing :
+                                       open && aoraton.opening_attachment ? c().aoraton_loading :
+                                       open && !aoraton.attachment_error.empty() ? c().aoraton_attachment_failed :
+                                       voice ? c().aoraton_voice_message :
+                                       message.attachment_name + " · " + c().aoraton_file_elsewhere;
+        auto* label = ui::make_label(line, label_text.c_str(), ui::tokens::text_secondary, ui::font_body());
+        lv_obj_set_flex_grow(label, 1);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_WRAP);
+    }
+
+    // A photo from a conversation, full screen; back closes it.
+    void render_aoraton_attachment() {
+        const auto* room = selected_room();
+        make_header(room ? room->display_name.c_str() : c().aoraton_photo);
+        const auto& image = aoraton.opened_image;
+        if (image && image->width && image->height) {
+            aoraton_photo_shown = image;
+            photo_image(content, *image, aoraton_photo_descriptor, 0, 96, 480, 384);
+            return;
+        }
+        const char* note = aoraton.attachment_error.empty() ? c().aoraton_photo_loading : c().aoraton_attachment_failed;
+        label(content, note, kGutter, 220, kWidth, ui::font_body(),
+              aoraton.attachment_error.empty() ? ui::tokens::text_secondary : ui::tokens::coral, LV_TEXT_ALIGN_CENTER);
+    }
+
     void render_aoraton_conversation() {
+        aoraton_thumb_descriptors.clear();
+        aoraton_thumb_images.clear();
         const auto* room = selected_room();
         make_header(room ? room->display_name.c_str() : t().aoraton, ui::IconRole::Microphone, ask_event,
                     ui::tokens::lilac, static_cast<bool>(callbacks.on_ask));
@@ -2359,9 +2464,12 @@ struct AuraUi::Impl {
                     lv_obj_set_height(sender, lv_font_get_line_height(ui::font_caption()));
                     lv_label_set_long_mode(sender, LV_LABEL_LONG_DOT);
                 }
-                auto* text = ui::make_label(bubble, message.local_display_text.c_str(), ui::tokens::text,
-                                            ui::font_body());
-                lv_obj_set_width(text, lv_pct(100));
+                attachment_preview(bubble, message);
+                if (!message.local_display_text.empty() || message.attachment == AoratonAttachmentKind::None) {
+                    auto* text = ui::make_label(bubble, message.local_display_text.c_str(), ui::tokens::text,
+                                                ui::font_body());
+                    lv_obj_set_width(text, lv_pct(100));
+                }
                 std::uint32_t status_color = ui::tokens::text_tertiary;
                 std::string metadata = message_time(message.received_at);
                 if (const char* status_text = delivery_text(message.delivery, status_color)) {
@@ -2396,7 +2504,8 @@ struct AuraUi::Impl {
         ui::reset(reply);
         lv_obj_set_clickable(reply, true);
         ui::style_platter(reply, ui::tokens::blue, LV_RADIUS_CIRCLE, false);
-        lv_obj_set_size(reply, kWidth, 72);
+        const bool voice_messages = static_cast<bool>(callbacks.on_aoraton_voice_start) && room;
+        lv_obj_set_size(reply, voice_messages ? kWidth - 88 : kWidth, 72);
         lv_obj_set_pos(reply, kGutter, 388);
         lv_obj_set_style_pad_hor(reply, 24, 0);
         lv_obj_set_style_pad_ver(reply, 0, 0);
@@ -2410,6 +2519,59 @@ struct AuraUi::Impl {
         lv_label_set_long_mode(hint, LV_LABEL_LONG_DOT);
         lv_obj_set_height(hint, lv_font_get_line_height(ui::font_body()));
         lv_obj_add_event_cb(reply, compose_event, LV_EVENT_CLICKED, this);
+        if (voice_messages) {
+            // Coral, like the recording it starts; the header's lilac
+            // microphone is the assistant.
+            auto* microphone = lv_button_create(content);
+            ui::reset(microphone);
+            lv_obj_set_clickable(microphone, true);
+            ui::style_platter(microphone, ui::tokens::coral, LV_RADIUS_CIRCLE, false);
+            lv_obj_set_size(microphone, 72, 72);
+            lv_obj_set_pos(microphone, kGutter + kWidth - 72, 388);
+            icon_view(microphone, ui::IconRole::Microphone, 30, ui::tokens::coral);
+            lv_obj_add_event_cb(microphone, aoraton_voice_start_event, LV_EVENT_CLICKED, this);
+        }
+    }
+
+    static void aoraton_voice_start_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action()) return;
+        const auto* room = self->selected_room();
+        if (room && self->callbacks.on_aoraton_voice_start && self->callbacks.on_aoraton_voice_start(room->id))
+            self->navigate(UiView::AoratonVoiceRecord);
+        else
+            self->show_toast(self->c().aoraton_voice_needs_microphone, ui::tokens::coral);
+    }
+
+    static void aoraton_voice_stop_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (self->accept_action() && self->callbacks.on_aoraton_voice_stop) self->callbacks.on_aoraton_voice_stop();
+    }
+
+    static void aoraton_voice_cancel_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (self->accept_action()) self->go_back();
+    }
+
+    // Recording a voice message: like a voice note, then the confirmation.
+    void render_aoraton_voice_record() {
+        const auto* room = selected_room();
+        make_header(room ? room->display_name.c_str() : c().aoraton_voice_message);
+        record_ring = spinner_arc(content, 200, ui::tokens::coral, 4);
+        lv_arc_set_angles(record_ring, 0, 360);
+        lv_obj_set_pos(record_ring, 140, 92);
+        state_symbol(120, 144, ui::IconRole::Microphone, ui::tokens::coral);
+        char elapsed[16];
+        std::snprintf(elapsed, sizeof(elapsed), "%u:%02u", static_cast<unsigned>(voice.elapsed_ms / 60000U),
+                      static_cast<unsigned>((voice.elapsed_ms / 1000U) % 60U));
+        record_time = label(content, elapsed, 0, 300, ui::tokens::display_width, ui::font_headline(), ui::tokens::text,
+                            LV_TEXT_ALIGN_CENTER);
+        line(content, c().aoraton_voice_record_detail, kGutter, 340, kWidth, ui::font_caption(),
+             ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
+        pill(content, c().aoraton_voice_continue, ui::ButtonTone::Primary, kGutter, kActionY, kHalfWidth,
+             aoraton_voice_stop_event);
+        pill(content, c().cancel, ui::ButtonTone::Danger, kGutter + kHalfWidth + 16, kActionY, kHalfWidth,
+             aoraton_voice_cancel_event);
     }
 
     void render_aoraton_compose() {
@@ -2441,7 +2603,15 @@ struct AuraUi::Impl {
         lv_obj_set_style_pad_all(card, 20, 0);
         line(card, room ? room->display_name.c_str() : t().aoraton, 0, 0, kWidth - 44, ui::font_headline(),
              ui::tokens::lilac);
-        message_reader(card, aoraton.pending_text, 0, 44, kWidth - 44, 92);
+        std::string pending = aoraton.pending_text;
+        if (aoraton.pending_voice_ms > 0) {
+            char length[64];
+            std::snprintf(length, sizeof(length), c().aoraton_voice_length_format,
+                          static_cast<unsigned>(aoraton.pending_voice_ms / 60000U),
+                          static_cast<unsigned>((aoraton.pending_voice_ms / 1000U) % 60U));
+            pending = length;
+        }
+        message_reader(card, pending, 0, 44, kWidth - 44, 92);
         line(card, aoraton.runtime_mode == AoratonRuntimeMode::Mock ? t().delivery_demo : security_text(),
              0, 140, kWidth - 44, ui::font_caption(), ui::tokens::text_tertiary);
         pill(content, t().cancel, ui::ButtonTone::Danger, kGutter, kActionY, 160, cancel_message_event);
@@ -3820,6 +3990,13 @@ struct AuraUi::Impl {
         refresh_pending = false;
         if (current_view == UiView::PhotoViewer && view != UiView::PhotoViewer && photos.playing && callbacks.on_photo_play)
             callbacks.on_photo_play(false);
+        if (current_view == UiView::AoratonVoiceRecord && view != UiView::AoratonVoiceRecord &&
+            view != UiView::AoratonConfirm && callbacks.on_aoraton_voice_cancel)
+            callbacks.on_aoraton_voice_cancel();
+        if (current_view == UiView::AoratonAttachment && view != UiView::AoratonAttachment) {
+            if (callbacks.on_aoraton_close_attachment) callbacks.on_aoraton_close_attachment();
+            aoraton_photo_shown.reset();
+        }
         if (blocked_by_power(view)) return;
         const bool refresh = view == current_view;
         const bool restoring = restore_scroll && !refresh;
@@ -3858,6 +4035,8 @@ struct AuraUi::Impl {
             case UiView::AoratonMessage: render_aoraton_message(false); break;
             case UiView::AoratonAssist: render_aoraton_message(true); break;
             case UiView::AoratonSyncSettings: render_aoraton_sync_settings(); break;
+            case UiView::AoratonAttachment: render_aoraton_attachment(); break;
+            case UiView::AoratonVoiceRecord: render_aoraton_voice_record(); break;
             case UiView::Weather: render_weather(); break;
             case UiView::WeatherSettings: render_weather_settings(); break;
             case UiView::WeatherLocation: render_weather_location(); break;
@@ -4155,12 +4334,18 @@ void AuraUi::apply_aoraton(const AoratonSnapshot& snapshot) {
         impl_->update_unlock_status();
         return;
     }
+    if (impl_->current_view == UiView::AoratonVoiceRecord && snapshot.awaiting_confirmation &&
+        snapshot.pending_voice_ms > 0) {
+        impl_->navigate(UiView::AoratonConfirm);
+        return;
+    }
     if (impl_->current_view == UiView::AoratonRooms ||
         impl_->current_view == UiView::Notifications ||
         impl_->current_view == UiView::AoratonPair ||
         impl_->current_view == UiView::AoratonConversation ||
         impl_->current_view == UiView::AoratonConfirm ||
         impl_->current_view == UiView::AoratonSyncSettings ||
+        impl_->current_view == UiView::AoratonAttachment ||
         (notifications_changed && (impl_->current_view == UiView::Home ||
                                    impl_->current_view == UiView::Launcher ||
                                    impl_->current_view == UiView::AlwaysOn))) {
@@ -4281,6 +4466,8 @@ void AuraUi::tick(std::uint32_t elapsed_ms) {
         impl_->update_host_metrics_label();
     }
 }
+
+void AuraUi::set_aoraton_sign_in_relay(bool relay) { impl_->aoraton_sign_in_relay = relay; }
 
 void AuraUi::show(UiView view) {
     impl_->weather_typing = false;

@@ -286,6 +286,99 @@ int main() {
                "revocation resets key state");
     }
 
+    {
+        // Photo thumbnails are bounded in memory: at most 12 are kept, and the
+        // open room's newest are the last to go.
+        AoratonMailbox photo_mailbox;
+        RealAoratonService photos(photo_mailbox, AoratonRuntimeMode::IntegrationTest, [] { return std::string("p-1"); });
+        AoratonEvent paired;
+        paired.type = AoratonEventType::Paired;
+        push(photo_mailbox, std::move(paired), "photo sign-in queued");
+        photos.tick(1);
+        AoratonEvent photo_rooms;
+        photo_rooms.type = AoratonEventType::AuthorizedRooms;
+        photo_rooms.rooms = {{"v2.photos-a", "A", "", 0, true, true, true, false, ""},
+                             {"v2.photos-b", "B", "", 0, true, true, true, false, ""}};
+        push(photo_mailbox, std::move(photo_rooms), "photo rooms queued");
+        photos.tick(1);
+        expect(photos.select_room("v2.photos-a"), "photo room opens");
+        const auto photo_row = [](const char* room, char tag, int index) {
+            char stamp[40];
+            // Room B's photos are older than room A's.
+            std::snprintf(stamp, sizeof(stamp), "2026-10-21T08:%02d:%02d.000Z", tag == 'a' ? 10 : 0, index);
+            AoratonMessage message{std::string("photo-") + tag + std::to_string(index), room, "Peer", "", stamp,
+                                   AoratonDirection::Incoming, AoratonDelivery::Received, ""};
+            message.attachment = AoratonAttachmentKind::Image;
+            return message;
+        };
+        AoratonEvent photo_history;
+        photo_history.type = AoratonEventType::MessageHistory;
+        for (int index = 0; index < 10; ++index) photo_history.messages.push_back(photo_row("v2.photos-b", 'b', index));
+        for (int index = 0; index < 14; ++index) photo_history.messages.push_back(photo_row("v2.photos-a", 'a', index));
+        push(photo_mailbox, std::move(photo_history), "photo history queued");
+        photos.tick(1);
+        const auto thumbnail_event = [](const char* room, const std::string& id) {
+            auto image = std::make_shared<PhotoImage>();
+            image->width = 2;
+            image->height = 2;
+            image->pixels.resize(4);
+            AoratonEvent event;
+            event.type = AoratonEventType::AttachmentThumbnail;
+            event.room_id = room;
+            event.message_id = id;
+            event.image = std::move(image);
+            return event;
+        };
+        const auto thumbnails = [&] {
+            std::size_t count = 0;
+            for (const auto& message : photos.snapshot().messages) count += message.thumbnail ? 1 : 0;
+            return count;
+        };
+        const auto has_thumbnail = [&](const std::string& id) {
+            for (const auto& message : photos.snapshot().messages)
+                if (message.id == id) return static_cast<bool>(message.thumbnail);
+            return false;
+        };
+        for (int index = 0; index < 10; ++index) {
+            push(photo_mailbox, thumbnail_event("v2.photos-b", "photo-b" + std::to_string(index)), "thumbnail queued");
+            photos.tick(1);
+        }
+        expect(thumbnails() == 10, "thumbnails below the bound are all kept");
+        for (int index = 0; index < 4; ++index) {
+            push(photo_mailbox, thumbnail_event("v2.photos-a", "photo-a" + std::to_string(index)), "thumbnail queued");
+            photos.tick(1);
+        }
+        expect(thumbnails() == 12 && !has_thumbnail("photo-b0") && !has_thumbnail("photo-b1") &&
+                   has_thumbnail("photo-b2") && has_thumbnail("photo-a0"),
+               "past 12 the oldest outside the open room go first");
+        for (int index = 4; index < 14; ++index) {
+            push(photo_mailbox, thumbnail_event("v2.photos-a", "photo-a" + std::to_string(index)), "thumbnail queued");
+            photos.tick(1);
+        }
+        expect(thumbnails() == 12 && !has_thumbnail("photo-b9") && !has_thumbnail("photo-a1") &&
+                   has_thumbnail("photo-a2") && has_thumbnail("photo-a13"),
+               "when only the open room is left, its oldest go");
+        // Opening a room again asks for its newest dropped previews, once.
+        AoratonCommand drained;
+        while (photo_mailbox.pop_command(drained)) {}
+        expect(photos.select_room("v2.photos-b"), "the other photo room opens");
+        AoratonCommand reopen;
+        expect(photo_mailbox.pop_command(reopen) && reopen.type == AoratonCommandType::FetchRecentMessages &&
+                   reopen.message_ids.size() == 6 && reopen.message_ids.front() == "photo-b9" &&
+                   reopen.message_ids.back() == "photo-b4",
+               "reopening a room asks again for its six newest dropped previews");
+        while (photo_mailbox.pop_command(drained)) {}
+        expect(photos.select_room("v2.photos-a"), "the first photo room opens again");
+        expect(photo_mailbox.pop_command(reopen) && reopen.type == AoratonCommandType::FetchRecentMessages &&
+                   reopen.message_ids == std::vector<std::string>{"photo-a1", "photo-a0"},
+               "a room asks only for its own dropped previews");
+        while (photo_mailbox.pop_command(drained)) {}
+        expect(photos.select_room("v2.photos-a"), "the same room opens once more");
+        expect(photo_mailbox.pop_command(reopen) && reopen.type == AoratonCommandType::FetchRecentMessages &&
+                   reopen.message_ids.empty(),
+               "a preview is asked for again only once");
+    }
+
     AoratonMailbox bounded;
     for (std::size_t index = 0; index < AoratonMailbox::kMaxEvents; ++index) {
         AoratonEvent event;

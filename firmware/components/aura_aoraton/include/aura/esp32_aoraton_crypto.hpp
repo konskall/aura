@@ -27,6 +27,16 @@ public:
                            std::string& verifier) override;
     bool safety_code_material(const AoratonRoomKey& room_key,
                               std::string& material) override;
+    bool unwrap_file_key(const std::string& wrapped, const AoratonRoomKey& room_key,
+                         std::array<std::uint8_t, 32>& file_key) override;
+    bool wrap_file_key(const std::array<std::uint8_t, 32>& file_key, const AoratonRoomKey& room_key,
+                       std::string& wrapped) override;
+    // Files of up to a few MiB: the buffers come from PSRAM after a check
+    // that the heap has room, because a failed allocation would abort.
+    bool open_file(const std::array<std::uint8_t, 32>& file_key, const std::string& iv, const std::uint8_t* data,
+                   std::size_t size, std::vector<std::uint8_t>& plaintext) override;
+    bool seal_file(const std::uint8_t* data, std::size_t size, std::array<std::uint8_t, 32>& file_key,
+                   std::string& iv, std::vector<std::uint8_t>& sealed) override;
 
 private:
     static bool derive_subkey(const AoratonRoomKey& room_key,

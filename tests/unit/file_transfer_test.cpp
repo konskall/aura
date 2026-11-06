@@ -1,3 +1,4 @@
+#include "aura/aoraton_device_link.hpp"
 #include "aura/cloud_keys.hpp"
 #include "aura/file_transfer.hpp"
 #include "aura/text_util.hpp"
@@ -126,7 +127,103 @@ void cloud_key_tests() {
     expect(keys.stored.size() == 2, "refused requests store nothing");
 }
 
+void aoraton_link_tests() {
+    std::uint64_t now = 1000;
+    TransferSession session;
+    Store files;
+    int saves = 0;
+    aura::AoratonDeviceLink link([&](const aura::AoratonLinkConfig&) {
+        ++saves;
+        return true;
+    });
+    TransferProtocol protocol(session, files, [&] { return now; }, nullptr, &link);
+    std::array<std::uint8_t, 36> entropy{};
+    entropy.fill(43);
+    expect(session.start(entropy, now), "a session for the account link");
+    session.ready(session.snapshot().generation, "http://127.0.0.1:8788", now);
+    TransferRequest request;
+    request.local_peer = true;
+    request.host = "127.0.0.1:8788";
+    request.method = "POST";
+    request.content_type = "application/json";
+    const auto send = [&](const std::string& path, const std::string& body, TransferProtocol& handler) {
+        Reader reader(body);
+        request.path = path;
+        request.length = body.size();
+        return handler.handle(request, reader);
+    };
+    const auto state_of = [&](const TransferResponse& response) {
+        const auto json = parse_flat_json(response.body, 2048);
+        return json ? json->string("state").value_or("") : std::string{};
+    };
+    const std::string anon = "eyJhbGciOiJIUzI1NiJ9." + std::string(120, 'a') + ".DEMO_signature-0";
+    const std::string config = "{\"url\":\"https://demo-project.supabase.co\",\"anon_key\":\"" + anon +
+                               "\",\"inco_enabled\":false}";
+    expect(send("/api/aoraton/config", config, protocol).status == 401 && saves == 0,
+           "the account link needs the signed-in session");
+    const auto token = parse_flat_json(send("/api/session", "{\"pin\":\"" + session.snapshot().pin + "\"}", protocol).body,
+                                       128)->string("token");
+    request.authorization = "Bearer " + *token;
+
+    expect(state_of(send("/api/aoraton/status", "{}", protocol)) == "not_configured", "an unconfigured device says so");
+    expect(send("/api/aoraton/sign-in", "{}", protocol).status == 409, "no sign-in before the configuration");
+    expect(send("/api/aoraton/config", "{\"url\":\"http://demo.supabase.co\",\"anon_key\":\"" + anon +
+                                           "\",\"inco_enabled\":false}", protocol).status == 400,
+           "plain http is refused");
+    expect(send("/api/aoraton/config", "{\"url\":\"https://demo-project.supabase.co\",\"anon_key\":\"" + anon + "\"}",
+                protocol).status == 400,
+           "the three fields are required");
+    const auto configured = send("/api/aoraton/config", config, protocol);
+    expect(configured.status == 200 && configured.body == "{\"ok\":true}" && saves == 1, "the configuration is kept");
+    expect(configured.body.find(anon) == std::string::npos, "the key is never echoed");
+    link.publish(true, aura::AoratonPairingState::NotPaired, "");
+    expect(state_of(send("/api/aoraton/status", "{}", protocol)) == "signed_out", "configured and signed out");
+
+    expect(send("/api/aoraton/sign-in", "{}", protocol).status == 200 && link.take_sign_in_request(),
+           "the PC starts the sign-in on the UI thread");
+    expect(link.open("https://demo-project.supabase.co/auth/v1/authorize?provider=google&code_challenge=DEMO"),
+           "the worker opens the relay");
+    const auto waiting = send("/api/aoraton/status", "{}", protocol);
+    const auto waiting_json = parse_flat_json(waiting.body, 2048);
+    expect(waiting_json && waiting_json->string("state") == "waiting" &&
+               waiting_json->string("authorize_url").value_or("").find("/auth/v1/authorize?") != std::string::npos,
+           "the PC reads the authorize URL");
+    expect(send("/api/aoraton/code", "{\"code\":\"bad code\"}", protocol).status == 400, "a code has a token's shape");
+    const auto delivered = send("/api/aoraton/code", "{\"code\":\"DEMO-code_123456\"}", protocol);
+    expect(delivered.status == 200 && delivered.body.find("DEMO-code") == std::string::npos,
+           "the code is handed over and not echoed");
+    expect(send("/api/aoraton/code", "{\"code\":\"DEMO-code_654321\"}", protocol).status == 409,
+           "one answer per sign-in");
+    std::string code;
+    expect(link.poll(code) == aura::AoratonCallbackStatus::Received && code == "DEMO-code_123456",
+           "the worker receives exactly that code");
+    link.close();
+    expect(link.open("https://demo-project.supabase.co/auth/v1/authorize?provider=google&code_challenge=DEMO") &&
+               send("/api/aoraton/code", "{\"error\":\"access_denied\"}", protocol).status == 200 &&
+               link.poll(code) == aura::AoratonCallbackStatus::Failed,
+           "the browser's refusal reaches the worker");
+    link.close();
+
+    const std::string invite =
+        "https://aoraton.com/#room=DEMO&key=v2.demo-room&k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    expect(send("/api/aoraton/invite", "{\"invite\":\"not a link\"}", protocol).status == 400,
+           "an invalid invite is refused");
+    const auto invited = send("/api/aoraton/invite", "{\"invite\":\"" + invite + "\"}", protocol);
+    std::string taken;
+    expect(invited.status == 200 && invited.body.find("v2.demo-room") == std::string::npos &&
+               link.take_invite(taken) && taken == invite,
+           "a valid invite waits for the UI thread, not echoed");
+    expect(send("/api/aoraton/status", std::string(5000, ' '), protocol).status == 400, "a long body is refused");
+    request.content_type = "text/plain";
+    expect(send("/api/aoraton/status", "{}", protocol).status == 400, "JSON only");
+    request.content_type = "application/json";
+    TransferProtocol without_link(session, files, [&] { return now; });
+    expect(send("/api/aoraton/status", "{}", without_link).status == 404,
+           "a platform that signs in by itself has no such endpoint");
+}
+
 int main() {
+    aoraton_link_tests();
     for (auto name : {"DEMO φωτογραφία.jpg", "DEMO notes.txt", "DEMO 20%.pdf"})
         expect(transfer_filename_valid(name), "safe Unicode filename accepted");
     for (auto name : {"../x", ".hidden", "a/b", "a\\b", "x:", "a\n.txt", "a.", "a ", "CON.txt", "CON .txt", "lpt1.csv",

@@ -89,6 +89,19 @@ struct AoratonOverview {
     std::uint32_t unread{0};
 };
 
+// A message's file as the web client describes it (utils/attachmentCrypto.ts).
+struct AoratonRemoteAttachment {
+    std::string url;
+    std::string name;
+    std::string type;  // MIME type: image/jpeg, audio/mp4, audio/webm, ...
+    std::uint64_t size{0};
+    bool encrypted{false};
+    std::string iv;           // standard base64
+    std::string wrapped_key;  // v2 wire under the room's file subkey
+    std::uint32_t width{0};
+    std::uint32_t height{0};
+};
+
 struct AoratonRemoteMessage {
     std::string id;
     std::string room_key;
@@ -105,6 +118,8 @@ struct AoratonRemoteMessage {
     bool has_poll{false};
     std::string poll_question;
     std::vector<std::string> poll_options;
+    bool has_attachment{false};
+    AoratonRemoteAttachment attachment;
 };
 
 struct AoratonVaultMeta {
@@ -156,11 +171,19 @@ std::string aoraton_url_encode(std::string_view value);
 std::string aoraton_authorize_url(const AoratonAccountConfig& config, const std::string& challenge);
 // `temp_aura` + 32 lowercase hex characters (the web client's temp_ prefix); empty on failure.
 std::string aoraton_new_client_message_id(IAoratonAccountCrypto& crypto);
+// A room's folder in the public `attachments` bucket: the lower-case hex
+// SHA-256 of its room key, as the web client and its cleanup compute it.
+// The SHA-256 of `text` in lower-case hex; empty when it cannot be made.
+std::string aoraton_sha256_hex(const std::string& text, IAoratonAccountCrypto& crypto);
+std::string aoraton_storage_folder(const std::string& room_key, IAoratonAccountCrypto& crypto);
 
 std::string aoraton_rooms_owned_path(const std::string& user_id);
 std::string aoraton_member_keys_path(const std::string& user_id);
 std::string aoraton_rooms_by_keys_path(const std::vector<std::string>& room_keys);
 std::string aoraton_messages_path(const std::string& room_key);
+// Only the configured project's public `attachments` bucket, a hashed room
+// folder and an encrypted file name: AURA never fetches anything else.
+bool aoraton_attachment_url_valid(const std::string& base_url, const std::string& url);
 // The newest 50 rows with replies and polls, for the conversation inco gets.
 std::string aoraton_inco_history_path(const std::string& room_key);
 std::string aoraton_overview_body(const std::vector<std::pair<std::string, std::string>>& room_since);
@@ -169,6 +192,13 @@ std::string aoraton_insert_body(const std::string& room_key,
                                 const std::string& username,
                                 const std::string& wire,
                                 const std::string& client_message_id);
+
+// A row whose file is an attachment, as the web client inserts one (empty caption).
+std::string aoraton_insert_attachment_body(const std::string& room_key,
+                                           const std::string& user_id,
+                                           const std::string& username,
+                                           const std::string& client_message_id,
+                                           const AoratonRemoteAttachment& attachment);
 
 bool aoraton_parse_session(std::string_view json, std::int64_t now_unix, AoratonSession& session);
 bool aoraton_parse_rooms(std::string_view json, std::vector<AoratonRemoteRoom>& rooms);

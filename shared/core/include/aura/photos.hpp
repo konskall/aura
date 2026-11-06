@@ -60,6 +60,9 @@ std::shared_ptr<const PhotoImage> decode_photo(const std::uint8_t* data, std::si
 inline std::shared_ptr<const PhotoImage> decode_photo(const std::vector<std::uint8_t>& bytes, PhotoError& error) {
     return decode_photo(bytes.data(), bytes.size(), error);
 }
+// A smaller copy within `max_edge` on its long side, each pixel the average
+// of the ones it covers; a picture already within the edge is only copied.
+std::shared_ptr<const PhotoImage> photo_thumbnail(const PhotoImage& image, unsigned max_edge);
 
 // UI state contains names and bounded decoded pixels, never paths or file handles.
 struct PhotoSnapshot {

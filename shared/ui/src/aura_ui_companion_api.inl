@@ -62,6 +62,7 @@ void AuraUi::apply_voice(const VoiceSnapshot& snapshot) {
         return;
     }
     if (self.current_view == UiView::Translate && structural) self.render(UiView::Translate);
+    if (self.current_view == UiView::AoratonVoiceRecord && !structural) self.update_record_widgets();
 }
 
 void AuraUi::apply_translation(const TranslationSnapshot& snapshot) {

@@ -12,6 +12,8 @@ namespace aura::simulator {
 class WinHttpClient final : public IAoratonHttp {
 public:
     static constexpr std::size_t kMaxResponseBytes = 1024 * 1024;
+    // A request may ask for more (attachments), never beyond this.
+    static constexpr std::size_t kMaxDownloadBytes = 8 * 1024 * 1024;
 
     WinHttpClient();
     ~WinHttpClient() override;

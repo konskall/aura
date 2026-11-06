@@ -313,6 +313,20 @@ const CompanionStrings& companion_el_gr() noexcept {
 
         s.aoraton_sign_in = "Σύνδεση με Google";
         s.aoraton_sign_in_help = "Ο λογαριασμός σου aoraton.com ανοίγει στον browser του υπολογιστή.";
+        s.aoraton_sign_in_relay_help =
+            "Η συσκευή συνδέεται μέσω του υπολογιστή: το κουμπί ανοίγει τη Μεταφορά αρχείων και στον υπολογιστή "
+            "τρέχεις το aoraton-device-sign-in.";
+        s.aoraton_photo = "Φωτογραφία";
+        s.aoraton_photo_loading = "Φόρτωση φωτογραφίας…";
+        s.aoraton_attachment_failed = "Δεν άνοιξε. Δοκίμασε ξανά αργότερα.";
+        s.aoraton_voice_message = "Φωνητικό μήνυμα";
+        s.aoraton_voice_playing = "Παίζει · άγγιξε για στοπ";
+        s.aoraton_voice_record_detail = "Μίλα, και πάτα Συνέχεια όταν τελειώσεις. Έως 30 δευτερόλεπτα.";
+        s.aoraton_voice_length_format = "Φωνητικό μήνυμα · %u:%02u";
+        s.aoraton_voice_needs_microphone = "Χρειάζεται μικρόφωνο";
+        s.aoraton_voice_continue = "Συνέχεια";
+        s.aoraton_loading = "Φόρτωση…";
+        s.aoraton_file_elsewhere = "Άνοιξέ το στο aoraton.com";
         s.aoraton_sign_in_waiting = "Ολοκλήρωσε τη σύνδεση στον browser του υπολογιστή";
         s.aoraton_account_title = "Λογαριασμός aoraton";
         s.aoraton_sign_out = "Αποσύνδεση";
@@ -735,6 +749,20 @@ const CompanionStrings& companion_en_us() noexcept {
 
         s.aoraton_sign_in = "Sign in with Google";
         s.aoraton_sign_in_help = "Your aoraton.com account opens in the PC's browser.";
+        s.aoraton_sign_in_relay_help =
+            "The device signs in through your PC: the button opens File transfer, then run "
+            "aoraton-device-sign-in on the PC.";
+        s.aoraton_photo = "Photo";
+        s.aoraton_photo_loading = "Loading the photo…";
+        s.aoraton_attachment_failed = "It did not open. Try again later.";
+        s.aoraton_voice_message = "Voice message";
+        s.aoraton_voice_playing = "Playing · tap to stop";
+        s.aoraton_voice_record_detail = "Speak, then tap Continue when you are done. Up to 30 seconds.";
+        s.aoraton_voice_length_format = "Voice message · %u:%02u";
+        s.aoraton_voice_needs_microphone = "A microphone is needed";
+        s.aoraton_voice_continue = "Continue";
+        s.aoraton_loading = "Loading…";
+        s.aoraton_file_elsewhere = "Open it on aoraton.com";
         s.aoraton_sign_in_waiting = "Finish signing in in the PC's browser";
         s.aoraton_account_title = "aoraton account";
         s.aoraton_sign_out = "Sign out";

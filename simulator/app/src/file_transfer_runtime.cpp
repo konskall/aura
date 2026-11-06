@@ -108,7 +108,7 @@ void respond(SOCKET socket, const TransferResponse& response) {
         done += static_cast<unsigned>(n);
     }
 }
-void serve(SOCKET socket, TransferSession& session, DesktopTransferStorage& storage) {
+void serve(SOCKET socket, TransferSession& session, DesktopTransferStorage& storage, IAoratonLinkEndpoint* aoraton) {
     const DWORD timeout = 1000;
     setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
     setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
@@ -132,7 +132,7 @@ void serve(SOCKET socket, TransferSession& session, DesktopTransferStorage& stor
     request.local_peer = getpeername(socket, reinterpret_cast<sockaddr*>(&peer), &peer_size) == 0 &&
                          inet_ntop(AF_INET, &peer.sin_addr, peer_address, sizeof(peer_address)) &&
                          transfer_private_ipv4(peer_address);
-    TransferProtocol protocol(session, storage, now_ms);
+    TransferProtocol protocol(session, storage, now_ms, nullptr, aoraton);
     respond(socket, protocol.handle(request, reader));
     // On an early rejection the browser may still be sending its body. Send
     // a graceful FIN and briefly drain it so a TCP reset cannot hide the JSON
@@ -293,12 +293,13 @@ void DesktopTransferStorage::cancel() {
     }
 }
 FileTransferRuntime::FileTransferRuntime(const std::string& root, bool deterministic, std::string bind_address,
-                                         std::uint16_t port)
+                                         std::uint16_t port, IAoratonLinkEndpoint* aoraton)
     : storage_(std::filesystem::u8path(root)),
       deterministic_(deterministic),
       has_root_(!root.empty()),
       bind_address_(std::move(bind_address)),
-      port_(port) {
+      port_(port),
+      aoraton_(aoraton) {
     if (!deterministic_ && has_root_) thread_ = std::thread([this] { run(); });
 }
 FileTransferRuntime::~FileTransferRuntime() {
@@ -376,7 +377,7 @@ void FileTransferRuntime::run() {
             if (selected > 0) {
                 const auto client = accept(listener, nullptr, nullptr);
                 if (client != INVALID_SOCKET) {
-                    serve(client, session_, storage_);
+                    serve(client, session_, storage_, aoraton_);
                     shutdown(client, SD_BOTH);
                     closesocket(client);
                 }

@@ -130,7 +130,11 @@ AoratonAccountTransport::AoratonAccountTransport(AoratonMailbox& mailbox, Aorato
                          return http_.fetch_following_redirects(url) == 200;
                      })
                    : LoopbackSignInChannel::BrowserOpener{}),
-      worker_(mailbox, options_.config, http_, account_crypto_, message_crypto_, store_, channel_, &realtime_) {}
+      cache_files_(options_.store_path.empty() ? std::filesystem::path()
+                                               : options_.store_path.parent_path() / L"aoraton-cache"),
+      attachment_cache_(cache_files_),
+      worker_(mailbox, options_.config, http_, account_crypto_, message_crypto_, store_, channel_, &realtime_,
+              &voice_decoder_, &attachment_cache_) {}
 
 AoratonAccountTransport::~AoratonAccountTransport() { stop(); }
 

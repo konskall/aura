@@ -1,11 +1,16 @@
 // Firmware settings the shared code relies on. The simulator cannot see them, so
 // a wrong value would first show on the board: these checks read the ESP-IDF
 // defaults files the firmware is configured from.
+#include "aura/ota_update.hpp"
+
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -83,6 +88,79 @@ void check_security(const std::string& defaults, const std::string& production) 
            "production keeps NVS keys in the flash-encrypted nvs_keys partition");
 }
 
+struct Partition {
+    std::string name;
+    std::uint32_t offset{0};
+    std::uint32_t size{0};
+    bool app{false};
+};
+
+std::string trim(const std::string& text) {
+    const auto first = text.find_first_not_of(" \t\r");
+    if (first == std::string::npos) return {};
+    return text.substr(first, text.find_last_not_of(" \t\r") - first + 1);
+}
+
+// The rows of an ESP-IDF partition table: name, type, subtype, offset, size.
+std::vector<Partition> partitions(const std::string& table) {
+    std::vector<Partition> rows;
+    std::istringstream lines(table);
+    std::string line;
+    while (std::getline(lines, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#') continue;
+        std::vector<std::string> cells;
+        std::istringstream fields(line);
+        std::string cell;
+        while (std::getline(fields, cell, ',')) cells.push_back(trim(cell));
+        if (cells.size() < 5) {
+            expect(false, "a partition row has five columns: " + line);
+            continue;
+        }
+        Partition row;
+        row.name = cells[0];
+        row.app = cells[1] == "app";
+        row.offset = static_cast<std::uint32_t>(std::stoul(cells[3], nullptr, 0));
+        row.size = static_cast<std::uint32_t>(std::stoul(cells[4], nullptr, 0));
+        rows.push_back(row);
+    }
+    return rows;
+}
+
+void check_partitions(const std::string& defaults, const std::string& development, const std::string& production) {
+    // Two 7 MB app slots on the 16 MB flash (2026-11-06, the owner's choice):
+    // the firmware had only 10% of 6.5 MB slots free. Everything the owner
+    // keeps (photos, notes, transfers) lives on the microSD card, so the
+    // internal `storage` area is a small reserve.
+    expect(has_line(defaults, "CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y"), "the flash is 16 MB");
+    constexpr std::uint32_t kSlot = 0x700000;
+    expect(aura::OtaUpdateModel::kMaxImageBytes == kSlot, "an update may fill one app slot, and no more");
+    const std::map<std::string, std::pair<std::uint32_t, std::uint32_t>> fixed = {
+        {"ota_0", {0x20000, kSlot}},
+        {"ota_1", {0x720000, kSlot}},
+        {"storage", {0xE20000, 0x1D0000}},
+        {"coredump", {0xFF0000, 0x10000}},
+    };
+    for (const auto* table : {&development, &production}) {
+        const char* which = table == &development ? "development" : "production";
+        const auto rows = partitions(*table);
+        std::uint32_t end = 0;
+        std::size_t found = 0;
+        for (const auto& row : rows) {
+            expect(row.offset >= end, std::string(which) + ": " + row.name + " does not overlap the one before");
+            end = row.offset + row.size;
+            if (row.app) expect(row.offset % 0x10000 == 0, std::string(which) + ": " + row.name + " is 64 KiB aligned");
+            const auto expected = fixed.find(row.name);
+            if (expected == fixed.end()) continue;
+            ++found;
+            expect(row.offset == expected->second.first && row.size == expected->second.second,
+                   std::string(which) + ": " + row.name + " has the agreed offset and size");
+        }
+        expect(found == fixed.size(), std::string(which) + ": both app slots, storage and coredump exist");
+        expect(end <= 0x1000000, std::string(which) + ": the table fits the 16 MB flash");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -91,6 +169,8 @@ int main() {
     check_lvgl_memory(defaults);
     check_power(defaults);
     check_security(defaults, read_file(root + "/firmware/sdkconfig.production.defaults"));
+    check_partitions(defaults, read_file(root + "/firmware/partitions.csv"),
+                     read_file(root + "/firmware/partitions.production.csv"));
     if (failures != 0) {
         std::cerr << failures << " firmware configuration check(s) failed\n";
         return 1;

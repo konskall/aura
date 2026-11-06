@@ -33,5 +33,9 @@
 - [ ] Confirm safe GPIO46 mute/boot behavior and run rapid-cycle/long-play audio tests.
 - [ ] Add bounded streaming audio and optional Greek TTS without bypassing PCM diagnostics.
 - [ ] Build and test an independent Aoraton adapter against an isolated test backend and known-answer crypto vectors.
+- [x] Aoraton on the device (ADR 0010, 2026-11-06): sign-in through the PC, encrypted NVS, hybrid sync, photos and voice messages (play and send), built and tested on the PC.
+- [ ] Run Aoraton on the device live: first the simulator as the device with `scripts/aoraton-device-sign-in.mjs`, then the board (`docs/VERIFICATION.md`: NOT RUN, NEEDS HARDWARE).
+- [ ] Decide on pairing a device without a PC: it needs changes to the aoraton.com server, which this repository only reads.
+- [x] Decide the firmware app partition (2026-11-06, the owner): two 7 MB app slots and 1.8 MB `storage` (everything the owner keeps lives on the microSD card); `aura_firmware_config_tests` checks both tables.
 - [ ] Decide licensing and production authorization before any live Aoraton connectivity.
 - [ ] Add screenshot pixel-diff baselines with an explicit human review/update command.

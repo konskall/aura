@@ -64,10 +64,18 @@ public:
     void end_question();
     void cancel_question();
     void set_question_sink(std::function<void(std::vector<std::uint8_t>)> sink) { question_sink_ = std::move(sink); }
+    // An aoraton voice message, dictated like a note (up to 30 s); its WAV
+    // goes to the sink for the service's confirmation.
+    bool begin_voice_message();
+    void end_voice_message();
+    void cancel_voice_message();
+    void set_message_sink(std::function<void(std::vector<std::uint8_t>)> sink) { message_sink_ = std::move(sink); }
     // Speech recognition and spoken replies, once the cloud keys are there.
     void set_speech_available(bool recognition, bool output);
     // Where the transfer session's POST /api/keys puts the assistant's keys.
     void set_cloud_key_sink(ICloudKeySink* sink) { transfer_.set_key_sink(sink); }
+    // The PC-assisted aoraton.com sign-in over the same session (ADR 0010).
+    void set_aoraton_link(IAoratonLinkEndpoint* link) { transfer_.set_aoraton_link(link); }
     // The models the assistant's device facts come from.
     const ClockServicesModel& clock() const noexcept { return clock_; }
     const NotesModel& notes() const noexcept { return notes_; }
@@ -113,6 +121,8 @@ private:
     VoiceRecorder recorder_;
     bool recording_question_{false};
     std::function<void(std::vector<std::uint8_t>)> question_sink_;
+    bool recording_message_{false};
+    std::function<void(std::vector<std::uint8_t>)> message_sink_;
     VoiceSnapshot voice_{};
     CompanionCapabilities capabilities_{};
     bool capabilities_dirty_{true};

@@ -79,6 +79,10 @@ add_library(aura_core STATIC
     shared/core/src/aoraton_account.cpp
     shared/core/src/aoraton_account_worker.cpp
     shared/core/src/aoraton_realtime.cpp
+    shared/core/src/aoraton_attachment_cache.cpp
+    shared/core/src/aoraton_device_link.cpp
+    shared/core/src/aoraton_self_test.cpp
+    shared/core/src/voice_container.cpp
     shared/core/src/aoraton_inco.cpp
     shared/core/src/audio_service.cpp
     shared/core/src/assistant_state.cpp
@@ -185,12 +189,15 @@ add_executable(aura_simulator
     simulator/app/src/loopback_sign_in.cpp
     simulator/app/src/aoraton_account_transport.cpp
     simulator/app/src/windows_aoraton_realtime.cpp
+    simulator/app/src/windows_voice_decoder.cpp
+    simulator/app/src/windows_aoraton_cache_files.cpp
 )
 target_include_directories(aura_simulator PRIVATE simulator/app/include)
 target_compile_definitions(aura_simulator PRIVATE LV_CONF_INCLUDE_SIMPLE LV_LVGL_H_INCLUDE_SIMPLE SDL_MAIN_HANDLED)
 target_link_libraries(aura_simulator PRIVATE aura_ui lvgl SDL2::SDL2-static)
 if(WIN32)
-    target_link_libraries(aura_simulator PRIVATE winhttp ws2_32 shell32 bcrypt crypt32 wlanapi bluetoothapis setupapi iphlpapi)
+    target_link_libraries(aura_simulator PRIVATE winhttp ws2_32 shell32 bcrypt crypt32 wlanapi bluetoothapis setupapi iphlpapi
+                          mfplat mfuuid ole32)
     target_link_options(aura_simulator PRIVATE -mconsole)
 endif()
 
@@ -206,6 +213,14 @@ if(BUILD_TESTING)
         target_link_libraries(aura_file_transfer_runtime_tests PRIVATE aura_core ws2_32 iphlpapi bcrypt shell32)
         add_test(NAME aura_file_transfer_runtime_tests COMMAND aura_file_transfer_runtime_tests)
         set_tests_properties(aura_file_transfer_runtime_tests PROPERTIES TIMEOUT 25)
+        add_executable(aura_windows_voice_decoder_tests tests/integration/windows_voice_decoder_test.cpp
+                       simulator/app/src/windows_voice_decoder.cpp)
+        target_include_directories(aura_windows_voice_decoder_tests PRIVATE simulator/app/include)
+        target_link_libraries(aura_windows_voice_decoder_tests PRIVATE aura_core mfplat mfuuid ole32)
+        add_test(NAME aura_windows_voice_decoder_tests COMMAND aura_windows_voice_decoder_tests)
+        add_executable(aura_aoraton_link_host tests/interop/aoraton_link_host.cpp simulator/app/src/file_transfer_runtime.cpp simulator/app/src/photo_runtime.cpp)
+        target_include_directories(aura_aoraton_link_host PRIVATE simulator/app/include)
+        target_link_libraries(aura_aoraton_link_host PRIVATE aura_core ws2_32 iphlpapi bcrypt shell32)
     endif()
     add_executable(aura_photos_tests tests/unit/photos_test.cpp)
     target_compile_definitions(aura_photos_tests PRIVATE AURA_PHOTO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/photos")
@@ -335,6 +350,19 @@ if(BUILD_TESTING)
     add_executable(aura_appearance_tests tests/unit/appearance_test.cpp)
     add_executable(aura_keyboard_tests tests/unit/keyboard_test.cpp)
     add_executable(aura_aoraton_realtime_tests tests/unit/aoraton_realtime_test.cpp)
+    add_executable(aura_voice_container_tests tests/unit/voice_container_test.cpp)
+    target_link_libraries(aura_voice_container_tests PRIVATE aura_core)
+    add_test(NAME aura_voice_container_tests COMMAND aura_voice_container_tests)
+    add_executable(aura_aoraton_attachment_cache_tests tests/unit/aoraton_attachment_cache_test.cpp)
+    target_link_libraries(aura_aoraton_attachment_cache_tests PRIVATE aura_core)
+    if(WIN32)
+        target_sources(aura_aoraton_attachment_cache_tests PRIVATE simulator/app/src/windows_aoraton_cache_files.cpp)
+        target_include_directories(aura_aoraton_attachment_cache_tests PRIVATE simulator/app/include)
+    endif()
+    add_test(NAME aura_aoraton_attachment_cache_tests COMMAND aura_aoraton_attachment_cache_tests)
+    add_executable(aura_aoraton_device_link_tests tests/unit/aoraton_device_link_test.cpp)
+    target_link_libraries(aura_aoraton_device_link_tests PRIVATE aura_core)
+    add_test(NAME aura_aoraton_device_link_tests COMMAND aura_aoraton_device_link_tests)
     target_link_libraries(aura_aoraton_realtime_tests PRIVATE aura_core)
     add_test(NAME aura_aoraton_realtime_tests COMMAND aura_aoraton_realtime_tests)
     target_link_libraries(aura_keyboard_tests PRIVATE aura_ui)
@@ -368,6 +396,7 @@ if(BUILD_TESTING)
     target_link_libraries(aura_board_chips_tests PRIVATE aura_core)
     add_test(NAME aura_board_chips_tests COMMAND aura_board_chips_tests)
     add_executable(aura_firmware_config_tests tests/unit/firmware_config_test.cpp)
+    target_include_directories(aura_firmware_config_tests PRIVATE shared/core/include)
     target_compile_definitions(aura_firmware_config_tests PRIVATE AURA_REPO_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME aura_firmware_config_tests COMMAND aura_firmware_config_tests)
     add_executable(aura_ui_assets_tests tests/unit/ui_assets_test.cpp)
@@ -409,6 +438,10 @@ if(BUILD_TESTING)
         target_link_libraries(aura_update_signature_tests PRIVATE aura_core bcrypt)
         add_test(NAME aura_update_signature_tests COMMAND aura_update_signature_tests)
         if(AURA_NODE_EXECUTABLE)
+            add_test(NAME aura_aoraton_device_sign_in_interop
+                COMMAND ${AURA_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/interop/run_aoraton_device_sign_in_test.mjs
+                        $<TARGET_FILE:aura_aoraton_link_host>)
+            set_tests_properties(aura_aoraton_device_sign_in_interop PROPERTIES TIMEOUT 120)
             add_test(NAME aura_update_signing_interop
                 COMMAND ${AURA_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/interop/run_update_signing_test.mjs
                         $<TARGET_FILE:aura_update_signature_tests>)
@@ -444,11 +477,14 @@ if(BUILD_TESTING)
             simulator/app/src/loopback_sign_in.cpp
             simulator/app/src/aoraton_account_transport.cpp
             simulator/app/src/windows_aoraton_realtime.cpp
+            simulator/app/src/windows_voice_decoder.cpp
+            simulator/app/src/windows_aoraton_cache_files.cpp
             simulator/app/src/windows_aoraton_crypto.cpp
             simulator/app/src/windows_aoraton_vault.cpp
         )
         target_include_directories(aura_aoraton_account_smoke PRIVATE simulator/app/include)
-        target_link_libraries(aura_aoraton_account_smoke PRIVATE aura_core winhttp ws2_32 shell32 bcrypt crypt32)
+        target_link_libraries(aura_aoraton_account_smoke PRIVATE aura_core winhttp ws2_32 shell32 bcrypt crypt32 mfplat mfuuid
+                              ole32)
         if(AURA_NODE_EXECUTABLE)
             add_test(NAME aura_aoraton_account_smoke
                 COMMAND ${AURA_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/interop/run_aoraton_account_smoke.mjs

@@ -193,7 +193,7 @@ esp_err_t Esp32FileTransfer::request(httpd_req_t* req) {
     r.local_peer = getpeername(httpd_req_to_sockfd(req), reinterpret_cast<sockaddr*>(&peer), &size) == 0 &&
                    inet_ntop(AF_INET, &peer.sin_addr, address, sizeof(address)) && transfer_private_ipv4(address);
     RequestReader reader(req);
-    TransferProtocol protocol(session_, storage_, transfer_now, key_sink_);
+    TransferProtocol protocol(session_, storage_, transfer_now, key_sink_, aoraton_link_);
     bool framing =
         httpd_req_get_hdr_value_len(req, "Transfer-Encoding") == 0 && httpd_req_get_hdr_value_len(req, "Expect") == 0;
     for (const char* name : {"Host", "Origin", "Authorization", "Content-Type", "X-Aura-Filename", "X-Aura-Area"})
@@ -234,7 +234,7 @@ void Esp32FileTransfer::manage() {
         config.ctrl_port = 32778;
         config.stack_size = 16384;
         config.max_open_sockets = 2;
-        config.max_uri_handlers = 6;
+        config.max_uri_handlers = 11;
         config.max_resp_headers = 8;
         config.max_req_hdr_len = 8192;
         config.max_uri_len = 64;
@@ -263,6 +263,13 @@ void Esp32FileTransfer::manage() {
         ok |= httpd_register_uri_handler(server, &uri);
         uri.uri = "/api/keys";
         ok |= httpd_register_uri_handler(server, &uri);
+        if (aoraton_link_) {
+            for (const char* path : {"/api/aoraton/config", "/api/aoraton/sign-in", "/api/aoraton/status",
+                                     "/api/aoraton/code", "/api/aoraton/invite"}) {
+                uri.uri = path;
+                ok |= httpd_register_uri_handler(server, &uri);
+            }
+        }
         if (ok == ESP_OK)
             session_.ready(state.generation, "http://" + address + ":8788", transfer_now());
         else

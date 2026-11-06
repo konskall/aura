@@ -1,9 +1,12 @@
 #pragma once
 
+#include "aura/audio_service.hpp"
 #include "aura/language.hpp"
+#include "aura/photos.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -77,6 +80,10 @@ struct AoratonRoom {
     std::string latest_timestamp;
 };
 
+// A message's file: photos show and open full screen, voice messages play;
+// other files are named only (open them on aoraton.com).
+enum class AoratonAttachmentKind { None, Image, Voice, File };
+
 struct AoratonMessage {
     std::string id;
     std::string room_id;
@@ -86,6 +93,10 @@ struct AoratonMessage {
     AoratonDirection direction{AoratonDirection::Incoming};
     AoratonDelivery delivery{AoratonDelivery::Received};
     std::string client_message_id;
+    AoratonAttachmentKind attachment{AoratonAttachmentKind::None};
+    std::string attachment_name;
+    // A photo's thumbnail (at most 216 px) once it has arrived.
+    std::shared_ptr<const PhotoImage> thumbnail;
 };
 
 struct AoratonNotification {
@@ -122,6 +133,15 @@ struct AoratonSnapshot {
     AoratonKeyState key_state{AoratonKeyState::Unknown};
     std::uint32_t key_count{0};
     AoratonSyncSettings sync_settings;
+    // The photo open full screen (at most 480 px), or the code of why it could not open.
+    std::string opened_attachment_id;
+    std::shared_ptr<const PhotoImage> opened_image;
+    bool opening_attachment{false};
+    std::string attachment_error;
+    // A recorded voice message awaiting confirmation (its room in pending_room_id).
+    std::uint32_t pending_voice_ms{0};
+    // The voice message playing (its id in opened_attachment_id), decoded.
+    std::shared_ptr<const PcmClip> voice_clip;
 };
 
 class IAoratonService {
@@ -147,6 +167,15 @@ public:
     virtual bool unlock_keys(const std::string&) { return false; }
     virtual bool add_invite_key(const std::string&) { return false; }
     virtual bool set_sync_settings(const AoratonSyncSettings&) { return false; }
+    // The device's hybrid sync: true stops realtime and checks every five
+    // minutes (screen dark on battery); false resumes realtime at once.
+    virtual bool set_power_saving(bool) { return true; }
+    // A message's photo (full screen) or voice message (played); closing frees it.
+    virtual bool open_attachment(const std::string&) { return false; }
+    // A voice message recorded on this device (AURA's WAV), sent after the
+    // same confirmation as a text.
+    virtual bool prepare_voice(const std::string&, std::vector<std::uint8_t>) { return false; }
+    virtual void close_attachment() {}
     // Mock/demo copy follows the selected UI language. Real transports keep
     // server-provided room names and message text unchanged.
     virtual void set_interface_language(InterfaceLanguage) {}
@@ -169,6 +198,9 @@ public:
     void reset_mock() override;
     void set_interface_language(InterfaceLanguage language) override;
     bool set_sync_settings(const AoratonSyncSettings& settings) override;
+    bool open_attachment(const std::string& message_id) override;
+    void close_attachment() override;
+    bool prepare_voice(const std::string& room_id, std::vector<std::uint8_t> wav) override;
     const AoratonSnapshot& snapshot() const noexcept override { return snapshot_; }
 
 private:

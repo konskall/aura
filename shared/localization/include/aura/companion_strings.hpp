@@ -316,6 +316,18 @@ struct CompanionStrings {
     // aoraton.com account (sign-in through the PC browser, room keys)
     const char* aoraton_sign_in;
     const char* aoraton_sign_in_help;
+    const char* aoraton_sign_in_relay_help;  // the device: its PC signs it in
+    const char* aoraton_photo;
+    const char* aoraton_photo_loading;
+    const char* aoraton_attachment_failed;
+    const char* aoraton_voice_message;
+    const char* aoraton_voice_playing;
+    const char* aoraton_voice_record_detail;
+    const char* aoraton_voice_length_format;  // minutes and seconds
+    const char* aoraton_voice_needs_microphone;
+    const char* aoraton_voice_continue;
+    const char* aoraton_loading;
+    const char* aoraton_file_elsewhere;
     const char* aoraton_sign_in_waiting;
     const char* aoraton_account_title;
     const char* aoraton_sign_out;

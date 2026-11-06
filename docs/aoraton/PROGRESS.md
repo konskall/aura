@@ -1,5 +1,19 @@
 # Aoraton progress
 
+## 2026-11-06: the device's account, photos and voice messages
+
+The owner asked for Aoraton on the device and chose the hybrid sync, photos and voice messages (ADR 0010).
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Sign-in relayed by the PC (`scripts/aoraton-device-sign-in.mjs`) | TEST VERIFIED | interop test against the real transfer server, 4 scenarios |
+| ESP32 HTTP, crypto, NVS secrets, realtime | COMPILED / NEEDS HARDWARE | firmware builds; known-answer self-test passes on the Windows adapters |
+| Hybrid sync (realtime lit or on USB, 5-minute check otherwise) | TEST VERIFIED | worker test, `realtime_sync_allowed` |
+| Photos in conversations (thumbnails, full screen) | TEST VERIFIED | crypto vectors from the web client's algorithm, worker test, harness `aoraton.photo_open` |
+| Voice messages: playing AAC, Opus and WAV | TEST VERIFIED (simulator) / NEEDS HARDWARE | shared demuxer tests; Media Foundation decodes AAC (and Opus where installed); the device's `esp_audio_codec` decoder compiles |
+| Voice messages: recording and sending | TEST VERIFIED | worker test: the upload opens to the exact WAV with the room key; harness `aoraton.voice_record` |
+| Real aoraton.com with these | NOT RUN | needs the owner's live run (simulator) and the board |
+
 ## 2026-10-23: account sign-in (simulator)
 
 Design: `docs/design/AURA_AORATON_ACCOUNT_LOGIN_DESIGN.md`; plan: `docs/superpowers/plans/2026-10-23-aoraton-account-login.md`.
@@ -13,7 +27,7 @@ Design: `docs/design/AURA_AORATON_ACCOUNT_LOGIN_DESIGN.md`; plan: `docs/superpow
 | UI: sign-in, waiting, timeout hint, re-sign-in, account page, keys, invite paste, polling label | TEST VERIFIED | pointer checks `aoraton.sign_in/paste_invite/keys_row/unlock_submit/sign_out`; captures `aoraton-account-*` |
 | Real aoraton.com sign-in, keys, read and send | OWNER VERIFIED | 2026-10-23 owner run through `run.bat`; see `docs/VERIFICATION.md` |
 | inco answers to AURA's own @inco messages (opt-in) | TEST VERIFIED | `aura_aoraton_inco_tests`, `aura_aoraton_account_worker_tests`, `aura_aoraton_account_smoke`; owner ran it live on aoraton.com on 2026-10-24: PASSED |
-| ESP32 sign-in (via phone) | NOT STARTED | Shared worker is ready behind its four interfaces |
+| ESP32 sign-in (through the owner's PC, ADR 0010) | TEST VERIFIED / NEEDS HARDWARE | `aura_aoraton_device_link_tests`, `aoraton_link_tests` in `aura_file_transfer_tests`, `aura_aoraton_device_sign_in_interop` (the helper against the real transfer server); the ESP32 adapters compile; nothing has run on the board |
 
 ## v11 baseline
 

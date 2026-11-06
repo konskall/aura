@@ -15,6 +15,7 @@ namespace {
 
 constexpr char kMessageInfo[] = "inco/e2ee/v2/msg";
 constexpr char kAuthInfo[] = "inco/e2ee/v2/auth";
+constexpr char kFileInfo[] = "inco/e2ee/v2/file";
 constexpr char kSafetyInfo[] = "inco/e2ee/v2/safety";
 
 bool fits_ulong(std::size_t value) noexcept {
@@ -375,6 +376,72 @@ bool WindowsAoratonCryptoV2::safety_code_material(const AoratonRoomKey& room_key
     if (!derive_subkey(room_key, kSafetyInfo, digest)) return false;
     material = aoraton_base64url_encode(digest.data(), digest.size());
     clear_bytes(digest.data(), digest.size());
+    return true;
+}
+
+bool WindowsAoratonCryptoV2::unwrap_file_key(const std::string& wrapped, const AoratonRoomKey& room_key,
+                                             std::array<std::uint8_t, 32>& file_key) {
+    AoratonV2Envelope envelope;
+    AoratonCryptoError error = AoratonCryptoError::None;
+    if (!room_key.is_present() || !aoraton_parse_v2_envelope(wrapped, envelope, error)) return false;
+    std::array<std::uint8_t, 32> key{};
+    if (!derive_subkey(room_key, kFileInfo, key)) return false;
+    std::vector<std::uint8_t> raw;
+    bool authentication_failed = false;
+    const bool ok = aes_gcm_decrypt(key, envelope.iv.data(), envelope.ciphertext_and_tag, raw,
+                                    authentication_failed) &&
+                    raw.size() == file_key.size();
+    clear_bytes(key.data(), key.size());
+    if (ok) std::copy(raw.begin(), raw.end(), file_key.begin());
+    clear_bytes(raw.data(), raw.size());
+    return ok;
+}
+
+bool WindowsAoratonCryptoV2::wrap_file_key(const std::array<std::uint8_t, 32>& file_key,
+                                           const AoratonRoomKey& room_key, std::string& wrapped) {
+    wrapped.clear();
+    std::array<std::uint8_t, 32> key{};
+    std::array<std::uint8_t, kAoratonGcmIvBytes> iv{};
+    if (!room_key.is_present() || !derive_subkey(room_key, kFileInfo, key)) return false;
+    std::vector<std::uint8_t> encrypted;
+    const bool ok = fill_random(iv.data(), iv.size()) &&
+                    aes_gcm_encrypt(key, iv.data(), file_key.data(), file_key.size(), encrypted);
+    clear_bytes(key.data(), key.size());
+    if (ok) wrapped = aoraton_serialize_v2_envelope(iv.data(), encrypted);
+    clear_bytes(encrypted.data(), encrypted.size());
+    return ok;
+}
+
+bool WindowsAoratonCryptoV2::open_file(const std::array<std::uint8_t, 32>& file_key, const std::string& iv,
+                                       const std::uint8_t* data, std::size_t size,
+                                       std::vector<std::uint8_t>& plaintext) {
+    plaintext.clear();
+    std::vector<std::uint8_t> nonce;
+    if (data == nullptr || size < kAoratonGcmTagBytes || !aoraton_base64_decode(iv, nonce) ||
+        nonce.size() != kAoratonGcmIvBytes)
+        return false;
+    const std::vector<std::uint8_t> sealed(data, data + size);
+    bool authentication_failed = false;
+    if (!aes_gcm_decrypt(file_key, nonce.data(), sealed, plaintext, authentication_failed)) {
+        clear_bytes(plaintext.data(), plaintext.size());
+        plaintext.clear();
+        return false;
+    }
+    return true;
+}
+
+bool WindowsAoratonCryptoV2::seal_file(const std::uint8_t* data, std::size_t size,
+                                       std::array<std::uint8_t, 32>& file_key, std::string& iv,
+                                       std::vector<std::uint8_t>& sealed) {
+    sealed.clear();
+    iv.clear();
+    std::array<std::uint8_t, kAoratonGcmIvBytes> nonce{};
+    if ((data == nullptr && size != 0) || !fill_random(file_key.data(), file_key.size()) ||
+        !fill_random(nonce.data(), nonce.size()) || !aes_gcm_encrypt(file_key, nonce.data(), data, size, sealed)) {
+        clear_bytes(file_key.data(), file_key.size());
+        return false;
+    }
+    iv = aoraton_base64_encode(nonce.data(), nonce.size());
     return true;
 }
 

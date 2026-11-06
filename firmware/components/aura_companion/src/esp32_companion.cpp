@@ -289,6 +289,50 @@ void Esp32Companion::cancel_question() {
     ++voice_.sequence;
 }
 
+bool Esp32Companion::begin_voice_message() {
+    if (recording_note_ || recording_question_ || recording_message_ || voice_.state != VoiceCaptureState::Idle ||
+        !capabilities_.microphone || !microphone_.start()) {
+        return false;
+    }
+    audio_.stop();
+    recorder_.start(VoiceRecorder::Mode::Dictation);
+    recording_message_ = true;
+    voice_.state = VoiceCaptureState::Recording;
+    voice_.purpose = VoicePurpose::Message;
+    voice_.elapsed_ms = 0;
+    voice_.error_code.clear();
+    ++voice_.sequence;
+    return true;
+}
+
+void Esp32Companion::end_voice_message() {
+    if (!recording_message_) return;
+    recording_message_ = false;
+    const bool stopped = microphone_.stop();
+    samples_.clear();
+    microphone_.drain(samples_);
+    if (!samples_.empty()) recorder_.append(samples_.data(), samples_.size());
+    auto wav = recorder_.finish_wav();
+    voice_.state = VoiceCaptureState::Idle;
+    voice_.level = 0.0F;
+    ++voice_.sequence;
+    if (!stopped) {
+        voice_.error_code = "MICROPHONE_STOP_TIMEOUT";
+        return;
+    }
+    if (message_sink_) message_sink_(std::move(wav));
+}
+
+void Esp32Companion::cancel_voice_message() {
+    if (!recording_message_) return;
+    recording_message_ = false;
+    microphone_.stop();
+    recorder_.cancel();
+    voice_.state = VoiceCaptureState::Idle;
+    voice_.level = 0.0F;
+    ++voice_.sequence;
+}
+
 void Esp32Companion::set_speech_available(bool recognition, bool output) {
     const bool listens = recognition && capabilities_.microphone;
     if (capabilities_.speech_recognition == listens && capabilities_.speech_output == output) return;
@@ -403,7 +447,7 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
         }
     }
 
-    if (recording_note_ || recording_question_) {
+    if (recording_note_ || recording_question_ || recording_message_) {
         samples_.clear();
         microphone_.drain(samples_);
         if (!samples_.empty()) recorder_.append(samples_.data(), samples_.size());
@@ -412,6 +456,7 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
         ++voice_.sequence;
         if (recorder_.should_stop()) {
             if (recording_note_) finish_note();
+            else if (recording_message_) end_voice_message();
             else end_question();
         }
     }
@@ -434,7 +479,7 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
     }
     button_down_ = down;
 
-    const bool busy = clock_.snapshot().alert || recording_note_ || recording_question_ ||
+    const bool busy = clock_.snapshot().alert || recording_note_ || recording_question_ || recording_message_ ||
                       phone_.snapshot().incoming_call ||
                       audio_.diagnostics().state == AudioState::Playing ||
                       ota_.snapshot().state == UpdateState::Downloading || photos_.snapshot().playing ||

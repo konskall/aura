@@ -2,17 +2,19 @@
 
 **A Greek-first AI companion for a 480 × 480 AMOLED ESP32-S3 device.** One shared C++17 core and LVGL interface run in two places: a native Windows simulator you can use today, and ESP-IDF firmware for the Waveshare ESP32-S3-Touch-AMOLED-2.16 board.
 
-> **Status (November 2026).** The simulator is feature-complete for the v13 "Companion" release, now with photos, local file transfer and realtime messages, and passes the full automated suite. The firmware compiles cleanly with ESP-IDF 5.5.5 but **has not been flashed**: nothing that depends on the physical board is claimed to work yet. See [docs/VERIFICATION.md](docs/VERIFICATION.md) for every result.
+> **Status (November 2026).** The simulator is feature-complete for the v13 "Companion" release, with photos, local file transfer, realtime messages, a glass header in every look and Halo's Σύναψη drawn 1:1 from its approved design. It passes the full automated suite. The firmware compiles cleanly with ESP-IDF 5.5.5 and now has its own assistant (Groq and Azure), encrypted storage, signed updates and power management, but it **has not been flashed**: nothing that depends on the physical board is claimed to work yet. See [docs/VERIFICATION.md](docs/VERIFICATION.md) for every result.
 
 ![AURA production screens: home, listening, thinking, speaking, answers, apps, settings, sound, messages, Wi-Fi and system](docs/images/aura-production-screens.png)
 
 ![AURA companion screens: apps, timers, clock, notes, voice notes, Today, translation, always-on clock, phone calls and notifications](docs/images/aura-companion-screens.png)
 
-All names, rooms, messages and data in the screenshots are fictional `DEMO` content.
+![Newer screens: photos, the always-on clock over a photo, file transfer with its QR code, credits, the appearance setting, Aoraton sign-in, the Aoraton account, and a conversation with a photo and the voice-message button](docs/images/aura-newer-screens.png)
+
+All names, rooms, messages, photos and data in the screenshots are fictional `DEMO` content. After a full test run, `python scripts/compose-readme-images.py` refreshes these three pictures.
 
 ## Σύντομα στα ελληνικά
 
-Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, μετάφραση πρόσωπο με πρόσωπο, φωτογραφίες από την κάρτα microSD, μεταφορά αρχείων από το κινητό ή τον υπολογιστή μέσα από το τοπικό Wi-Fi, μηνύματα Aoraton με κρυπτογράφηση που φτάνουν αμέσως και ειδοποιήσεις από το iPhone. Έχει τέσσερις εμφανίσεις (Άλως, Μάρμαρο, Σέλας, Γραφίτης) που επιλέγεις από τις Ρυθμίσεις → Εμφάνιση. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Ο προσομοιωτής δουλεύει σήμερα· το firmware χτίζεται, αλλά δεν έχει δοκιμαστεί ακόμα σε πραγματική πλακέτα.
+Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, μετάφραση πρόσωπο με πρόσωπο, φωτογραφίες από την κάρτα microSD, μεταφορά αρχείων από το κινητό ή τον υπολογιστή μέσα από το τοπικό Wi-Fi, μηνύματα Aoraton με κρυπτογράφηση που φτάνουν αμέσως και ειδοποιήσεις από το iPhone. Έχει τέσσερις εμφανίσεις (Άλως, Μάρμαρο, Σέλας, Γραφίτης) που επιλέγεις από τις Ρυθμίσεις → Εμφάνιση. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Στη συσκευή ο βοηθός μιλά απευθείας με το Groq και το Azure, με κλειδιά που στέλνεις μία φορά από τον υπολογιστή και φυλάσσονται κρυπτογραφημένα. Ο προσομοιωτής δουλεύει σήμερα· το firmware χτίζεται, αλλά δεν έχει δοκιμαστεί ακόμα σε πραγματική πλακέτα.
 
 ## Contents
 
@@ -41,6 +43,7 @@ All names, rooms, messages and data in the screenshots are fictional `DEMO` cont
 - **Works offline for everyday commands.** Timers, alarms, notes, tasks, shopping, volume, mute, brightness, the time, the battery and opening apps are understood on the device itself, in Greek and English. A sentence that merely mentions these words is left to the assistant.
 - **Local answers.** "Who celebrates today?", "When does Γιώργος celebrate?" and "When is the next public holiday?" are answered from an offline Greek Orthodox calendar.
 - **Explicit web search.** "Ψάξε…" / "search for…" uses live search only when the provider has a real search tool (the Codex CLI); otherwise the assistant says it cannot search right now.
+- **On the device, without a PC.** The firmware talks to Groq (speech recognition, and answers from `gpt-oss-120b`) and to Azure Speech (the voice) directly over HTTPS, with the same instructions as the bridge ([ADR 0009](docs/ADR/0009-device-direct-cloud-assistant.md)). Spoken questions and answers work there; translation and confirming a proposed action are not wired on the device yet, so it declines actions.
 
 ### Apps
 
@@ -50,7 +53,7 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 |---|---|
 | Conversation | The assistant, with recent history, follow-up and new-topic actions |
 | Weather | Open-Meteo forecast for any city, hourly and daily views, animated conditions, offline cache |
-| Messages | Aoraton end-to-end-encrypted rooms: sign-in through the PC browser, read and send with confirmation, optional `@inco` AI answers. In the simulator new messages arrive at once over a realtime connection; a periodic check (10 s to 5 min, or off) remains as a fallback |
+| Messages | Aoraton end-to-end-encrypted rooms: sign-in through the PC browser, read and send with confirmation, optional `@inco` AI answers. Photos show in the conversation and open full screen. Voice messages play (AAC, Opus or WAV), and are recorded and sent after a confirmation. On the device the encrypted files are kept on the microSD card, so they open again without a second download. New messages arrive at once over a realtime connection, with a periodic check (10 s to 5 min, or off) as a fallback. On the device realtime runs while the screen is lit or on USB power, and a five-minute check takes over on battery with the screen dark |
 | Clock | Timers, alarms (once or daily) and reminders, with a full-screen alert that rings even when muted |
 | Notes | Typed and voice notes; a voice note is dictated (up to 30 s, past short pauses) and transcribed |
 | Translate | Face-to-face translation with one card turned towards the other person |
@@ -67,12 +70,12 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 - **Gestures.** Raise to wake, and flip face down to mute.
 - **Sound settings.** Volume, mute, message chime, spoken answers and continuous conversation. A second tap on a read-aloud button stops the reading.
 - **Local file transfer.** Settings → Μεταφορά αρχείων shows a QR code and a six-digit code. From a phone or PC on the same Wi-Fi you send photos (prepared for the 480 × 480 screen in the browser) or other files, and you can list or delete them. Access lasts ten minutes and ends when you stop it. See [docs/FILE_TRANSFER.md](docs/FILE_TRANSFER.md).
-- **System.** Updates (OTA with rollback), diagnostics, credits, restart, power off, and a factory reset that erases settings and data but keeps your photos and files.
+- **System.** Signed updates (OTA with rollback), diagnostics, credits, restart, power off, and a factory reset that erases settings and data but keeps your photos and files.
 - **Phone link.** Notifications and calls from a paired iPhone over Bluetooth LE (ANCS). In the simulator this uses the PC's Bluetooth adapter and is experimental.
 
 ### Appearances
 
-Settings → Εμφάνιση offers four looks. A look sets the colours, typefaces, icons and components everywhere, gives six screens their own layout (Home, the answer, Apps, Weather, a running timer and Today) and brings its own animated presence for listening, thinking and speaking. The choice is stored on the device and applied before the first frame.
+Settings → Εμφάνιση offers four looks. A look sets the colours, typefaces, icons and components everywhere, gives six screens their own layout (Home, the answer, Apps, Weather, a running timer and Today) and brings its own animated presence for listening, thinking and speaking. The choice is stored on the device and applied before the first frame. In every look the header is a floating glass capsule that the content scrolls under.
 
 | Look | Character | Type | Icons | Presence |
 |---|---|---|---|---|
@@ -95,22 +98,24 @@ Settings → Εμφάνιση offers four looks. A look sets the colours, typefa
                 └──────────────────┬───────────────────────────┘
                  same code         │          same code
         ┌──────────────────────────┴───────┐   ┌───────────────────────────────┐
-        │ simulator/  Windows, SDL2 2.32   │   │ firmware/  ESP-IDF 5.5.5       │
-        │ WinHTTP, audio, radio, Wi-Fi,    │   │ Waveshare BSP, ES8311 audio,   │
-        │ iPhone ANCS, local stores        │   │ NimBLE ANCS, OTA, microSD      │
-        └──────────────┬───────────────────┘   └───────────────────────────────┘
-                       │ loopback only (127.0.0.1, bearer token)
+        │ simulator/  Windows, SDL2 2.32   │   │ firmware/  ESP-IDF 5.5.5      │
+        │ WinHTTP, audio, radio, Wi-Fi,    │   │ Waveshare BSP, ES8311 audio,  │
+        │ iPhone ANCS, local stores        │   │ NimBLE ANCS, signed OTA,      │
+        └──────────────┬───────────────────┘   │ microSD, encrypted NVS        │
+                       │                       └───────────────┬───────────────┘
+                       │ loopback only                         │ HTTPS
+                       │ (127.0.0.1, bearer token)             └──► Groq · Azure Speech
         ┌──────────────┴───────────────────┐
         │ bridge/  Node.js ≥ 20            │──► Codex CLI · Groq · Azure Speech
         │ assistant turns, speech, fuel    │
         └──────────────────────────────────┘
 ```
 
-The device itself never holds an AI provider key. Production AI will go through an authenticated gateway ([ADR 0003](docs/ADR/0003-streaming-ai-gateway-and-device-secrets.md)); the bridge is desktop development tooling.
+On the PC the bridge is development tooling. The device needs no PC: its assistant talks to Groq and Azure directly, with keys sent once from the PC and kept in encrypted NVS ([ADR 0009](docs/ADR/0009-device-direct-cloud-assistant.md), which replaces the device part of [ADR 0003](docs/ADR/0003-streaming-ai-gateway-and-device-secrets.md)).
 
 | Path | Contents |
 |---|---|
-| `shared/core` | Assistant state machine, streaming, offline commands, organizer, clock, notes, radio, weather, Greek calendar, fuel, Aoraton and its realtime protocol, photos and their decoding, local file transfer, voice front end and echo cancellation, display power |
+| `shared/core` | Assistant state machine, streaming, offline commands, organizer, clock, notes, radio, weather, Greek calendar, fuel, Aoraton and its realtime protocol, photos and their decoding, local file transfer, voice front end and echo cancellation, display power, the device's cloud assistant (Groq, Azure) and its instructions, signed update manifests, the board's clock and power-chip formats, runtime metrics |
 | `shared/ui` | Every screen, the keyboard, motion and the design tokens |
 | `shared/localization` | All Greek and English text, including the file transfer page |
 | `shared/assets` | Fonts (IBM Plex, Space Grotesk, Noto Serif Display, Commissioner, Manrope, Roboto Flex), icons (Lucide, Phosphor, Solar, Material Symbols), the Aura wordmark and the Aoraton and Google sign-in marks, with their licenses |
@@ -120,7 +125,7 @@ The device itself never holds an AI provider key. Production AI will go through 
 | `bridge` | The loopback bridge: Codex CLI and Groq runners, speech (Groq Whisper, Azure, Windows voices), fuel prices |
 | `firmware` | The ESP-IDF project and its components |
 | `tests` | Unit, integration, interoperability and smoke tests |
-| `scripts` | Setup, build, test and evidence scripts |
+| `scripts` | Setup, build, test and evidence scripts; update signing and sending keys to the device |
 | `docs` | Architecture, decisions (ADRs), design, security and the verification ledger |
 
 ## Getting started on Windows
@@ -143,7 +148,7 @@ cd aura
 .\run.bat mock        # DEMO answers, no account needed
 ```
 
-`run.bat` builds whatever changed and opens the 480 × 480 simulator together with its control page. Without an argument it answers with the locally signed-in Codex CLI, recognizes speech with Groq and speaks with Azure, using the keys in `.env` (below). `run.bat mock` needs no account or keys.
+`run.bat` builds whatever changed and opens the 480 × 480 simulator together with its control page. Without an argument it answers with the locally signed-in Codex CLI, recognizes speech with Groq and speaks with Azure, using the keys in `.env` (below). `run.bat mock` needs no account or keys. It runs a copy of the program (`build\native\run\aura_simulator.exe`), so you can rebuild while the window is open.
 
 ### Choosing the assistant and voices
 
@@ -192,11 +197,17 @@ The authoritative suite runs everything that can be checked on a PC. It contacts
   - A native Release build.
   - An ESP-IDF-compatible compile of every shared source (`-Wall -Wextra -Werror`, no exceptions or RTTI).
 - **Tests.**
-  - 39 CTest suites, including loopback tests for streaming, Shoutcast radio, the realtime WebSocket and file transfer.
+  - 51 CTest suites, including loopback tests for streaming, Shoutcast radio, the realtime WebSocket and file transfer.
+  - Interoperability checks against the Node tools:
+    - the device's assistant instructions match the bridge's;
+    - update signatures made by `scripts/update-signing.mjs` verify on the device's parser;
+    - `scripts/aoraton-device-sign-in.mjs` signs a stand-in device in through the real transfer server.
+  - Media Foundation decodes voice messages (AAC, and Opus where installed) back to the encoded tone.
+  - A check of the firmware's configuration: LVGL's memory, power management, encrypted NVS and the production security profile.
   - Bridge and control-page tests (`node --test`).
   - A smoke run and a 380-transition UI stress run.
 - **Evidence.**
-  - Real SDL/LVGL pointer checks of every route at 1× and 2× scale (272 checks each); the run also fails on any LVGL error.
+  - Real SDL/LVGL pointer checks of every route at 1× and 2× scale (284 checks each). The run fails on any LVGL error, on an animation drawn through a transform layer, or when LVGL's memory peak exceeds the device's budget.
   - Screenshot and motion evidence of every screen, written to the ignored `artifacts/` folder.
 
 Single test programs can be built and run from `build/native`, for example `ninja -C build/native aura_radio_tests`. Bridge tests run with `node --test` inside `bridge/`.
@@ -211,7 +222,7 @@ Single test programs can be built and run from `build/native`, for example `ninj
 - AXP2101 power management;
 - QMI8658 IMU and PCF85063 RTC;
 - ES7210 microphones and ES8311 codec;
-- microSD.
+- a microSD card (FAT32) for photos, notes, file transfers and Aoraton's encrypted files.
 
 See [docs/HARDWARE.md](docs/HARDWARE.md).
 
@@ -221,29 +232,73 @@ See [docs/HARDWARE.md](docs/HARDWARE.md).
 .\scripts\build-firmware-production.ps1      # Secure Boot V2 + flash encryption profile
 ```
 
-**What the firmware has today.** The shared UI and models, weather, sound, display power, the organizer, clock and notes, photos from the microSD card, local file transfer over Wi-Fi (`esp_http_server`), OTA with rollback, and iPhone ANCS through NimBLE.
+**What the firmware has today.**
+
+- The shared UI and models: weather, sound, display power, the organizer, clock and notes, photos from the microSD card.
+- Its own assistant: Groq listens and answers, Azure speaks ([ADR 0009](docs/ADR/0009-device-direct-cloud-assistant.md)).
+- The owner's aoraton.com account ([ADR 0010](docs/ADR/0010-device-aoraton-account.md)): the PC signs it in, it reads, sends, shows photos, plays and sends voice messages, and keeps the encrypted files on the microSD card, with the hybrid sync above.
+- Local file transfer over Wi-Fi (`esp_http_server`), which also receives the assistant's keys.
+- Signed OTA updates with rollback, and iPhone ANCS through NimBLE.
+- Encrypted NVS from the first boot. Its key is an HMAC key that the first boot burns into eFuse block 5; this is permanent, but it does not stop reflashing.
+- Power management: 240 MHz while the screen is lit, 80 MHz otherwise, and a main loop that slows down with the screen.
+- Drivers for the PCF85063 clock (UTC, set again after each network time sync) and the AXP2101 power manager (battery, USB and charging).
+- Σύναψη is drawn on the second core.
+- Frame, loop and memory numbers on the serial console after boot.
+
+**Giving the device its keys.** Open Settings → Μεταφορά αρχείων on the device, then run this on the PC. It reads `.env`, signs in with the code and never prints the keys:
+
+```powershell
+.\scripts\send-device-keys.ps1 -Address http://<device address>:<port> -Code <six digits>
+```
+
+**Signing updates.** The device installs only an update whose manifest carries the owner's ECDSA P-256 signature.
+
+- Make the key once, outside the repository, with `node scripts/update-signing.mjs keygen <file>`.
+- Put the public key it prints in `CONFIG_AURA_OTA_PUBLIC_KEY`.
+- Sign each image with `node scripts/update-signing.mjs sign …`.
+
+Until the public key is set, the device refuses every update.
+
+**Signing the device in to aoraton.com.** Open Settings → Μεταφορά αρχείων on the device (or the account screen's button), then run:
+
+```powershell
+node scripts/aoraton-device-sign-in.mjs --address http://<device address>:<port> --code <six digits>
+```
+
+Google's page opens in the PC's browser; the device keeps its own session, and the PC never sees it. Unlock the room keys on the device itself; `--invite <link>` adds a room from an invite link.
 
 **What is not available on the device yet.**
 
-- **Needs an external service.** The assistant, speech, radio playback and real Aoraton messaging need the production gateway or other backends; until then they stay disabled or clearly labelled. Realtime Aoraton delivery has no ESP32 adapter yet.
+- **Needs more work.**
+  - Radio playback.
+  - Translation, and confirming the assistant's proposed actions.
 - **Needs the board.** Everything physical still has to be validated: display, touch, audio, battery and Wi-Fi/TLS behaviour.
 
-The production signing keys are never stored in the repository.
+The production and update signing keys are never stored in the repository.
 
 ## Security and privacy
 
-- **Secrets stay on the PC.** Provider keys exist only in the PC's process environment or the ignored `.env`. They are never logged or committed, and never put in firmware.
+- **Keys stay out of the code.**
+  - On the PC, provider keys exist only in the process environment or the ignored `.env`.
+  - They are never logged, committed or built into firmware.
+  - The device receives its Groq and Azure keys once from the PC, inside the signed-in file-transfer session, and keeps them in encrypted NVS. No response or log repeats them.
+  - The device's aoraton.com session and room keys are created on the device and stay in its encrypted NVS; the PC only relays Google's one-time code.
+- **Updates are signed.** The device checks the owner's ECDSA P-256 signature over the version, size and SHA-256 of every update. Production builds add Secure Boot V2 and flash encryption.
 - **The bridge is local.** It listens only on `127.0.0.1` and requires a fresh bearer token for each run.
 - **Untrusted text is data.** Device facts, conversation history and web pages go to the model as data, never as instructions. Model output cannot act without typed validation and your confirmation.
 - **Messages and audio stay private.** Message text, transcripts and audio are not written to logs. Aoraton messages are end-to-end encrypted.
-- **File transfer is opt-in and local.** It is off after every start, opens only when you enable it, and lasts ten minutes. It needs the six-digit code shown on the screen (five wrong codes lock it) and accepts only devices on the local network. It can only add, list and delete files in the photos and files folders; there are no downloads. It is plain HTTP, so use it on trusted Wi-Fi.
+- **File transfer is opt-in and local.** It is off after every start, opens only when you enable it, and lasts ten minutes. It needs the six-digit code shown on the screen (five wrong codes lock it) and accepts only devices on the local network. It can only add, list and delete files in the photos and files folders, and accept the assistant's keys; there are no downloads. It is plain HTTP, so use it on trusted Wi-Fi.
 - **Demo data is labelled.** Fictional or simulated data is always marked `DEMO`.
 
 Details: [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md) and the [Aoraton security boundaries](docs/aoraton/SECURITY_BOUNDARIES.md).
 
 ## Known limitations
 
-- **The firmware has not run on hardware.** Heap and stack peaks, frame rate, power use and touch accuracy are unmeasured. Halo's Σύναψη slows itself down when frames take longer, but its cost has only been measured on a PC. Photos on the card and transfers from a phone have only run in the simulator.
+- **The firmware has not run on hardware.**
+  - Unmeasured: heap and stack peaks, frame rate, power use and touch accuracy.
+  - Halo's Σύναψη spends at most a third of the time drawing and switches to a lighter frame when frames are slow, but its cost has only been measured on a PC.
+  - Only run in the simulator so far: photos on the card, transfers from a phone, and the device's assistant.
+  - Automatic light sleep waits for a power measurement on the board.
 - **There is no wake word.** No trained and measured Greek "Αύρα" model exists yet, so listening starts with a tap.
 - **Echo cancellation is untuned.** It works in tests, but still needs tuning in a real room and on the device's microphones.
 - **iPhone disconnect handling is untested live.** Detecting that the phone has gone, and reconnecting, needs a session with a paired iPhone.
@@ -257,6 +312,11 @@ Details: [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md) and the [Aoraton s
 | Simulator guide | [docs/SIMULATOR.md](docs/SIMULATOR.md), [docs/simulator/WINDOWS_SETUP.md](docs/simulator/WINDOWS_SETUP.md) |
 | Decisions | [docs/ADR](docs/ADR) |
 | Verification ledger | [docs/VERIFICATION.md](docs/VERIFICATION.md) |
+| Hardware | [docs/HARDWARE.md](docs/HARDWARE.md) |
+| Security and privacy | [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md) |
+| The device's assistant | [ADR 0009](docs/ADR/0009-device-direct-cloud-assistant.md) |
+| aoraton.com on the device | [ADR 0010](docs/ADR/0010-device-aoraton-account.md) |
+| Budgets | [docs/PERFORMANCE_BUDGET.md](docs/PERFORMANCE_BUDGET.md), [docs/architecture/MEMORY_BUDGET.md](docs/architecture/MEMORY_BUDGET.md) |
 | Weather | [docs/WEATHER_ARCHITECTURE.md](docs/WEATHER_ARCHITECTURE.md) |
 | Audio | [docs/audio/AUDIO_ARCHITECTURE.md](docs/audio/AUDIO_ARCHITECTURE.md) |
 | Aoraton messaging | [docs/aoraton/LIVE_ARCHITECTURE.md](docs/aoraton/LIVE_ARCHITECTURE.md), [ADR 0007](docs/ADR/0007-aoraton-client-realtime.md) (realtime) |

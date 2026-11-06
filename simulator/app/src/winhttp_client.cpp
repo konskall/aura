@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <winhttp.h>
 
+#include <algorithm>
 #include <string>
 
 namespace aura::simulator {
@@ -104,11 +105,13 @@ AoratonHttpResponse WinHttpClient::send(const AoratonHttpRequest& request) {
     if (!WinHttpQueryHeaders(handle, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
                              &status, &size, WINHTTP_NO_HEADER_INDEX)) return response;
     std::string body;
+    const std::size_t limit = request.max_response_bytes != 0 ? std::min(request.max_response_bytes, kMaxDownloadBytes)
+                                                              : kMaxResponseBytes;
     while (true) {
         DWORD available = 0;
         if (!WinHttpQueryDataAvailable(handle, &available)) return response;
         if (available == 0) break;
-        if (body.size() + available > kMaxResponseBytes) return response;
+        if (body.size() + available > limit) return response;
         const std::size_t old_size = body.size();
         body.resize(old_size + available);
         DWORD read = 0;

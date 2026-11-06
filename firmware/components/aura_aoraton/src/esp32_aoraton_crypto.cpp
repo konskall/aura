@@ -1,5 +1,6 @@
 #include "aura/esp32_aoraton_crypto.hpp"
 
+#include "esp_heap_caps.h"
 #include "esp_random.h"
 #include "mbedtls/gcm.h"
 #include "mbedtls/hkdf.h"
@@ -19,6 +20,11 @@ namespace {
 constexpr char kMessageInfo[] = "inco/e2ee/v2/msg";
 constexpr char kAuthInfo[] = "inco/e2ee/v2/auth";
 constexpr char kSafetyInfo[] = "inco/e2ee/v2/safety";
+constexpr char kFileInfo[] = "inco/e2ee/v2/file";
+// Room left on the heap beside a file buffer of `bytes`.
+bool heap_has_room(std::size_t bytes) {
+    return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) > bytes + 64 * 1024;
+}
 
 std::string trim_ascii(std::string value) {
     const auto whitespace = [](unsigned char character) { return std::isspace(character) != 0; };
@@ -185,6 +191,85 @@ bool Esp32AoratonCryptoV2::safety_code_material(const AoratonRoomKey& room_key,
     if (!derive_subkey(room_key, kSafetyInfo, digest)) return false;
     material = aoraton_base64url_encode(digest.data(), digest.size());
     mbedtls_platform_zeroize(digest.data(), digest.size());
+    return true;
+}
+
+bool Esp32AoratonCryptoV2::unwrap_file_key(const std::string& wrapped, const AoratonRoomKey& room_key,
+                                           std::array<std::uint8_t, 32>& file_key) {
+    AoratonV2Envelope envelope;
+    AoratonCryptoError error = AoratonCryptoError::None;
+    if (!room_key.is_present() || !aoraton_parse_v2_envelope(wrapped, envelope, error)) return false;
+    std::array<std::uint8_t, 32> key{};
+    if (!derive_subkey(room_key, kFileInfo, key)) return false;
+    std::vector<std::uint8_t> raw;
+    bool authentication_failed = false;
+    const bool ok = decrypt_gcm(key, envelope, raw, authentication_failed) && raw.size() == file_key.size();
+    mbedtls_platform_zeroize(key.data(), key.size());
+    if (ok) std::copy(raw.begin(), raw.end(), file_key.begin());
+    clear_vector(raw);
+    return ok;
+}
+
+bool Esp32AoratonCryptoV2::wrap_file_key(const std::array<std::uint8_t, 32>& file_key,
+                                         const AoratonRoomKey& room_key, std::string& wrapped) {
+    wrapped.clear();
+    std::array<std::uint8_t, 32> key{};
+    std::array<std::uint8_t, kAoratonGcmIvBytes> iv{};
+    if (!room_key.is_present() || !derive_subkey(room_key, kFileInfo, key)) return false;
+    esp_fill_random(iv.data(), iv.size());
+    std::vector<std::uint8_t> encrypted;
+    const bool ok =
+        encrypt_gcm(key, iv.data(), std::string(file_key.begin(), file_key.end()), encrypted);
+    mbedtls_platform_zeroize(key.data(), key.size());
+    if (ok) wrapped = aoraton_serialize_v2_envelope(iv.data(), encrypted);
+    clear_vector(encrypted);
+    return ok;
+}
+
+bool Esp32AoratonCryptoV2::open_file(const std::array<std::uint8_t, 32>& file_key, const std::string& iv,
+                                     const std::uint8_t* data, std::size_t size,
+                                     std::vector<std::uint8_t>& plaintext) {
+    plaintext.clear();
+    std::vector<std::uint8_t> nonce;
+    if (data == nullptr || size < kAoratonGcmTagBytes || !aoraton_base64_decode(iv, nonce) ||
+        nonce.size() != kAoratonGcmIvBytes)
+        return false;
+    const std::size_t length = size - kAoratonGcmTagBytes;
+    if (!heap_has_room(length)) return false;
+    plaintext.resize(length);
+    mbedtls_gcm_context gcm;
+    mbedtls_gcm_init(&gcm);
+    const bool ok = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, file_key.data(), 256) == 0 &&
+                    mbedtls_gcm_auth_decrypt(&gcm, length, nonce.data(), nonce.size(), nullptr, 0, data + length,
+                                             kAoratonGcmTagBytes, data, plaintext.data()) == 0;
+    mbedtls_gcm_free(&gcm);
+    if (!ok) clear_vector(plaintext);
+    return ok;
+}
+
+bool Esp32AoratonCryptoV2::seal_file(const std::uint8_t* data, std::size_t size,
+                                     std::array<std::uint8_t, 32>& file_key, std::string& iv,
+                                     std::vector<std::uint8_t>& sealed) {
+    sealed.clear();
+    iv.clear();
+    if ((data == nullptr && size != 0) || !heap_has_room(size + kAoratonGcmTagBytes)) return false;
+    std::array<std::uint8_t, kAoratonGcmIvBytes> nonce{};
+    esp_fill_random(file_key.data(), file_key.size());
+    esp_fill_random(nonce.data(), nonce.size());
+    sealed.resize(size + kAoratonGcmTagBytes);
+    mbedtls_gcm_context gcm;
+    mbedtls_gcm_init(&gcm);
+    const bool ok = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, file_key.data(), 256) == 0 &&
+                    mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, size, nonce.data(), nonce.size(), nullptr,
+                                              0, data, sealed.data(), kAoratonGcmTagBytes,
+                                              sealed.data() + size) == 0;
+    mbedtls_gcm_free(&gcm);
+    if (!ok) {
+        clear_vector(sealed);
+        mbedtls_platform_zeroize(file_key.data(), file_key.size());
+        return false;
+    }
+    iv = aoraton_base64_encode(nonce.data(), nonce.size());
     return true;
 }
 

@@ -29,6 +29,7 @@ The Aoraton source audit was read-only. AURA did not copy GPL implementation or 
 - **Never copied from a browser:** AURA performs its own sign-in.
 - **Storage on the PC:**
   - The refresh token and room keys are kept only in the current-user DPAPI vault (`%LOCALAPPDATA%\AURA\aoraton-v11.dpapi`).
+  - Beside it, `aoraton-cache` keeps the encrypted attachments the simulator has fetched, as the device keeps them on its card (below).
   - The access token stays in memory.
   - The vault passphrase and invite links are wiped right after use.
   - Invite links come from the PC clipboard, never through the control-panel event log.
@@ -123,3 +124,25 @@ See [ADR 0009](ADR/0009-device-direct-cloud-assistant.md). In short:
 - no response echoes them, and no log, screen or file holds them;
 - the audio and text of a question go to Groq and Azure;
 - if a device is lost, revoke both keys.
+
+## The device's aoraton.com account (2026-11-06)
+
+See [ADR 0010](ADR/0010-device-aoraton-account.md).
+
+- **Sign-in.** The device creates its own PKCE verifier, session and refresh token. The owner's PC, over File transfer's code-protected session, only:
+  - sends the project's public URL and anon key;
+  - opens Google's page;
+  - hands the one-time code back. The code is useless without the device's verifier.
+- **Secrets at rest.** The refresh token and the room keys live in encrypted NVS (namespace `aura_aoraton`) as one bounded record. The access token stays in memory. Αποσύνδεση wipes the record.
+- **Room keys.** The vault passphrase is typed on the device and never crosses the network. An invite link from the PC (`--invite`) carries one room's key over the local network in plain HTTP: use a trusted Wi-Fi.
+- **Files.**
+  - AURA fetches attachments only from the configured project's public `attachments` bucket, at most 4 MiB each, and opens them with the room's key.
+  - Voice messages it sends are sealed the same way the web client seals files: their own AES-256-GCM key, wrapped with the room key.
+  - Nothing about a file (name, contents or key) is logged.
+- **The microSD card.**
+  - The device keeps the attachments it has fetched in `/sdcard/aura/.cache/aoraton`. They are kept exactly as the public bucket serves them to anyone: AES-256-GCM ciphertext.
+  - No key, thumbnail or decrypted byte is written. Each file is named by the SHA-256 of its address.
+  - At most 128 MiB, the least recently used file out first. A copy that no longer opens is dropped and fetched again.
+  - Αποσύνδεση empties the cache.
+  - The card does show how many files were opened, and their sizes.
+- **Logs.** The PC helper prints no code, token, key, PIN or invite. On the device, the serial log carries the crypto self-test result and realtime status codes only.

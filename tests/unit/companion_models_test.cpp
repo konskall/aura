@@ -750,6 +750,12 @@ void ota_tests() {
     expect(!parse_update_manifest("{\"version\":\"13.1.0\",\"url\":\"https://x/a.bin\",\"size\":99999999,\"sha256\":\"" +
                                   hash + "\",\"signature\":\"" + signature + "\"}", verifier, &error) &&
            error == "MANIFEST_BAD_SIZE", "oversized images are refused");
+    expect(parse_update_manifest("{\"version\":\"13.1.0\",\"url\":\"https://x/a.bin\",\"size\":7340032,\"sha256\":\"" +
+                                 hash + "\",\"signature\":\"" + signature + "\"}", verifier, &error).has_value(),
+           "an image that fills one 7 MB app slot is accepted");
+    expect(!parse_update_manifest("{\"version\":\"13.1.0\",\"url\":\"https://x/a.bin\",\"size\":7340033,\"sha256\":\"" +
+                                  hash + "\",\"signature\":\"" + signature + "\"}", verifier, &error) &&
+           error == "MANIFEST_BAD_SIZE", "one byte more than the slot is refused");
     const std::string unsigned_manifest = "{\"version\":\"13.1.0\",\"url\":\"https://x/a.bin\",\"size\":1,\"sha256\":\"" +
                                           hash + "\"}";
     expect(!parse_update_manifest(unsigned_manifest, verifier, &error) && error == "MANIFEST_UNSIGNED",
@@ -1087,6 +1093,13 @@ void power_tests() {
            "a lit screen keeps the processor at full speed");
     expect(!needs_full_speed(DisplayMode::AlwaysOn) && !needs_full_speed(DisplayMode::Off),
            "a dark screen lets the processor slow down");
+    // Hybrid message sync (the owner's choice, 2026-11-06).
+    expect(realtime_sync_allowed(DisplayMode::Active, false) && realtime_sync_allowed(DisplayMode::Dimmed, false),
+           "a lit screen keeps realtime messages on battery");
+    expect(!realtime_sync_allowed(DisplayMode::AlwaysOn, false) && !realtime_sync_allowed(DisplayMode::Off, false),
+           "a dark screen on battery falls back to the five-minute check");
+    expect(realtime_sync_allowed(DisplayMode::Off, true) && realtime_sync_allowed(DisplayMode::AlwaysOn, true),
+           "on USB power realtime stays on");
 }
 
 int main() {

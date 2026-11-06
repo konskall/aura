@@ -78,6 +78,9 @@ struct DisplaySnapshot {
 std::uint32_t host_loop_interval_ms(DisplayMode mode) noexcept;
 // Whether the processor stays at full speed: while the screen is lit.
 bool needs_full_speed(DisplayMode mode) noexcept;
+// Whether messages may keep a realtime connection: while the screen is lit,
+// or on external power. Otherwise the device checks every five minutes.
+bool realtime_sync_allowed(DisplayMode mode, bool external_power) noexcept;
 
 // Screen power: active -> dimmed -> always-on clock (or off). Touch, the
 // button and a raise wake it; face-down turns it off and silences the device.

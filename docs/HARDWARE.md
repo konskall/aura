@@ -1,6 +1,6 @@
 # Hardware target and verified board profile
 
-Target: Waveshare ESP32-S3-Touch-AMOLED-2.16, battery-included option (nominal 3.7 V / 1000 mAh), optional FAT32 microSD.
+Target: Waveshare ESP32-S3-Touch-AMOLED-2.16, battery-included option (nominal 3.7 V / 1000 mAh), with a FAT32 microSD card. The card (`/sdcard/aura`) holds photos, notes and voice notes, file transfers and the cache of Aoraton's encrypted attachments. Without one the device still runs: notes and alarms stay in memory and nothing is cached.
 
 Verified from the current official Waveshare documentation on 2026-10-17:
 
@@ -17,6 +17,16 @@ Verified from the current official Waveshare documentation on 2026-10-17:
     - nothing else: no rail, charger or power-key writes.
 - ES7210 microphone ADC and ES8311 playback codec/amplifier path. A physical speaker is not assumed.
 - TF slot, native USB-C, 2.4 GHz Wi-Fi, Bluetooth 5 LE. Bluetooth Classic A2DP/HFP is not promised.
+
+## Flash layout (16 MB, `firmware/partitions.csv`)
+
+Since 2026-11-06, the owner's choice:
+
+- **Two app slots of 7 MB** (`ota_0` at `0x20000`, `ota_1` at `0x720000`) for over-the-air updates. An update may fill one slot and no more (`OtaUpdateModel::kMaxImageBytes`).
+- **`storage`**: 1.8 MB of littlefs at `0xE20000`. Nothing uses it today, because everything the owner keeps lives on the microSD card; it is a reserve.
+- **NVS** (encrypted), its keys, the OTA data and a 64 KB core dump.
+
+The production table (`partitions.production.csv`) moves only the small partitions for the signed bootloader. The app slots stay where they are. A new layout needs a full flash over USB, because an update cannot change it. `aura_firmware_config_tests` checks both tables.
 
 ## Central board pins
 

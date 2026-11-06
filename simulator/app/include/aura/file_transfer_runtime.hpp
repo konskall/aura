@@ -27,8 +27,10 @@ private:
 };
 class FileTransferRuntime {
 public:
+    // `aoraton` serves POST /api/aoraton/* (the device's PC-assisted sign-in);
+    // the simulator signs in by itself, so only the helper's test passes one.
     FileTransferRuntime(const std::string& root, bool deterministic, std::string bind_address = {},
-                        std::uint16_t port = 0);
+                        std::uint16_t port = 0, IAoratonLinkEndpoint* aoraton = nullptr);
     ~FileTransferRuntime();
     bool start();
     void stop();
@@ -43,6 +45,7 @@ private:
     bool deterministic_{false}, has_root_{false};
     std::string bind_address_;
     std::uint16_t port_{0};
+    IAoratonLinkEndpoint* aoraton_{nullptr};
     std::atomic<bool> stopping_{false};
     std::thread thread_;
 };

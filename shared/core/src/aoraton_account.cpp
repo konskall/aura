@@ -176,6 +176,23 @@ std::string aoraton_authorize_url(const AoratonAccountConfig& config, const std:
            "&code_challenge_method=s256";
 }
 
+std::string aoraton_sha256_hex(const std::string& text, IAoratonAccountCrypto& crypto) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::array<std::uint8_t, 32> digest{};
+    if (text.empty() || !crypto.sha256(reinterpret_cast<const std::uint8_t*>(text.data()), text.size(), digest))
+        return {};
+    std::string hex;
+    for (const auto byte : digest) {
+        hex.push_back(kHex[byte >> 4]);
+        hex.push_back(kHex[byte & 15]);
+    }
+    return hex;
+}
+
+std::string aoraton_storage_folder(const std::string& room_key, IAoratonAccountCrypto& crypto) {
+    return aoraton_sha256_hex(room_key, crypto);
+}
+
 std::string aoraton_new_client_message_id(IAoratonAccountCrypto& crypto) {
     static constexpr char kHex[] = "0123456789abcdef";
     std::array<std::uint8_t, 16> bytes{};
@@ -209,8 +226,31 @@ std::string aoraton_rooms_by_keys_path(const std::vector<std::string>& room_keys
 }
 
 std::string aoraton_messages_path(const std::string& room_key) {
-    return "/rest/v1/messages?select=id,room_key,uid,username,text,type,created_at,client_msg_id&room_key=eq." +
+    return "/rest/v1/messages?select=id,room_key,uid,username,text,type,created_at,client_msg_id,attachment"
+           "&room_key=eq." +
            aoraton_url_encode(room_key) + "&order=created_at.desc,id.desc&limit=50";
+}
+
+bool aoraton_attachment_url_valid(const std::string& base_url, const std::string& url) {
+    const std::string prefix = trim_base(base_url) + "/storage/v1/object/public/attachments/";
+    if (base_url.rfind("https://", 0) != 0 || url.size() > 512 || url.compare(0, prefix.size(), prefix) != 0)
+        return false;
+    const std::string rest = url.substr(prefix.size());
+    if (rest.size() < 64 + 1 + 5 || rest[64] != '/') return false;
+    for (std::size_t index = 0; index < 64; ++index) {
+        const char c = rest[index];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    const std::string name = rest.substr(65);
+    if (name.size() > 80 || name.size() < 5 || name.compare(name.size() - 4, 4, ".enc") != 0 ||
+        name.find("..") != std::string::npos || name.front() == '.')
+        return false;
+    for (const char c : name) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' ||
+              c == '-' || c == '_'))
+            return false;
+    }
+    return true;
 }
 
 std::string aoraton_inco_history_path(const std::string& room_key) {
@@ -239,6 +279,21 @@ std::string aoraton_insert_body(const std::string& room_key,
     return "{\"room_key\":\"" + json_escape(room_key) + "\",\"uid\":\"" + json_escape(user_id) +
            "\",\"username\":\"" + json_escape(username) + "\",\"avatar_url\":null,\"text\":\"" + json_escape(wire) +
            "\",\"type\":\"text\",\"client_msg_id\":\"" + json_escape(client_message_id) + "\",\"reactions\":{}}";
+}
+
+std::string aoraton_insert_attachment_body(const std::string& room_key,
+                                           const std::string& user_id,
+                                           const std::string& username,
+                                           const std::string& client_message_id,
+                                           const AoratonRemoteAttachment& attachment) {
+    return "{\"room_key\":\"" + json_escape(room_key) + "\",\"uid\":\"" + json_escape(user_id) +
+           "\",\"username\":\"" + json_escape(username) +
+           "\",\"avatar_url\":null,\"text\":\"\",\"type\":\"text\",\"attachment\":{\"url\":\"" +
+           json_escape(attachment.url) + "\",\"name\":\"" + json_escape(attachment.name) + "\",\"type\":\"" +
+           json_escape(attachment.type) + "\",\"size\":" + std::to_string(attachment.size) +
+           ",\"enc\":true,\"iv\":\"" + json_escape(attachment.iv) + "\",\"wrappedKey\":\"" +
+           json_escape(attachment.wrapped_key) + "\"},\"reactions\":{},\"location\":null,\"client_msg_id\":\"" +
+           json_escape(client_message_id) + "\",\"reply_to\":null}";
 }
 
 bool aoraton_parse_session(std::string_view json, std::int64_t now_unix, AoratonSession& session) {
@@ -358,6 +413,27 @@ bool aoraton_parse_messages(std::string_view json, std::vector<AoratonRemoteMess
                     message.poll_options.push_back(option.string_at("text"));
                 }
             }
+        }
+        if (const JsonValue* file = row.find("attachment"); file && file->type() == JsonType::Object) {
+            auto& attachment = message.attachment;
+            attachment.url = file->string_at("url");
+            attachment.name = utf8_truncate(file->string_at("name"), 120);
+            attachment.type = utf8_truncate(file->string_at("type"), 80);
+            if (const JsonValue* size = file->find("size")) {
+                const auto value = size->as_int(0);
+                attachment.size = value > 0 ? static_cast<std::uint64_t>(value) : 0U;
+            }
+            if (const JsonValue* encrypted = file->find("enc")) attachment.encrypted = encrypted->as_bool(false);
+            attachment.iv = file->string_at("iv");
+            attachment.wrapped_key = file->string_at("wrappedKey");
+            const auto dimension = [&](const char* key) -> std::uint32_t {
+                const JsonValue* value = file->find(key);
+                const auto number = value ? value->as_int(0) : 0;
+                return number > 0 && number < 100000 ? static_cast<std::uint32_t>(number) : 0U;
+            };
+            attachment.width = dimension("width");
+            attachment.height = dimension("height");
+            message.has_attachment = !attachment.url.empty();
         }
         parsed.push_back(std::move(message));
     }

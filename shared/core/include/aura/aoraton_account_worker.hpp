@@ -1,12 +1,16 @@
 #pragma once
 
 #include "aura/aoraton_account.hpp"
+#include "aura/aoraton_attachment_cache.hpp"
 #include "aura/aoraton_crypto.hpp"
 #include "aura/aoraton_inco.hpp"
 #include "aura/aoraton_real.hpp"
 #include "aura/aoraton_realtime.hpp"
+#include "aura/voice_decoder.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <string>
 #include <utility>
@@ -22,6 +26,9 @@ struct AoratonHttpRequest {
     // How long to wait for the answer; 0 keeps the client's default. inco's
     // edge function may retry Gemini for up to a minute.
     std::uint32_t timeout_ms{0};
+    // The largest answer the request may bring (attachments); 0 keeps the
+    // client's default for JSON.
+    std::size_t max_response_bytes{0};
 };
 
 // status 0 means the request never got an HTTP answer (DNS, TLS, timeout).
@@ -81,6 +88,9 @@ public:
     static constexpr std::uint32_t kSignInSeconds = 300;
     static constexpr std::int64_t kPollIntervalMs = 10000;
     static constexpr std::int64_t kRetryIntervalMs = 30000;
+    // While saving power (screen dark on battery) realtime is off and the
+    // overview is checked at least this often, whatever the polling setting.
+    static constexpr std::int64_t kPowerSavingPollMs = 300000;
 
     AoratonAccountWorker(AoratonMailbox& mailbox,
                          AoratonAccountConfig config,
@@ -89,7 +99,9 @@ public:
                          IAoratonCryptoV2& message_crypto,
                          IAoratonSecretStore& store,
                          IAoratonSignInChannel& channel,
-                         IAoratonRealtime* realtime = nullptr);
+                         IAoratonRealtime* realtime = nullptr,
+                         IVoiceDecoder* voice_decoder = nullptr,
+                         IAoratonAttachmentCache* attachment_cache = nullptr);
     ~AoratonAccountWorker();
 
     AoratonAccountWorker(const AoratonAccountWorker&) = delete;
@@ -130,6 +142,8 @@ private:
     void connect();
     void configure_realtime();
     void realtime_status(bool active);
+    void set_power_saving(bool saving);
+    std::int64_t poll_interval_ms() const;
     void sign_out();
     bool refresh_rooms();
     bool fetch_history(const std::string& room_key);
@@ -162,7 +176,10 @@ private:
     IAoratonSecretStore& store_;
     IAoratonSignInChannel& channel_;
     IAoratonRealtime* realtime_{nullptr};
+    IVoiceDecoder* voice_decoder_{nullptr};
+    IAoratonAttachmentCache* attachment_cache_{nullptr};  // the microSD card, when there is one
     bool realtime_active_{false};
+    bool power_saving_{false};
     AoratonSyncSettings sync_settings_;
     bool sync_requested_{false};
     std::int64_t next_auth_retry_ms_{0};
@@ -184,6 +201,24 @@ private:
     std::vector<PendingSend> pending_sends_;
     bool inco_busy_{false};
     std::string inco_quota_day_;  // the local day inco ran out of questions
+
+    // Files of the messages delivered so far (the newest 100), and the
+    // photos whose thumbnails are still to fetch, one per step.
+    struct AttachmentRef {
+        std::string room_key;
+        AoratonRemoteAttachment file;
+    };
+    bool build_message(const std::string& room_key, const AoratonRemoteMessage& row, bool mine,
+                       AoratonMessage& message);
+    void queue_thumbnails(const std::vector<AoratonMessage>& messages);
+    void load_next_thumbnail();
+    void open_attachment(const AoratonCommand& command);
+    void send_voice(AoratonCommand& command);
+    bool fetch_attachment(const AttachmentRef& ref, std::vector<std::uint8_t>& plaintext, std::string& error);
+    std::map<std::string, AttachmentRef> attachments_;
+    std::deque<std::string> attachment_order_;
+    std::deque<std::string> thumbnail_queue_;
+    std::vector<std::string> thumbnails_fetched_;
 };
 
 }  // namespace aura

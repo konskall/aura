@@ -57,7 +57,7 @@ enum class UpdateBlock { None, NoUpdate, Busy, Offline, LowBattery };
 // confirmation before anything is written.
 class OtaUpdateModel {
 public:
-    static constexpr std::uint32_t kMaxImageBytes = 0x680000;  // one OTA slot
+    static constexpr std::uint32_t kMaxImageBytes = 0x700000;  // one OTA slot (firmware/partitions.csv)
     static constexpr int kMinBatteryPercent = 30;
 
     explicit OtaUpdateModel(std::string current_version = "0.0.0");

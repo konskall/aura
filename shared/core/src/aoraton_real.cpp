@@ -1,4 +1,5 @@
 #include "aura/aoraton_real.hpp"
+#include "aura/voice_container.hpp"
 
 #include "aura/aoraton_crypto.hpp"
 
@@ -11,6 +12,10 @@ namespace {
 constexpr std::size_t kMaxRooms = 64;
 constexpr std::size_t kMaxMessages = 100;
 constexpr std::size_t kMaxNotifications = 8;
+// About 90 KiB each at most: twelve stay within ~1.1 MiB of PSRAM.
+constexpr std::size_t kMaxThumbnails = 12;
+// As many as the worker loads for a room it delivers.
+constexpr std::size_t kThumbnailsPerOpen = 6;
 constexpr std::size_t kMaxRoomIdBytes = 128;
 constexpr std::size_t kMaxDisplayNameBytes = 160;
 
@@ -49,7 +54,9 @@ AoratonCommand::AoratonCommand(AoratonCommand&& other) noexcept
     : type(other.type),
       room_id(std::move(other.room_id)),
       client_message_id(std::move(other.client_message_id)),
-      plaintext(std::move(other.plaintext)), sync_settings(other.sync_settings) {
+      plaintext(std::move(other.plaintext)), sync_settings(other.sync_settings), power_saving(other.power_saving),
+      message_id(std::move(other.message_id)), bytes(std::move(other.bytes)),
+      message_ids(std::move(other.message_ids)) {
     other.clear_plaintext();
 }
 
@@ -61,11 +68,19 @@ AoratonCommand& AoratonCommand::operator=(AoratonCommand&& other) noexcept {
     client_message_id = std::move(other.client_message_id);
     plaintext = std::move(other.plaintext);
     sync_settings = other.sync_settings;
+    power_saving = other.power_saving;
+    message_id = std::move(other.message_id);
+    bytes = std::move(other.bytes);
+    message_ids = std::move(other.message_ids);
     other.clear_plaintext();
     return *this;
 }
 
-void AoratonCommand::clear_plaintext() noexcept { clear_string(plaintext); }
+void AoratonCommand::clear_plaintext() noexcept {
+    clear_string(plaintext);
+    std::fill(bytes.begin(), bytes.end(), std::uint8_t{0});
+    bytes.clear();
+}
 
 bool AoratonMailbox::push_command(AoratonCommand command) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -142,6 +157,45 @@ bool RealAoratonService::set_sync_settings(const AoratonSyncSettings& settings) 
     return true;
 }
 
+bool RealAoratonService::set_power_saving(bool saving) {
+    if (saving == power_saving_) return true;
+    AoratonCommand command;
+    command.type = AoratonCommandType::PowerSaving;
+    command.power_saving = saving;
+    if (!enqueue(std::move(command))) return false;
+    power_saving_ = saving;
+    return true;
+}
+
+bool RealAoratonService::open_attachment(const std::string& message_id) {
+    const auto found = std::find_if(snapshot_.messages.begin(), snapshot_.messages.end(),
+                                    [&](const AoratonMessage& message) { return message.id == message_id; });
+    if (found == snapshot_.messages.end() ||
+        (found->attachment != AoratonAttachmentKind::Image && found->attachment != AoratonAttachmentKind::Voice))
+        return false;
+    AoratonCommand command;
+    command.type = AoratonCommandType::OpenAttachment;
+    command.room_id = found->room_id;
+    command.message_id = message_id;
+    if (!enqueue(std::move(command))) return false;
+    snapshot_.opened_attachment_id = message_id;
+    snapshot_.opened_image.reset();
+    snapshot_.voice_clip.reset();
+    snapshot_.attachment_error.clear();
+    snapshot_.opening_attachment = true;
+    touch();
+    return true;
+}
+
+void RealAoratonService::close_attachment() {
+    snapshot_.opened_attachment_id.clear();
+    snapshot_.opened_image.reset();
+    snapshot_.voice_clip.reset();
+    snapshot_.attachment_error.clear();
+    snapshot_.opening_attachment = false;
+    touch();
+}
+
 AoratonRoom* RealAoratonService::find_room(const std::string& room_id) {
     const auto found = std::find_if(snapshot_.rooms.begin(), snapshot_.rooms.end(),
                                     [&](const AoratonRoom& room) { return room.id == room_id; });
@@ -158,6 +212,9 @@ AoratonMessage* RealAoratonService::find_outgoing(const std::string& client_mess
 
 void RealAoratonService::clear_pending() noexcept {
     clear_string(snapshot_.pending_text);
+    std::fill(pending_voice_.begin(), pending_voice_.end(), std::uint8_t{0});
+    pending_voice_.clear();
+    snapshot_.pending_voice_ms = 0;
     snapshot_.pending_room_id.clear();
     snapshot_.awaiting_confirmation = false;
 }
@@ -166,6 +223,7 @@ void RealAoratonService::clear_session_data() noexcept {
     clear_pending();
     for (auto& message : snapshot_.messages) clear_string(message.local_display_text);
     snapshot_.messages.clear();
+    dropped_thumbnails_.clear();
     snapshot_.rooms.clear();
     snapshot_.notifications.clear();
     snapshot_.selected_room_id.clear();
@@ -234,7 +292,19 @@ bool RealAoratonService::select_room(const std::string& room_id) {
     AoratonCommand fetch;
     fetch.type = AoratonCommandType::FetchRecentMessages;
     fetch.room_id = room_id;
+    for (auto message = snapshot_.messages.rbegin();
+         message != snapshot_.messages.rend() && fetch.message_ids.size() < kThumbnailsPerOpen; ++message) {
+        if (message->room_id == room_id &&
+            std::find(dropped_thumbnails_.begin(), dropped_thumbnails_.end(), message->id) != dropped_thumbnails_.end())
+            fetch.message_ids.push_back(message->id);
+    }
+    const std::vector<std::string> asked = fetch.message_ids;
     if (!enqueue(std::move(fetch))) return false;
+    dropped_thumbnails_.erase(std::remove_if(dropped_thumbnails_.begin(), dropped_thumbnails_.end(),
+                                             [&](const std::string& id) {
+                                                 return std::find(asked.begin(), asked.end(), id) != asked.end();
+                                             }),
+                              dropped_thumbnails_.end());
     AoratonCommand read;
     read.type = AoratonCommandType::MarkRoomRead;
     read.room_id = room_id;
@@ -285,6 +355,34 @@ bool RealAoratonService::prepare_send(const std::string& room_id, const std::str
     return false;
 }
 
+// AURA's own recording only: mono 16-bit WAV of up to a minute.
+bool RealAoratonService::prepare_voice(const std::string& room_id, std::vector<std::uint8_t> wav) {
+    VoiceTrack track;
+    const AoratonRoom* room = find_room(room_id);
+    if (snapshot_.awaiting_confirmation) {
+        snapshot_.last_error = "CONFIRMATION_ALREADY_PENDING";
+    } else if (snapshot_.pairing != AoratonPairingState::Paired) {
+        snapshot_.last_error = "PAIRING_REQUIRED";
+    } else if (!room || !room->authorized || room->expired || !room->key_available) {
+        snapshot_.last_error = "ROOM_ACCESS_CHANGED";
+    } else if (!voice_demux(wav.data(), wav.size(), track) || track.codec != VoiceCodec::Pcm16 ||
+               track.channels != 1 || track.duration_ms == 0 || track.duration_ms > 60000) {
+        snapshot_.last_error = "VOICE_INVALID";
+    } else {
+        pending_voice_ = std::move(wav);
+        snapshot_.pending_room_id = room_id;
+        snapshot_.pending_text.clear();
+        snapshot_.pending_voice_ms = track.duration_ms;
+        snapshot_.awaiting_confirmation = true;
+        snapshot_.last_error.clear();
+        touch();
+        return true;
+    }
+    std::fill(wav.begin(), wav.end(), std::uint8_t{0});
+    touch();
+    return false;
+}
+
 bool RealAoratonService::confirm_send() {
     if (!snapshot_.awaiting_confirmation) {
         snapshot_.last_error = "NO_PENDING_MESSAGE";
@@ -308,11 +406,13 @@ bool RealAoratonService::confirm_send() {
         touch();
         return false;
     }
+    const bool voice = !pending_voice_.empty();
     AoratonCommand command;
-    command.type = AoratonCommandType::SendText;
+    command.type = voice ? AoratonCommandType::SendVoice : AoratonCommandType::SendText;
     command.room_id = snapshot_.pending_room_id;
     command.client_message_id = client_id;
     command.plaintext = snapshot_.pending_text;
+    if (voice) command.bytes = pending_voice_;
     if (!enqueue(std::move(command))) return false;
 
     AoratonMessage message;
@@ -323,6 +423,10 @@ bool RealAoratonService::confirm_send() {
     message.local_display_text = snapshot_.pending_text;
     message.direction = AoratonDirection::Outgoing;
     message.delivery = AoratonDelivery::Queued;
+    if (voice) {
+        message.attachment = AoratonAttachmentKind::Voice;
+        message.attachment_name = "voice.wav";
+    }
     snapshot_.messages.push_back(std::move(message));
     if (snapshot_.messages.size() > kMaxMessages) snapshot_.messages.erase(snapshot_.messages.begin());
     room->preview = bounded_utf8(snapshot_.pending_text, 96);
@@ -409,6 +513,23 @@ void RealAoratonService::add_message(AoratonMessage message, bool notify) {
 
 void RealAoratonService::sort_messages() {
     std::stable_sort(snapshot_.messages.begin(), snapshot_.messages.end(), message_order);
+}
+
+// The oldest thumbnails outside the open room go first, then the open room's
+// oldest. A bubble without one shows the photo icon, and the photo still opens.
+void RealAoratonService::bound_thumbnails() {
+    std::size_t kept = 0;
+    for (const auto& message : snapshot_.messages) kept += message.thumbnail ? 1 : 0;
+    for (const bool open_room : {false, true}) {
+        for (auto& message : snapshot_.messages) {
+            if (kept <= kMaxThumbnails) return;
+            if (!message.thumbnail || (message.room_id == snapshot_.selected_room_id) != open_room) continue;
+            message.thumbnail.reset();
+            --kept;
+            dropped_thumbnails_.push_back(message.id);
+            if (dropped_thumbnails_.size() > kMaxMessages) dropped_thumbnails_.erase(dropped_thumbnails_.begin());
+        }
+    }
 }
 
 void RealAoratonService::process(AoratonEvent event) {
@@ -524,6 +645,31 @@ void RealAoratonService::process(AoratonEvent event) {
             snapshot_.pairing_sas.clear();
             snapshot_.pairing_seconds_remaining = 0;
             snapshot_.last_error = event.error.empty() ? "PAIRING_FAILED" : bounded_utf8(std::move(event.error), 96);
+            break;
+        case AoratonEventType::AttachmentThumbnail:
+            for (auto& message : snapshot_.messages) {
+                if (message.id == event.message_id && message.attachment == AoratonAttachmentKind::Image)
+                    message.thumbnail = event.image;
+            }
+            bound_thumbnails();
+            break;
+        case AoratonEventType::AttachmentOpened:
+            if (event.message_id == snapshot_.opened_attachment_id) {
+                snapshot_.opened_image = std::move(event.image);
+                snapshot_.opening_attachment = false;
+            }
+            break;
+        case AoratonEventType::AttachmentAudio:
+            if (event.message_id == snapshot_.opened_attachment_id) {
+                snapshot_.voice_clip = std::move(event.clip);
+                snapshot_.opening_attachment = false;
+            }
+            break;
+        case AoratonEventType::AttachmentFailed:
+            if (event.message_id == snapshot_.opened_attachment_id) {
+                snapshot_.attachment_error = bounded_utf8(std::move(event.error), 40);
+                snapshot_.opening_attachment = false;
+            }
             break;
         case AoratonEventType::KeysChanged:
             snapshot_.key_state = event.key_state;

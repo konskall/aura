@@ -50,6 +50,8 @@ struct CompanionContext {
     std::function<void()> cancel_turn;
     // Pauses/resumes continuous media while the microphone owns the room.
     std::function<void(bool)> on_voice_active;
+    // A recorded aoraton voice message (AURA's WAV), for the service's confirmation.
+    std::function<void(std::vector<std::uint8_t>)> on_voice_message;
     // Trusted, local service labels for Settings > Device status.
     std::function<std::string()> assistant_provider_name;
     std::function<bool()> web_search_available;
@@ -94,6 +96,10 @@ public:
     void deliver_reply(const std::string& raw);
     // Real microphone for the assistant; false means "use the synthetic path".
     bool begin_listening();
+    // An aoraton voice message, recorded like a note (up to 30 s).
+    bool begin_voice_message();
+    void finish_voice_message();
+    void cancel_voice_message();
     void end_listening();
     void cancel_voice();
     bool capturing() const noexcept { return job_ == VoiceJob::Assistant; }
@@ -146,7 +152,7 @@ private:
     std::uint64_t transfer_removal_revision_{0};
     bool transfer_removals_pending_{false};
     bool transfer_photos_pending_{false};
-    enum class VoiceJob { None, Assistant, Note, Translate };
+    enum class VoiceJob { None, Assistant, Note, Translate, Message };
     enum class ListenOrigin { Manual, FollowUp, BargeIn };
 
     std::int64_t now_minute() const;
