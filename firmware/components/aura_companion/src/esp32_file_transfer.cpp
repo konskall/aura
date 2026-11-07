@@ -152,6 +152,9 @@ void Esp32TransferStorage::cancel() {
     if (owned_) std::remove(kStage);
     owned_ = false;
 }
+// Google's answer to the phone sign-in carries its code in the address: the
+// shared parser allows 512 characters, and httpd_req_t::uri must hold them.
+static_assert(CONFIG_HTTPD_MAX_URI_LEN >= 512, "the phone sign-in's answer needs a 512-character URI");
 void Esp32FileTransfer::initialize() {
     TaskHandle_t task = nullptr;
     available_ = xTaskCreate(manager_entry, "aura_transfer", 6144, this, 2, &task) == pdPASS;
@@ -234,10 +237,10 @@ void Esp32FileTransfer::manage() {
         config.ctrl_port = 32778;
         config.stack_size = 16384;
         config.max_open_sockets = 2;
-        config.max_uri_handlers = 11;
+        config.max_uri_handlers = 13;
         config.max_resp_headers = 8;
         config.max_req_hdr_len = 8192;
-        config.max_uri_len = 64;
+        config.max_uri_len = 512;
         config.recv_wait_timeout = 1;
         config.send_wait_timeout = 1;
         httpd_handle_t server = nullptr;
@@ -266,6 +269,13 @@ void Esp32FileTransfer::manage() {
         if (aoraton_link_) {
             for (const char* path : {"/api/aoraton/config", "/api/aoraton/sign-in", "/api/aoraton/status",
                                      "/api/aoraton/code", "/api/aoraton/invite"}) {
+                uri.uri = path;
+                ok |= httpd_register_uri_handler(server, &uri);
+            }
+            // The phone's way (ADR 0010): the QR's page and Google's answer;
+            // the handler sees the whole address, query included.
+            uri.method = HTTP_GET;
+            for (const char* path : {"/aoraton/phone", "/aoraton/callback"}) {
                 uri.uri = path;
                 ok |= httpd_register_uri_handler(server, &uri);
             }

@@ -287,8 +287,9 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.aoraton_sign_in = "Σύνδεση με Google";
         s.aoraton_sign_in_help = "Ο λογαριασμός σου aoraton.com ανοίγει στον browser του υπολογιστή.";
         s.aoraton_sign_in_relay_help =
-            "Η συσκευή συνδέεται μέσω του υπολογιστή: το κουμπί ανοίγει τη Μεταφορά αρχείων και στον υπολογιστή "
-            "τρέχεις το aoraton-device-sign-in.";
+            "Το κουμπί δείχνει κωδικό QR: σκάναρέ τον με το κινητό στο ίδιο Wi-Fi. Ή από υπολογιστή, με το "
+            "aoraton-device-sign-in.";
+        s.aoraton_signed_in = "Συνδέθηκε στο Aoraton";
         s.aoraton_photo = "Φωτογραφία";
         s.aoraton_photo_loading = "Φόρτωση φωτογραφίας…";
         s.aoraton_attachment_failed = "Δεν άνοιξε. Δοκίμασε ξανά αργότερα.";
@@ -716,8 +717,9 @@ const CompanionStrings& companion_en_us() noexcept {
         s.aoraton_sign_in = "Sign in with Google";
         s.aoraton_sign_in_help = "Your aoraton.com account opens in the PC's browser.";
         s.aoraton_sign_in_relay_help =
-            "The device signs in through your PC: the button opens File transfer, then run "
-            "aoraton-device-sign-in on the PC.";
+            "The button shows a QR code: scan it with your phone on the same Wi-Fi. Or from a PC, with "
+            "aoraton-device-sign-in.";
+        s.aoraton_signed_in = "Signed in to Aoraton";
         s.aoraton_photo = "Photo";
         s.aoraton_photo_loading = "Loading the photo…";
         s.aoraton_attachment_failed = "It did not open. Try again later.";

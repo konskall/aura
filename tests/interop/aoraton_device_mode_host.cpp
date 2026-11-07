@@ -2,7 +2,8 @@
 // real transfer server, AoratonDeviceMode and the account worker, against the
 // local fake Supabase (run_aoraton_device_mode_test.mjs sets the environment).
 // It prints `READY <address> <code>`, then CONFIGURED, SIGNED_IN and ROOMS <n>
-// as they happen; never a token, a key or a message.
+// as they happen; never a token, a key or a message. With --phone the owner
+// has tapped sign-in on the device: it also prints `PHONE <the QR's address>`.
 #include "aura/aoraton_account.hpp"
 #include "aura/aoraton_device_mode.hpp"
 #include "aura/aoraton_real.hpp"
@@ -15,9 +16,10 @@
 #include <string>
 #include <thread>
 
-int main() {
+int main(int argc, char** argv) {
     using namespace aura;
     using namespace aura::simulator;
+    const bool phone = argc > 1 && std::string(argv[1]) == "--phone";
 
     // The switch run.bat device sets, read the way the simulator reads it.
     std::cout << "MODE " << (aoraton_device_sign_in_requested() ? "device" : "usual") << std::endl;
@@ -51,11 +53,18 @@ int main() {
     bool configured = false;
     bool signed_in = false;
     bool rooms = false;
+    bool shown = false;
+    if (phone) device.want_phone_sign_in();
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
     while (std::chrono::steady_clock::now() < deadline) {
         transfer.poll();
         service.tick(20);
         device.pump(service);
+        const auto qr = device.pump_phone(transfer.session().snapshot());
+        if (!shown && !qr.empty()) {
+            shown = true;
+            std::cout << "PHONE " << qr << std::endl;
+        }
         const auto& snapshot = service.snapshot();
         if (!configured && device.account_ready()) {
             configured = true;

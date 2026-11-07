@@ -15,6 +15,8 @@
 
 namespace aura {
 
+struct TransferSnapshot;
+
 // The project's public values, the same ones aoraton.com ships to every
 // browser (config/aoraton.local.json on the PC), and the owner's inco opt-in.
 struct AoratonLinkConfig {
@@ -170,5 +172,15 @@ private:
 // an invite the PC sent while the account (re)starts waits for it; the
 // account's state then goes back to the PC.
 void aoraton_link_pump(AoratonDeviceLink& link, IAoratonService& service, bool configured, bool account_ready);
+
+// The phone's way, on the UI thread after each File transfer snapshot. Once
+// the owner asked (`wanted`: the Aoraton screen's sign-in button) and the
+// transfer server is ready, starts the phone sign-in with a secret from
+// `random` (false: no randomness, so no sign-in), once; when the server
+// stops, ends it. Returns what the QR shows:
+// phone_url(), empty when there is no phone sign-in (an unconfigured device,
+// a server only the PC reaches, the PC's own sign-in, the account done).
+std::string aoraton_phone_pump(AoratonDeviceLink& link, const TransferSnapshot& transfer, bool& wanted,
+                               const std::function<bool(std::array<std::uint8_t, 16>&)>& random);
 
 }  // namespace aura

@@ -12,6 +12,7 @@
 #include "aura/companion_strings.hpp"
 #include "aura/voice_turn.hpp"
 #include "aura/runtime_metrics.hpp"
+#include "aoraton_build_config.h"
 #include "aura_board_chips.hpp"
 #include "aura_board_profile.h"
 #include "aura_display.h"
@@ -28,6 +29,7 @@
 #include "esp_log.h"
 #include "esp_pm.h"
 #include "esp_pthread.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -35,6 +37,7 @@
 #include "nvs_flash.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <ctime>
@@ -135,6 +138,15 @@ void start_frame_worker() {
     esp_pthread_set_cfg(&defaults);
 }
 
+// The project's public values from config/aoraton.local.json at build time
+// (firmware/main/CMakeLists.txt); false when the build had none.
+bool built_in_aoraton_config(aura::AoratonLinkConfig& config) {
+    config.base_url = AURA_AORATON_BUILT_IN_URL;
+    config.anon_key = AURA_AORATON_BUILT_IN_ANON_KEY;
+    config.inco_enabled = AURA_AORATON_BUILT_IN_INCO;
+    return aura::aoraton_link_config_valid(config);
+}
+
 }
 
 extern "C" void app_main(void) {
@@ -206,6 +218,8 @@ extern "C" void app_main(void) {
         return true;
     });
     static std::unique_ptr<aura::firmware::Esp32AoratonAccount> aoraton_account;
+    // The owner tapped sign-in: File transfer, once ready, shows the phone's QR.
+    static bool aoraton_phone_wanted = false;
     static aura::WeatherModel weather;
     static aura::firmware::Esp32AudioBackend audio;
     static aura::firmware::Esp32WeatherBackend weather_backend;
@@ -375,6 +389,7 @@ extern "C" void app_main(void) {
         };
         companion.install(callbacks, &aoraton);
         callbacks.on_aoraton_pair_cancel = [] { aoraton.cancel_pairing(); };
+        callbacks.on_aoraton_phone_sign_in = [] { aoraton_phone_wanted = true; };
         callbacks.on_aoraton_unpair = [] { aoraton.unpair(); };
         callbacks.on_aoraton_unlock = [](const std::string& passphrase) { return aoraton.unlock_keys(passphrase); };
         callbacks.on_aoraton_open_attachment = [](const std::string& id) { return aoraton.open_attachment(id); };
@@ -513,17 +528,19 @@ extern "C" void app_main(void) {
         bsp_display_unlock();
     }
 
-    // (Re)starts the account with the project settings the PC sent last.
+    // (Re)starts the account with the project settings the PC sent last or,
+    // without them, the ones built in from config/aoraton.local.json, so the
+    // owner's phone alone can sign it in (ADR 0010).
     const auto start_aoraton = [] {
         aoraton_account.reset();
         aura::AoratonLinkConfig config;
-        if (!aura::firmware::esp32_aoraton_load_config(config)) return;
+        if (!aura::firmware::esp32_aoraton_load_config(config) && !built_in_aoraton_config(config)) return;
         aoraton_configured = true;
         auto account = std::make_unique<aura::firmware::Esp32AoratonAccount>(aoraton_mailbox, config, aoraton_link);
         if (account->start()) aoraton_account = std::move(account);
     };
     start_aoraton();
-    ESP_LOGI(kTag, "Aoraton: %s", aoraton_account ? "account ready" : "waiting for the PC's settings");
+    ESP_LOGI(kTag, "Aoraton: %s", aoraton_account ? "account ready" : "waiting for the project's settings");
     bool external_power = false;
     std::string aoraton_city;
     std::shared_ptr<const aura::PcmClip> voice_message_playing;
@@ -551,6 +568,13 @@ extern "C" void app_main(void) {
             // hybrid sync (realtime while lit or on USB, a 5-minute check
             // otherwise; the owner's choice).
             aura::aoraton_link_pump(aoraton_link, aoraton, aoraton_configured, aoraton_account != nullptr);
+            // The phone's way: File transfer shows the QR while a phone sign-in is on.
+            ui.set_aoraton_phone_sign_in(aura::aoraton_phone_pump(
+                aoraton_link, companion.transfer_snapshot(), aoraton_phone_wanted,
+                [](std::array<std::uint8_t, 16>& secret) {
+                    esp_fill_random(secret.data(), secret.size());
+                    return true;
+                }));
             // The radio: its worker's events and a finished search; silent while
             // the microphone records.
             if (radio) {

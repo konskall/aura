@@ -121,11 +121,13 @@ $env:AURA_BRIDGE_WORKDIR = Join-Path $repo 'bridge\runtime\assistant_sandbox'
 # (public Supabase URL and anon key only). Without it the Aoraton screens show DEMO rooms.
 $aoratonConfig = Join-Path $repo 'config\aoraton.local.json'
 if ($AoratonDevice -and -not $Smoke) {
-    # Like the board: the project settings come from the PC helper, not from here.
+    # Like the board: the project's values are built in (from the same file, below,
+    # so the phone alone can sign in) unless the PC helper sends its own.
     $env:AURA_AORATON_MODE = 'live'
     $env:AURA_AORATON_SIGN_IN = 'device'
 }
-if (-not $Smoke -and -not $env:AURA_AORATON_MODE -and (Test-Path -LiteralPath $aoratonConfig)) {
+$aoratonDeviceMode = $env:AURA_AORATON_SIGN_IN -eq 'device'
+if (-not $Smoke -and ($aoratonDeviceMode -or -not $env:AURA_AORATON_MODE) -and (Test-Path -LiteralPath $aoratonConfig)) {
     $aoraton = Get-Content -LiteralPath $aoratonConfig -Raw -Encoding UTF8 | ConvertFrom-Json
     $env:AURA_AORATON_URL = $aoraton.url
     $env:AURA_AORATON_ANON_KEY = $aoraton.anon_key
@@ -166,7 +168,10 @@ try {
     if ($env:AURA_AORATON_SIGN_IN -eq 'device') {
         Write-Host 'Aoraton: device mode, signed in the way the board is:'
         Write-Host '  1. In AURA: Messages > account > Sign in with Google (it opens File transfer).'
-        Write-Host '  2. On this PC: node scripts\aoraton-device-sign-in.mjs --address <address> --code <code>'
+        Write-Host '  2. Phone on the same Wi-Fi: scan the QR File transfer shows and sign in with Google.'
+        Write-Host '     It needs http://192.168.*.*/** among the Supabase Redirect URLs (docs\ADR\0010),'
+        Write-Host '     and Windows may ask to let AURA through its firewall on private networks.'
+        Write-Host '     Or this PC: node scripts\aoraton-device-sign-in.mjs --address <address> --code <code>'
         Write-Host '     (the address and the six digits File transfer shows; add --invite "<link>" for a room).'
     } elseif ($env:AURA_AORATON_MODE -eq 'live') {
         Write-Host 'Aoraton: your aoraton.com account (Aoraton > Sign in with Google)'

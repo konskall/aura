@@ -93,7 +93,11 @@ export async function startFakeSupabase() {
       }
       state.challenge = url.searchParams.get('code_challenge');
       state.redirect = url.searchParams.get('redirect_to');
-      response.writeHead(302, { Location: `${state.redirect}?code=${AUTH_CODE}` });
+      // As GoTrue: `code` joins the redirect's own query, keys sorted.
+      const back = new URL(state.redirect);
+      back.searchParams.set('code', AUTH_CODE);
+      back.searchParams.sort();
+      response.writeHead(302, { Location: back.toString() });
       return response.end();
     }
     if (request.headers.apikey !== ANON_KEY) return json(response, 401, { message: 'no apikey' });

@@ -47,4 +47,78 @@ $('delete-confirm').onclick=async()=>{if(!pendingDelete||busy||manageBusy)return
 translate();
 </script></html>)AURA";
 }
+namespace {
+std::string attribute(std::string_view text) {
+    std::string out;
+    out.reserve(text.size() + 32);
+    for (const char ch : text) {
+        switch (ch) {
+            case '&': out += "&amp;"; break;
+            case '<': out += "&lt;"; break;
+            case '>': out += "&gt;"; break;
+            case '"': out += "&quot;"; break;
+            case '\'': out += "&#39;"; break;
+            default: out += ch; break;
+        }
+    }
+    return out;
 }
+}  // namespace
+std::string phone_sign_in_page(PhoneSignInPage page, std::string_view google_url) {
+    const char* title = "Σύνδεση στο Aoraton";
+    const char* greek = "";
+    const char* english = "";
+    switch (page) {
+        case PhoneSignInPage::Wait:
+            greek = "Η συσκευή ετοιμάζει τη σύνδεση. Σε λίγο η σελίδα συνεχίζει μόνη της στο Google.";
+            english = "The device is getting the sign-in ready. In a moment this page moves on to Google by itself.";
+            break;
+        case PhoneSignInPage::Google:
+            greek = "Συνέχεια στο Google, για να συνδεθεί η συσκευή στον λογαριασμό σου στο aoraton.com. Αν δεν "
+                    "γίνει τίποτα, πάτησε το κουμπί.";
+            english = "Continuing to Google, to sign the device in to your aoraton.com account. If nothing happens, "
+                      "tap the button.";
+            break;
+        case PhoneSignInPage::Done:
+            title = "Η συσκευή συνδέεται";
+            greek = "Ο λογαριασμός σου επιβεβαιώθηκε και η συσκευή ολοκληρώνει τη σύνδεση. Μπορείς να κλείσεις αυτή "
+                    "τη σελίδα.";
+            english = "Your account is confirmed and the device is finishing the sign-in. You can close this page.";
+            break;
+        case PhoneSignInPage::Cancelled:
+            title = "Η σύνδεση ακυρώθηκε";
+            greek = "Η συσκευή δεν συνδέθηκε. Για να ξαναδοκιμάσεις, ξεκίνα τη σύνδεση από τη συσκευή.";
+            english = "The device did not sign in. To try again, start the sign-in on the device.";
+            break;
+        case PhoneSignInPage::Gone:
+            title = "Ο κωδικός QR δεν ισχύει";
+            greek = "Έληξε ή χρησιμοποιήθηκε ήδη. Ξεκίνα ξανά τη σύνδεση από τη συσκευή για νέο κωδικό.";
+            english = "It has expired or was already used. Start the sign-in on the device again for a new code.";
+            break;
+    }
+    const auto url = attribute(google_url);
+    std::string html =
+        "<!doctype html>\n<html lang=\"el\"><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<meta name=\"referrer\" content=\"no-referrer\">";
+    if (page == PhoneSignInPage::Wait) html += "<meta http-equiv=\"refresh\" content=\"1\">";
+    if (page == PhoneSignInPage::Google) html += "<meta http-equiv=\"refresh\" content=\"0;url=" + url + "\">";
+    html += "<title>AURA</title>\n<style>"
+            ":root{color-scheme:dark;font:17px system-ui,sans-serif;background:#080b12;color:#f5f7ff}"
+            "body{max-width:520px;margin:auto;padding:32px 22px}.brand{font-size:22px;font-weight:750;"
+            "letter-spacing:.1em;margin:0}h1{font-size:28px;letter-spacing:-.03em;margin:32px 0 12px}"
+            "p{color:#aeb9cf;line-height:1.6}p[lang=en]{font-size:14px;color:#8594ae}"
+            "a{display:block;margin-top:28px;padding:16px;border-radius:14px;background:#35d5aa;color:#071e19;"
+            "font-weight:750;text-align:center;text-decoration:none}"
+            "</style>\n<p class=\"brand\">AURA</p><h1>";
+    html += title;
+    html += "</h1><p>";
+    html += greek;
+    html += "</p><p lang=\"en\">";
+    html += english;
+    html += "</p>";
+    if (page == PhoneSignInPage::Google) html += "<a href=\"" + url + "\">Συνέχεια στο Google</a>";
+    html += "</html>";
+    return html;
+}
+}  // namespace aura::l10n

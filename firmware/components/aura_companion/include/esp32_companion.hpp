@@ -82,6 +82,8 @@ public:
     void set_cloud_key_sink(ICloudKeySink* sink) { transfer_.set_key_sink(sink); }
     // The PC-assisted aoraton.com sign-in over the same session (ADR 0010).
     void set_aoraton_link(IAoratonLinkEndpoint* link) { transfer_.set_aoraton_link(link); }
+    // What the phone sign-in follows: File transfer's server (the UI thread).
+    TransferSnapshot transfer_snapshot() { return transfer_.session().snapshot(); }
     // The models the assistant's device facts come from.
     const ClockServicesModel& clock() const noexcept { return clock_; }
     const NotesModel& notes() const noexcept { return notes_; }

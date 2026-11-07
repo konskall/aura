@@ -1580,6 +1580,9 @@ bool CompanionRuntime::capture(const std::string& scenario) {
             const auto generation = transfer().session().snapshot().generation;
             if (scenario == "file-transfer-receiving") transfer().session().progress(generation, "DEMO photo.jpg", 131072, 262144);
             else if (scenario == "file-transfer-expired") transfer().session().tick(kTransferLeaseMs);
+            // The phone sign-in's QR (ADR 0010), with a DEMO secret.
+            else if (scenario == "file-transfer-phone-sign-in")
+                ui.set_aoraton_phone_sign_in("http://192.168.1.23:8788/aoraton/phone?s=DEMOdemoDEMOdemoDEMO12");
         }
         ui.apply_transfer(transfer().session().snapshot()); ui.show(UiView::FileTransfer);
     } else if (scenario == "photos" || scenario == "photo-viewer" || scenario == "photo-settings" || scenario == "photo-ambient" || scenario == "photo-delete") {

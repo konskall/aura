@@ -3,7 +3,9 @@
 // real PC helper relays Google's code over the transfer session, the device
 // mode's own account worker redeems it with its PKCE verifier at the local fake
 // Supabase, and after a restart the stored settings and session sign it in
-// again without the PC. Nothing secret reaches either program's output.
+// again without the PC. Then the phone's way, with no PC at all: the project's
+// values built in, the device's QR, Google's page and back to the device.
+// Nothing secret reaches either program's output.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -29,8 +31,8 @@ function freePort() {
   });
 }
 
-function startDevice(env) {
-  const child = spawn(exe, [], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+function startDevice(env, args = []) {
+  const child = spawn(exe, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
   const lines = [];
   let output = '';
   child.stderr.on('data', (chunk) => { output += chunk; });
@@ -109,6 +111,54 @@ try {
   } finally {
     second.child.kill();
   }
+  // The phone's way (no PC): the project's values are built in (the board's
+  // from config/aoraton.local.json; here the environment, as dev-simulator.ps1
+  // sets it), the owner taps sign-in, and a stand-in phone follows the QR.
+  const phoneFolder = await mkdtemp(join(tmpdir(), 'aura-device-phone-'));
+  const phoneEnv = {
+    ...env,
+    AURA_AORATON_DEVICE_STORE: join(phoneFolder, 'device.dpapi'),
+    AURA_AORATON_DEVICE_SETTINGS: join(phoneFolder, 'device-settings.txt'),
+    AURA_AORATON_URL: config.url,
+    AURA_AORATON_ANON_KEY: ANON_KEY,
+  };
+  const phone = startDevice(phoneEnv, ['--phone']);
+  try {
+    const { address } = await phone.ready;
+    assert.ok(await waitFor(phone.lines, (line) => line === 'CONFIGURED'),
+      'the built-in values start the account without the PC');
+    assert.ok(await waitFor(phone.lines, (line) => line.startsWith('PHONE ')), 'the device shows the phone QR');
+    const qr = phone.lines.find((line) => line.startsWith('PHONE ')).slice(6);
+    assert.match(qr, /^http:\/\/127\.0\.0\.1:\d+\/aoraton\/phone\?s=[A-Za-z0-9_-]{22}$/, 'the QR');
+    assert.ok(qr.startsWith(`${address}/aoraton/phone?s=`), 'at the transfer server');
+    // The phone opens the QR: a short wait, then Google's page (the fake's).
+    let google = '';
+    for (let tries = 0; tries < 100 && !google; tries += 1) {
+      const page = await fetch(qr, { redirect: 'manual' });
+      assert.equal(page.status, 200, 'the QR page answers');
+      const match = /<meta http-equiv="refresh" content="0;url=([^"]+)">/.exec(await page.text());
+      if (match) google = match[1].replaceAll('&amp;', '&');
+      else await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(google.startsWith(`${config.url}/auth/v1/authorize?`), 'the phone goes on to Google');
+    const authorize = await fetch(google, { redirect: 'manual' });
+    assert.equal(authorize.status, 302, 'Google sends the phone back');
+    const back = authorize.headers.get('location');
+    assert.ok(back.startsWith(`${address}/aoraton/callback?code=`), 'to the device, with the code');
+    const done = await fetch(back, { redirect: 'manual' });
+    assert.equal(done.status, 200, 'the device takes the code');
+    assert.ok(!(await done.text()).includes(AUTH_CODE), 'and does not show it');
+    assert.ok(await waitFor(phone.lines, (line) => line === 'SIGNED_IN'), 'the phone signed the device in');
+    assert.ok(await waitFor(phone.lines, (line) => line === 'ROOMS 2'), 'and it lists the account rooms');
+    assert.ok(!existsSync(phoneEnv.AURA_AORATON_DEVICE_SETTINGS), 'no PC settings were needed');
+    const again = await fetch(qr, { redirect: 'manual' });
+    assert.equal(again.status, 404, 'the QR is spent');
+    outputs.push(phone.output());
+  } finally {
+    phone.child.kill();
+    await rm(phoneFolder, { recursive: true, force: true });
+  }
+
   const printed = outputs.join('\n');
   for (const secret of [AUTH_CODE, 'at-', 'rt-', ANON_KEY]) {
     assert.ok(!printed.includes(secret), 'no code, token or key in the output');

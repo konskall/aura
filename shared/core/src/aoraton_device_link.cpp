@@ -457,4 +457,21 @@ void aoraton_link_pump(AoratonDeviceLink& link, IAoratonService& service, bool c
     link.publish(configured, snapshot.pairing, snapshot.last_error);
 }
 
+std::string aoraton_phone_pump(AoratonDeviceLink& link, const TransferSnapshot& transfer, bool& wanted,
+                               const std::function<bool(std::array<std::uint8_t, 16>&)>& random) {
+    const bool running = transfer.state == TransferState::Ready || transfer.state == TransferState::Receiving;
+    if (running && wanted) {
+        wanted = false;
+        std::array<std::uint8_t, 16> secret{};
+        if (random(secret)) link.request_phone_sign_in(transfer.address, secret);
+        volatile std::uint8_t* bytes = secret.data();
+        for (std::size_t i = 0; i < secret.size(); ++i)
+            bytes[i] = 0;
+    } else if (!running && transfer.state != TransferState::Starting) {
+        wanted = false;
+        link.cancel_phone_sign_in();  // nothing to do when there is none
+    }
+    return link.phone_url();
+}
+
 }  // namespace aura

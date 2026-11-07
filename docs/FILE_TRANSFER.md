@@ -40,6 +40,13 @@ On the device the same session also signs it in to aoraton.com (ADR 0010). `node
 one-time code back (`/api/aoraton/code`). An invite link goes to `/api/aoraton/invite`. Every call needs
 the session; none echoes a key, code or invite.
 
+The owner's phone can do the same without a PC (ADR 0010, 2026-11-07). The account screen's button
+starts File transfer, and once the server is ready the QR holds
+`http://<device>/aoraton/phone?s=<secret>` instead of the address. `GET /aoraton/phone` sends the
+phone on to Google's page, and `GET /aoraton/callback` takes the one-time code back. These two pages
+need no code: the QR's one-time secret stands in for it, and eight wrong secrets end the sign-in. They
+keep the private-peer and Host checks, run no script, send no referrer and never show the code.
+
 After code login, **Αποθηκευμένα στη συσκευή / Saved on the device** lists photos
 or other files, 128 per page. Select the destination, refresh or use Next page.
 Press Delete beside an exact filename, then confirm it in the dialog. Cancel
@@ -51,8 +58,9 @@ The lease ends after ten minutes, even during a transfer. **Διακοπή πρ�
 expiry, reboot/reset and device Wi-Fi loss revoke access. Five incorrect codes
 lock it until enabled again. Incomplete/invalid staging files are removed;
 completed files are preserved. Access is off after boot. The QR contains the
-address only; the code is entered separately. Credentials/payloads are not logged
-or persisted. No cloud, assistant, account or AI bridge is involved.
+address only (during a phone sign-in, the sign-in page with its one-time secret);
+the code is entered separately. Credentials/payloads are not logged or persisted.
+Uploads involve no cloud, assistant or AI bridge.
 
 This is a local HTTP service, not encrypted transport. Use trusted local Wi-Fi.
 Host/Origin/private-peer checks and a memory-only bearer protect the upload API.

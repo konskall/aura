@@ -1,5 +1,6 @@
 #include "aura/aoraton_device_link.hpp"
 #include "aura/aoraton_real.hpp"
+#include "aura/file_transfer.hpp"
 
 #include <array>
 #include <cstdint>
@@ -319,6 +320,80 @@ int main() {
         expect(test_link.configure(config("http://127.0.0.1:47123", anon_key())) &&
                    test_link.request_phone_sign_in("http://127.0.0.1:47124", bytes(17, 3)),
                "a test's link takes a loopback transfer server");
+    }
+
+    {
+        // The UI thread's part of the phone's way, the same on both platforms:
+        // the owner's tap asks, and File transfer's snapshot decides when the
+        // phone sign-in starts and ends.
+        using aura::TransferState;
+        aura::AoratonDeviceLink link([](const aura::AoratonLinkConfig&) { return true; });
+        expect(link.configure(config(kUrl, anon_key())), "a configured device");
+        unsigned draws = 0;
+        const auto random = [&draws](std::array<std::uint8_t, 16>& value) {
+            ++draws;
+            value.fill(static_cast<std::uint8_t>(40 + draws));
+            return true;
+        };
+        aura::TransferSnapshot transfer;
+        transfer.address = "http://192.168.1.23:8788";
+        transfer.state = TransferState::Ready;
+        bool wanted = false;
+        std::string code;
+        expect(aura::aoraton_phone_pump(link, transfer, wanted, random).empty() && draws == 0 &&
+                   !link.take_sign_in_request(),
+               "File transfer on its own starts no sign-in");
+        wanted = true;
+        transfer.state = TransferState::Starting;
+        expect(aura::aoraton_phone_pump(link, transfer, wanted, random).empty() && wanted && draws == 0,
+               "the tap waits for the transfer server");
+        transfer.state = TransferState::Ready;
+        const auto qr = aura::aoraton_phone_pump(link, transfer, wanted, random);
+        expect(!wanted && draws == 1 && qr == link.phone_url() &&
+                   qr.rfind("http://192.168.1.23:8788/aoraton/phone?s=", 0) == 0,
+               "then the phone sign-in starts once, at the server's address");
+        transfer.state = TransferState::Receiving;
+        expect(aura::aoraton_phone_pump(link, transfer, wanted, random) == qr && draws == 1,
+               "and keeps its QR while the server runs");
+        expect(link.take_sign_in_request(), "the account is asked to sign in");
+        transfer.state = TransferState::Expired;
+        expect(aura::aoraton_phone_pump(link, transfer, wanted, random).empty() && link.phone_url().empty(),
+               "a stopped server ends it");
+        expect(link.open(kAuthorize) && link.poll(code) == AoratonCallbackStatus::Failed,
+               "and the account, which had taken the request, hears of it");
+        link.close();
+
+        wanted = true;
+        transfer.state = TransferState::Failed;
+        expect(aura::aoraton_phone_pump(link, transfer, wanted, random).empty() && !wanted && draws == 1,
+               "a server that failed drops the tap");
+        wanted = true;
+        transfer.state = TransferState::Ready;
+        transfer.address = "http://127.0.0.1:8788";
+        transfer.loopback = true;
+        expect(aura::aoraton_phone_pump(link, transfer, wanted, random).empty() && !wanted,
+               "a server only this computer reaches shows no phone QR");
+        transfer.address = "http://192.168.1.23:8788";
+        transfer.loopback = false;
+        wanted = true;
+        aura::AoratonDeviceLink unconfigured([](const aura::AoratonLinkConfig&) { return true; });
+        expect(aura::aoraton_phone_pump(unconfigured, transfer, wanted, random).empty() && !wanted,
+               "a device without the project's settings shows no phone QR");
+        wanted = true;
+        const auto no_random = [](std::array<std::uint8_t, 16>& value) {
+            value.fill(0);
+            return false;
+        };
+        expect(aura::aoraton_phone_pump(link, transfer, wanted, no_random).empty() && !wanted &&
+                   !link.take_sign_in_request(),
+               "without randomness there is no secret, so no phone QR");
+        wanted = true;
+        expect(!aura::aoraton_phone_pump(link, transfer, wanted, random).empty(), "another phone sign-in");
+        transfer.state = TransferState::Off;
+        expect(aura::aoraton_phone_pump(link, transfer, wanted, random).empty() && !link.take_sign_in_request(),
+               "File transfer stopped before the account took it: nothing starts");
+        transfer.state = TransferState::Locked;
+        expect(aura::aoraton_phone_pump(link, transfer, wanted, random).empty(), "nothing to end twice");
     }
 
     std::cout << "aoraton device link tests passed\n";

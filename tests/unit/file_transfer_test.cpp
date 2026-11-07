@@ -2,6 +2,7 @@
 #include "aura/cloud_keys.hpp"
 #include "aura/file_transfer.hpp"
 #include "aura/text_util.hpp"
+#include "aura/transfer_page.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
@@ -222,8 +223,159 @@ void aoraton_link_tests() {
            "a platform that signs in by itself has no such endpoint");
 }
 
+// The phone's way (ADR 0010): the QR opens GET /aoraton/phone?s=<secret> on
+// the device, which sends the phone on to Google; Google's page comes back to
+// GET /aoraton/callback?s=<secret>&code=... over the owner's Wi-Fi. No PIN:
+// the secret stands in for it.
+void aoraton_phone_tests() {
+    using l10n::PhoneSignInPage;
+    std::uint64_t now = 1000;
+    TransferSession session;
+    Store files;
+    aura::AoratonDeviceLink link([](const aura::AoratonLinkConfig&) { return true; });
+    TransferProtocol protocol(session, files, [&] { return now; }, nullptr, &link);
+    std::array<std::uint8_t, 36> entropy{};
+    entropy.fill(47);
+    expect(session.start(entropy, now), "a session for the phone sign-in");
+    const std::string origin = "http://192.168.1.23:8788";
+    session.ready(session.snapshot().generation, origin, now);
+    aura::AoratonLinkConfig config;
+    config.base_url = "https://demo-project.supabase.co";
+    config.anon_key = "eyJhbGciOiJIUzI1NiJ9." + std::string(120, 'a') + ".DEMO_signature-0";
+    expect(link.configure(config), "a configured device");
+    std::array<std::uint8_t, 16> random{};
+    for (std::size_t i = 0; i < random.size(); ++i)
+        random[i] = static_cast<std::uint8_t>(5 + 19 * i);
+    const auto start = [&] {
+        expect(link.request_phone_sign_in(origin, random), "the device shows a QR");
+        const auto qr = link.phone_url();
+        expect(qr.rfind(origin + "/aoraton/phone?s=", 0) == 0, "the QR points at the device's own server");
+        return qr.substr(qr.find("?s=") + 3);
+    };
+    const std::string authorize =
+        "https://demo-project.supabase.co/auth/v1/authorize?provider=google&redirect_to="
+        "http%3A%2F%2F192.168.1.23%3A8788%2Faoraton%2Fcallback%3Fs%3DDEMO&code_challenge=DEMO&code_challenge_method=s256";
+    TransferRequest request;
+    request.local_peer = true;
+    request.host = "192.168.1.23:8788";
+    request.method = "GET";
+    const auto get = [&](const std::string& path) {
+        Reader reader;
+        request.path = path;
+        return protocol.handle(request, reader);
+    };
+    std::string code;
+
+    const auto secret = start();
+    const auto waiting = get("/aoraton/phone?s=" + secret);
+    expect(waiting.status == 200 && waiting.html && waiting.body == l10n::phone_sign_in_page(PhoneSignInPage::Wait),
+           "the phone waits while the device starts the sign-in, with no PIN");
+    expect(waiting.body.find(secret) == std::string::npos, "the waiting page does not repeat the secret");
+    const auto wrong = get("/aoraton/phone?s=AAAAAAAAAAAAAAAAAAAAAA");
+    expect(wrong.status == 404 && wrong.html && wrong.body == l10n::phone_sign_in_page(PhoneSignInPage::Gone),
+           "a wrong secret finds nothing");
+    expect(link.take_sign_in_request() && link.open(authorize), "the account opens the sign-in");
+    const auto google = get("/aoraton/phone?s=" + secret);
+    expect(google.status == 200 && google.html &&
+               google.body == l10n::phone_sign_in_page(PhoneSignInPage::Google, authorize),
+           "then the phone goes on to Google's page");
+    const auto done = get("/aoraton/callback?code=DEMO-code_123456&s=" + secret);
+    expect(done.status == 200 && done.html && done.body == l10n::phone_sign_in_page(PhoneSignInPage::Done) &&
+               done.body.find("DEMO-code") == std::string::npos,
+           "Google's answer reaches the device in either order and is not echoed");
+    expect(get("/aoraton/callback?s=" + secret + "&code=DEMO-code_654321").status == 404, "one answer per sign-in");
+    expect(link.poll(code) == aura::AoratonCallbackStatus::Received && code == "DEMO-code_123456",
+           "the account receives exactly that code");
+    link.close();
+
+    random[0] ^= 0xff;
+    const auto second = start();
+    expect(second != secret && link.take_sign_in_request() && link.open(authorize), "each QR has its own secret");
+    expect(get("/aoraton/phone?s=" + secret).status == 404, "the last QR is gone");
+    const auto refused = get("/aoraton/callback?error=access_denied&error_code=bad_oauth_callback"
+                             "&error_description=Unable+to+exchange+external+code&s=" + second);
+    expect(refused.status == 200 && refused.html &&
+               refused.body == l10n::phone_sign_in_page(PhoneSignInPage::Cancelled) &&
+               link.poll(code) == aura::AoratonCallbackStatus::Failed,
+           "a refusal on the phone reaches the account");
+    link.close();
+
+    random[1] ^= 0xff;
+    const auto third = start();
+    expect(link.take_sign_in_request() && link.open(authorize), "a third sign-in");
+    for (const std::string bad :
+         {std::string("/aoraton/phone"), std::string("/aoraton/phone?"), "/aoraton/phone?s=" + third + "&s=" + third,
+          "/aoraton/phone?t=" + third, "/aoraton/phone?s=" + third + "%", "/aoraton/phone?s=" + third + "&x=1",
+          std::string("/aoraton/callback?code=DEMO-code_123456"),
+          "/aoraton/callback?s=" + third + "&s=" + third + "&code=DEMO-code_123456",
+          "/aoraton/callback?s=" + third + "&code=DEMO-code_123456&code=DEMO-code_123456"}) {
+        const auto response = get(bad);
+        expect(response.status == 404 && response.html, "a malformed address finds nothing");
+    }
+    expect(link.poll(code) == aura::AoratonCallbackStatus::Pending, "and leaves the sign-in as it was");
+    request.local_peer = false;
+    expect(get("/aoraton/phone?s=" + third).status == 403, "only from the local network");
+    request.local_peer = true;
+    request.host = "aura.example:8788";
+    expect(get("/aoraton/phone?s=" + third).status == 403, "only at the device's own address");
+    request.host = "192.168.1.23:8788";
+    request.method = "POST";
+    expect(get("/aoraton/phone?s=" + third).status == 404, "the phone's pages are GET only");
+    request.method = "GET";
+    expect(get("/aoraton/phone?s=" + third).status == 200, "none of these used up the sign-in");
+    const auto empty = get("/aoraton/callback?s=" + third);
+    expect(empty.status == 200 && empty.body == l10n::phone_sign_in_page(PhoneSignInPage::Cancelled) &&
+               link.poll(code) == aura::AoratonCallbackStatus::Failed,
+           "an answer with neither a code nor an error ends the sign-in");
+    link.close();
+
+    random[2] ^= 0xff;
+    const auto fourth = start();
+    now += kTransferLeaseMs;
+    const auto expired = get("/aoraton/phone?s=" + fourth);
+    expect(expired.status == 410 && expired.html && expired.body == l10n::phone_sign_in_page(PhoneSignInPage::Gone),
+           "a closed transfer server tells the phone the QR has expired");
+    TransferProtocol without_link(session, files, [&] { return now; });
+    expect(session.start(entropy, now), "a new session");
+    session.ready(session.snapshot().generation, origin, now);
+    Reader reader;
+    request.path = "/aoraton/phone?s=" + fourth;
+    expect(without_link.handle(request, reader).status == 405, "a platform that signs in by itself has no such page");
+
+    // The pages: Greek with English beneath, no script, and the authorize URL
+    // escaped wherever it is written.
+    const std::string tricky = "https://demo-project.supabase.co/auth/v1/authorize?a=1&b=\"<x>'";
+    const auto page = l10n::phone_sign_in_page(PhoneSignInPage::Google, tricky);
+    const std::string escaped = "https://demo-project.supabase.co/auth/v1/authorize?a=1&amp;b=&quot;&lt;x&gt;&#39;";
+    expect(page.find("<meta http-equiv=\"refresh\" content=\"0;url=" + escaped + "\">") != std::string::npos &&
+               page.find("href=\"" + escaped + "\"") != std::string::npos && page.find(tricky) == std::string::npos,
+           "the Google page moves on by itself, with a link as well, the URL escaped");
+    expect(l10n::phone_sign_in_page(PhoneSignInPage::Wait).find("<meta http-equiv=\"refresh\" content=\"1\">") !=
+               std::string::npos,
+           "the waiting page asks again every second");
+    for (const auto kind : {PhoneSignInPage::Wait, PhoneSignInPage::Google, PhoneSignInPage::Done,
+                            PhoneSignInPage::Cancelled, PhoneSignInPage::Gone}) {
+        const auto html = l10n::phone_sign_in_page(kind, "https://demo-project.supabase.co/auth/v1/authorize");
+        expect(html.rfind("<!doctype html>", 0) == 0 && html.find("<script") == std::string::npos &&
+                   html.find("lang=\"el\"") != std::string::npos && html.find("lang=\"en\"") != std::string::npos &&
+                   html.find("name=\"referrer\" content=\"no-referrer\"") != std::string::npos,
+               "every page is Greek and English, script-free and sends no referrer");
+        expect((html.find("http-equiv=\"refresh\"") != std::string::npos) ==
+                   (kind == PhoneSignInPage::Wait || kind == PhoneSignInPage::Google),
+               "only the waiting and Google pages move on by themselves");
+    }
+    const std::vector<std::string> pages{
+        l10n::phone_sign_in_page(PhoneSignInPage::Wait), l10n::phone_sign_in_page(PhoneSignInPage::Google, tricky),
+        l10n::phone_sign_in_page(PhoneSignInPage::Done), l10n::phone_sign_in_page(PhoneSignInPage::Cancelled),
+        l10n::phone_sign_in_page(PhoneSignInPage::Gone)};
+    for (std::size_t i = 0; i < pages.size(); ++i)
+        for (std::size_t j = i + 1; j < pages.size(); ++j)
+            expect(pages[i] != pages[j], "each step has its own page");
+}
+
 int main() {
     aoraton_link_tests();
+    aoraton_phone_tests();
     for (auto name : {"DEMO φωτογραφία.jpg", "DEMO notes.txt", "DEMO 20%.pdf"})
         expect(transfer_filename_valid(name), "safe Unicode filename accepted");
     for (auto name : {"../x", ".hidden", "a/b", "a\\b", "x:", "a\n.txt", "a.", "a ", "CON.txt", "CON .txt", "lpt1.csv",
@@ -242,6 +394,15 @@ int main() {
                                   parsed) &&
                parsed.length == 3,
            "bounded HTTP framing");
+    const std::string callback = "/aoraton/callback?code=" + std::string(36, 'c') + "&s=" + std::string(22, 's') +
+                                 "&error_description=" + std::string(360, 'e');
+    expect(callback.size() <= 512 &&
+               parse_transfer_headers("GET " + callback + " HTTP/1.1\r\nHost: 192.168.1.23:8788\r\n\r\n", parsed) &&
+               parsed.path == callback,
+           "the phone's answer from Google fits");
+    expect(!parse_transfer_headers("GET /" + std::string(512, 'a') + " HTTP/1.1\r\nHost: 192.168.1.23:8788\r\n\r\n",
+                                   parsed),
+           "a longer address is refused");
     for (auto bad :
          {"POST /api/upload HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\nContent-Length: 3\r\n\r\n",
           "POST /api/upload HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n",

@@ -1,6 +1,9 @@
 #include "aura/aoraton_device_mode.hpp"
 
+#include "aura/file_transfer.hpp"
+
 #include <windows.h>
+#include <bcrypt.h>
 
 #include <fstream>
 #include <system_error>
@@ -22,6 +25,15 @@ std::string environment_text(const char* name) {
     char value[64] = {};
     const DWORD length = GetEnvironmentVariableA(name, value, sizeof(value));
     return length > 0 && length < sizeof(value) ? std::string(value, length) : std::string{};
+}
+
+// The anon key is longer than environment_text reads.
+std::string environment_long(const char* name) {
+    std::string value(1024, '\0');
+    const DWORD length = GetEnvironmentVariableA(name, value.data(), static_cast<DWORD>(value.size()));
+    if (length == 0 || length >= value.size()) return {};
+    value.resize(length);
+    return value;
 }
 
 bool same(const AoratonLinkConfig& left, const AoratonLinkConfig& right) {
@@ -53,6 +65,10 @@ bool load_aoraton_device_mode_options(AoratonDeviceModeOptions& options, std::st
         options.callback_port = static_cast<std::uint16_t>(std::stoul(port));
     }
     options.allow_loopback = environment_text("AURA_AORATON_ALLOW_LOOPBACK") == "1";
+    options.built_in.base_url = environment_long("AURA_AORATON_URL");
+    options.built_in.anon_key = environment_long("AURA_AORATON_ANON_KEY");
+    options.built_in.inco_enabled = environment_text("AURA_INCO_ENABLED") == "1";
+    if (!aoraton_link_config_valid(options.built_in, options.allow_loopback)) options.built_in = {};
     return true;
 }
 
@@ -119,9 +135,20 @@ bool AoratonDeviceMode::take_settings(const AoratonLinkConfig& settings) {
     return true;
 }
 
+// The settings the PC sent last, as the device keeps them in NVS, or else the
+// built-in ones.
+bool AoratonDeviceMode::settings_locked(AoratonLinkConfig& settings) const {
+    if (load_aoraton_device_settings(options_.settings_path, options_.allow_loopback, settings)) return true;
+    settings = options_.built_in;
+    return !settings.base_url.empty();
+}
+
 void AoratonDeviceMode::start() {
-    AoratonLinkConfig stored;
-    if (!load_aoraton_device_settings(options_.settings_path, options_.allow_loopback, stored)) return;
+    {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        AoratonLinkConfig settings;
+        if (!settings_locked(settings)) return;
+    }
     configured_ = true;
     restart();
 }
@@ -131,7 +158,7 @@ void AoratonDeviceMode::restart() {
     AoratonLinkConfig settings;
     {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (!load_aoraton_device_settings(options_.settings_path, options_.allow_loopback, settings)) return;
+        if (!settings_locked(settings)) return;
     }
     AoratonTransportOptions transport;
     transport.config.base_url = settings.base_url;
@@ -149,6 +176,13 @@ void AoratonDeviceMode::restart() {
 void AoratonDeviceMode::pump(IAoratonService& service) {
     if (changed_.exchange(false)) restart();
     aoraton_link_pump(link_, service, configured_, transport_ != nullptr);
+}
+
+std::string AoratonDeviceMode::pump_phone(const TransferSnapshot& transfer) {
+    return aoraton_phone_pump(link_, transfer, phone_wanted_, [](std::array<std::uint8_t, 16>& secret) {
+        return BCryptGenRandom(nullptr, secret.data(), static_cast<ULONG>(secret.size()),
+                               BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
+    });
 }
 
 void AoratonDeviceMode::stop() { transport_.reset(); }

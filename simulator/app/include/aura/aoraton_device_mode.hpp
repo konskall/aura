@@ -21,11 +21,16 @@ struct AoratonDeviceModeOptions {
     std::uint16_t callback_port{4779};
     // AURA_AORATON_ALLOW_LOOPBACK=1: a test's local fake Supabase over http.
     bool allow_loopback{false};
+    // The project's public values, as the board has them built in from
+    // config/aoraton.local.json: AURA_AORATON_URL, AURA_AORATON_ANON_KEY and
+    // AURA_INCO_ENABLED (dev-simulator.ps1 sets them). Used while the PC has
+    // sent none, so the phone alone can sign the account in. Empty: none.
+    AoratonLinkConfig built_in;
 };
 
 // %LOCALAPPDATA%\AURA\aoraton-device.dpapi and aoraton-device-settings.txt, or
 // AURA_AORATON_DEVICE_STORE / AURA_AORATON_DEVICE_SETTINGS; the callback port
-// from AURA_AORATON_CALLBACK_PORT.
+// from AURA_AORATON_CALLBACK_PORT; the built-in project values (above).
 bool load_aoraton_device_mode_options(AoratonDeviceModeOptions& options, std::string& error);
 
 // AURA_AORATON_SIGN_IN=device, as run.bat device and dev-simulator.ps1
@@ -58,20 +63,26 @@ public:
     void pump(IAoratonService& service);
     void stop();
     bool account_ready() const noexcept { return transport_ != nullptr; }
+    // The phone's way (ADR 0010), on the UI thread: the owner tapped sign-in;
+    // after each File transfer snapshot, the QR's address (empty: none).
+    void want_phone_sign_in() noexcept { phone_wanted_ = true; }
+    std::string pump_phone(const TransferSnapshot& transfer);
     void set_location_city(std::string city);
 
 private:
     bool take_settings(const AoratonLinkConfig& settings);
+    bool settings_locked(AoratonLinkConfig& settings) const;
     void restart();
 
     AoratonMailbox& mailbox_;
     AoratonDeviceModeOptions options_;
-    std::mutex settings_mutex_;
+    mutable std::mutex settings_mutex_;
     std::atomic<bool> configured_{false};
     std::atomic<bool> changed_{false};
     AoratonDeviceLink link_;
     std::unique_ptr<AoratonAccountTransport> transport_;
     std::string city_;
+    bool phone_wanted_{false};
 };
 
 }  // namespace aura::simulator

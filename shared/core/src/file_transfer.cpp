@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstdio>
 #include <limits>
+#include <optional>
 
 namespace aura {
 namespace {
@@ -55,6 +56,14 @@ bool ipv4(std::string_view s, unsigned (&parts)[4]) {
 }
 TransferResponse error_response(int status, TransferError error) {
     return {status, "{\"error\":\"" + std::string(transfer_error_code(error)) + "\"}", false};
+}
+TransferResponse phone_response(int status, l10n::PhoneSignInPage page, std::string_view url = {}) {
+    return {status, l10n::phone_sign_in_page(page, url), true};
+}
+// The phone sign-in's two pages: GET only, and only with an Aoraton link.
+bool phone_route(std::string_view path) {
+    const auto route = path.substr(0, path.find('?'));
+    return route == "/aoraton/phone" || route == "/aoraton/callback";
 }
 }  // namespace
 bool transfer_private_ipv4(std::string_view s) {
@@ -316,7 +325,9 @@ bool parse_transfer_headers(std::string_view text, TransferRequest& request) {
     TransferRequest r;
     r.method = std::string(line.substr(0, space));
     r.path = std::string(line.substr(space + 1, last - space - 1));
-    if (r.path.size() > 64 || r.method.size() > 8 || r.path.empty()) return false;
+    // 512: Google's answer to the phone sign-in carries the code, or an
+    // error and its description, in the address.
+    if (r.path.size() > 512 || r.method.size() > 8 || r.path.empty()) return false;
     bool length_seen = false;
     std::vector<std::string> seen;
     text.remove_prefix(first + 2);
@@ -495,16 +506,80 @@ TransferResponse TransferProtocol::aoraton_request(const TransferRequest& r, ITr
     return error_response(404, TransferError::Name);
 }
 
+// The owner's phone signs the device in (ADR 0010): the QR opens
+// GET /aoraton/phone?s=<secret>, which sends the phone on to Google; Google's
+// page comes back to GET /aoraton/callback?s=<secret>&code=... (or &error=...,
+// with other fields). No PIN: the secret stands in for it, and the link
+// counts the wrong ones. A malformed address reaches no link. The code is
+// never echoed.
+TransferResponse TransferProtocol::phone_request(const TransferRequest& r) {
+    const std::string_view path(r.path);
+    const auto mark = path.find('?');
+    const bool callback = path.substr(0, mark) == "/aoraton/callback";
+    std::optional<std::string> secret, code;
+    bool refused = false, valid = mark != std::string_view::npos;
+    auto query = valid ? path.substr(mark + 1) : std::string_view{};
+    for (unsigned fields = 0; valid && !query.empty(); ++fields) {
+        const auto amp = query.find('&');
+        const auto field = query.substr(0, amp);
+        query = amp == std::string_view::npos ? std::string_view{} : query.substr(amp + 1);
+        const auto equals = field.find('=');
+        const auto name = field.substr(0, equals);
+        const auto value = equals == std::string_view::npos ? std::string_view{} : field.substr(equals + 1);
+        if (fields >= 8 || name.empty()) {
+            valid = false;
+        } else if (name == "s" || (callback && name == "code")) {
+            auto& slot = name == "s" ? secret : code;
+            if (slot) wipe(*slot);
+            valid = !slot && !(slot = transfer_percent_decode(value))->empty();
+        } else if (callback && name == "error") {
+            valid = !refused;
+            refused = true;
+        } else {
+            valid = callback;  // Google's error_code, error_description and the like
+        }
+    }
+    valid = valid && secret;
+    TransferResponse response = phone_response(404, l10n::PhoneSignInPage::Gone);
+    if (valid && !callback) {
+        std::string url;
+        switch (aoraton_->phone_page(*secret, url)) {
+            case AoratonPhonePage::Wait: response = phone_response(200, l10n::PhoneSignInPage::Wait); break;
+            case AoratonPhonePage::Google:
+                response = phone_response(200, l10n::PhoneSignInPage::Google, url);
+                break;
+            case AoratonPhonePage::Gone: break;
+        }
+    } else if (valid) {
+        // Neither a code nor an error, or both: the sign-in ends as refused.
+        const bool answered = code && !refused;
+        std::string none;  // both lvalues, so the code is not copied
+        switch (aoraton_->phone_answer(*secret, answered ? *code : none, !answered)) {
+            case AoratonPhoneAnswer::Taken: response = phone_response(200, l10n::PhoneSignInPage::Done); break;
+            case AoratonPhoneAnswer::Refused:
+                response = phone_response(200, l10n::PhoneSignInPage::Cancelled);
+                break;
+            case AoratonPhoneAnswer::Gone: break;
+        }
+    }
+    if (secret) wipe(*secret);
+    if (code) wipe(*code);
+    return response;
+}
+
 TransferResponse TransferProtocol::handle(const TransferRequest& r, ITransferReader& reader) {
     if (!r.local_peer) return error_response(403, TransferError::Auth);
+    const bool phone = aoraton_ && r.method == "GET" && phone_route(r.path);
     session_.tick(clock_());
     const auto state = session_.snapshot();
     if (!session_.valid(state.generation, clock_()) || state.state == TransferState::Starting)
-        return error_response(410, TransferError::Interrupted);
+        return phone ? phone_response(410, l10n::PhoneSignInPage::Gone)
+                     : error_response(410, TransferError::Interrupted);
     const auto host = state.address.substr(7);
     if (r.host != host || (!r.origin.empty() && r.origin != state.address))
         return error_response(403, TransferError::Auth);
     if (r.method == "GET" && r.path == "/") return {200, std::string(l10n::transfer_page()), true};
+    if (phone) return phone_request(r);
     if (r.method != "POST") return error_response(405, TransferError::Auth);
     if (r.path == "/api/session") {
         if (r.length > 80 || r.length < 2 || r.content_type.substr(0, 16) != "application/json")

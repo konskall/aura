@@ -611,6 +611,7 @@ int main(int argc, char** argv) {
         int aoraton_unlock_bytes{0};
         int aoraton_paste{0};
         int aoraton_sign_in{0};
+        int aoraton_phone_sign_in{0};
         int aoraton_open_attachment{0};
         int aoraton_voice_start{0};
         int aoraton_sign_out{0};
@@ -1330,6 +1331,11 @@ int main(int argc, char** argv) {
     ui_callbacks.on_aoraton_pair_start = [&] {
         ++interaction_counts.aoraton_sign_in;
         return aoraton.begin_pairing();
+    };
+    // The device's sign-in button asks for the phone's way too (ADR 0010).
+    ui_callbacks.on_aoraton_phone_sign_in = [&] {
+        ++interaction_counts.aoraton_phone_sign_in;
+        if (aoraton_device_mode) aoraton_device_mode->want_phone_sign_in();
     };
     ui_callbacks.on_aoraton_pair_confirm_sas = [&] { return aoraton.confirm_pairing_sas(); };
     ui_callbacks.on_aoraton_pair_cancel = [&] { aoraton.cancel_pairing(); };
@@ -3520,17 +3526,45 @@ int main(int argc, char** argv) {
                 }
                 return false;
             };
+            // A line that holds `text` (the DEMO transfer prefixes its status).
+            std::function<bool(lv_obj_t*, const char*)> holds = [&](lv_obj_t* object, const char* text) -> bool {
+                if (lv_obj_check_type(object, &lv_label_class) && std::strstr(lv_label_get_text(object), text))
+                    return true;
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    if (holds(lv_obj_get_child(object, static_cast<int32_t>(index)), text)) return true;
+                }
+                return false;
+            };
             account_snapshot(aura::AoratonPairingState::NotPaired);
             ui.set_aoraton_sign_in_relay(true);
             reset_to(aura::UiView::AoratonRooms);
             const bool relay_copy = shows(ui.root(), aura::l10n::companion_el_gr().aoraton_sign_in_relay_help);
             const int relay_before = interaction_counts.aoraton_sign_in;
+            const int phone_before = interaction_counts.aoraton_phone_sign_in;
             tap(240, 420);
             const bool relayed = ui.view() == aura::UiView::FileTransfer &&
                                  interaction_counts.aoraton_sign_in == relay_before &&
+                                 interaction_counts.aoraton_phone_sign_in == phone_before + 1 &&
                                  companion.transfer().session().snapshot().state == aura::TransferState::Ready;
             record("aoraton.sign_in_relay", "button-opens-file-transfer", relay_copy && relayed,
                    std::to_string(relay_copy) + ":" + std::to_string(static_cast<int>(ui.view())));
+            // The phone sign-in on: the QR is the phone's, the PIN stays for the PC.
+            const auto& transfer_copy = aura::l10n::transfer_strings(aura::InterfaceLanguage::Greek);
+            const bool pc_only = shows(ui.root(), transfer_copy.pin) && !shows(ui.root(), transfer_copy.phone_pc);
+            ui.set_aoraton_phone_sign_in("http://192.168.1.23:8788/aoraton/phone?s=DEMOdemoDEMOdemoDEMO12");
+            const bool phone_view = ui.view() == aura::UiView::FileTransfer &&
+                                    holds(ui.root(), transfer_copy.phone_scan) &&
+                                    shows(ui.root(), transfer_copy.phone_pc) &&
+                                    shows(ui.root(), transfer_copy.phone_wifi) && !shows(ui.root(), transfer_copy.pin);
+            record("aoraton.phone_sign_in", "qr-with-pc-fallback", pc_only && phone_view,
+                   std::to_string(pc_only) + ":" + std::to_string(phone_view));
+            // Signed in, by the phone or the PC: back to the rooms, with a word.
+            account_snapshot(aura::AoratonPairingState::Paired);
+            const bool returned = ui.view() == aura::UiView::AoratonRooms &&
+                                  shows(ui.root(), aura::l10n::companion_el_gr().aoraton_signed_in);
+            record("aoraton.signed_in_from_transfer", "back-to-rooms", returned,
+                   std::to_string(static_cast<int>(ui.view())));
+            ui.set_aoraton_phone_sign_in("");
             companion.transfer().stop();
             ui.set_aoraton_sign_in_relay(false);
         }
@@ -7088,7 +7122,11 @@ int main(int argc, char** argv) {
         companion.poll(capture_scenario.empty() ? std::min<std::uint32_t>(elapsed, 100) : 0U);
         if (aoraton_fail_closed_transport) aoraton_fail_closed_transport->poll();
         aoraton.tick(std::min<std::uint32_t>(elapsed, 100));
-        if (aoraton_device_mode && !deterministic_run) aoraton_device_mode->pump(aoraton);
+        if (aoraton_device_mode && !deterministic_run) {
+            aoraton_device_mode->pump(aoraton);
+            // The phone's way: File transfer shows the QR while a phone sign-in is on.
+            ui.set_aoraton_phone_sign_in(aoraton_device_mode->pump_phone(companion.transfer().session().snapshot()));
+        }
         const long long clock_second = runtime_ms / 1000;
         if (capture_scenario.empty() && clock_second != last_clock_second) {
             last_clock_second = clock_second;

@@ -18,10 +18,10 @@
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
         if (self->accept_action() && self->callbacks.on_transfer_browser) self->callbacks.on_transfer_browser();
     }
-    bool transfer_qr() {
+    bool transfer_qr(const std::string& text) {
         std::array<std::uint8_t, aura_qrcodegen_BUFFER_LEN_FOR_VERSION(6)> temp{}, code{};
-        if (!aura_qrcodegen_encodeText(transfer.address.c_str(), temp.data(), code.data(), aura_qrcodegen_Ecc_MEDIUM, 1,
-                                       6, aura_qrcodegen_Mask_AUTO, true))
+        if (!aura_qrcodegen_encodeText(text.c_str(), temp.data(), code.data(), aura_qrcodegen_Ecc_MEDIUM, 1, 6,
+                                       aura_qrcodegen_Mask_AUTO, true))
             return false;
         constexpr unsigned edge = 216;
         if (transfer_qr_pixels.size() != edge * edge && !transfer_qr_pixels.resize(edge * edge)) return false;
@@ -101,12 +101,16 @@
                  kGutter, 384, kWidth, starting ? transfer_stop_event : transfer_start_event);
             return;
         }
+        // A phone sign-in on: the QR takes the phone to Google (ADR 0010); the
+        // PIN and the address stay for the PC helper.
+        const bool phone = !aoraton_phone_url.empty();
         std::string status = transfer.loopback ? f().local_only : f().ready;
+        if (phone) status = f().phone_scan;
         if (receiving) status = f().receiving;
         if (transfer.demo) status = std::string(t().demo) + " · " + status;
         line(content, status.c_str(), kGutter, 100, kWidth, ui::font_caption(), ui::tokens::mint);
-        transfer_qr();
-        line(content, f().pin, 264, 140, 192, ui::font_caption(), ui::tokens::text_secondary);
+        transfer_qr(phone ? aoraton_phone_url : transfer.address);
+        line(content, phone ? f().phone_pc : f().pin, 264, 140, 192, ui::font_caption(), ui::tokens::text_secondary);
         auto pin = transfer.pin;
         if (pin.size() == 6) pin.insert(3, " ");
         line(content, pin.c_str(), 264, 174, 192, ui::font_title(), ui::tokens::text);
@@ -119,6 +123,7 @@
         std::string detail =
             transfer.error != TransferError::None ? transfer_problem()
             : receiving                           ? transfer.last_name
+            : phone                               ? f().phone_wifi
                         : std::string(completed) + (transfer.last_name.empty() ? "" : " · " + transfer.last_name);
         line(content, detail.c_str(), 24, 366, 432, ui::font_caption(), ui::tokens::text_secondary);
         transfer_bar = lv_bar_create(content);

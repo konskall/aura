@@ -305,7 +305,8 @@ struct CompanionStrings {
     // aoraton.com account (sign-in through the PC browser, room keys)
     const char* aoraton_sign_in;
     const char* aoraton_sign_in_help;
-    const char* aoraton_sign_in_relay_help;  // the device: its PC signs it in
+    const char* aoraton_sign_in_relay_help;  // the device: the owner's phone or PC signs it in
+    const char* aoraton_signed_in;
     const char* aoraton_photo;
     const char* aoraton_photo_loading;
     const char* aoraton_attachment_failed;

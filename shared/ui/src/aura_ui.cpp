@@ -198,6 +198,7 @@ struct AuraUi::Impl {
     // The city picker shows presets first; the keyboard opens on request.
     bool weather_typing{false};
     bool aoraton_sign_in_relay{false};  // the device: File transfer and the PC helper
+    std::string aoraton_phone_url;       // the phone sign-in's QR, while one is on
     // The conversation's photo thumbnails and the open photo: LVGL reads the
     // pixels through these descriptors, so they live as long as the screen.
     std::vector<std::unique_ptr<lv_image_dsc_t>> aoraton_thumb_descriptors;
@@ -524,8 +525,10 @@ struct AuraUi::Impl {
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
         if (!self->accept_action()) return;
         if (self->aoraton_sign_in_relay) {
-            // The PC helper drives the sign-in over File transfer's session.
+            // The owner's phone (File transfer shows its QR once ready) or the PC
+            // helper drives the sign-in over File transfer's server.
             if (self->callbacks.on_transfer_start && self->callbacks.on_transfer_start()) {
+                if (self->callbacks.on_aoraton_phone_sign_in) self->callbacks.on_aoraton_phone_sign_in();
                 self->navigate(UiView::FileTransfer);
             } else {
                 self->show_toast(self->f().failed, ui::tokens::coral);
@@ -4311,7 +4314,16 @@ void AuraUi::apply_aoraton(const AoratonSnapshot& snapshot) {
          snapshot.notifications.back().message_id != old.notifications.back().message_id);
     const bool keys_unlocked = old.key_state == AoratonKeyState::Unlocking &&
                                snapshot.key_state == AoratonKeyState::Ready && snapshot.key_count > 0;
+    const bool signed_in = !snapshot.mock_mode && old.pairing != AoratonPairingState::Paired &&
+                           snapshot.pairing == AoratonPairingState::Paired;
     impl_->aoraton = snapshot;
+    // Signed in from File transfer, by the owner's phone or the PC helper:
+    // back to where the sign-in began, and say so.
+    if (signed_in && impl_->aoraton_sign_in_relay && impl_->current_view == UiView::FileTransfer) {
+        impl_->render(impl_->navigation.back());
+        impl_->show_toast(impl_->c().aoraton_signed_in, ui::tokens::mint);
+        return;
+    }
     if (!snapshot.mock_mode && snapshot.pairing != AoratonPairingState::Paired) {
         impl_->selected_message = {};
         if (impl_->current_view == UiView::AoratonMessage || impl_->current_view == UiView::AoratonAssist) {
@@ -4469,6 +4481,12 @@ void AuraUi::tick(std::uint32_t elapsed_ms) {
 }
 
 void AuraUi::set_aoraton_sign_in_relay(bool relay) { impl_->aoraton_sign_in_relay = relay; }
+
+void AuraUi::set_aoraton_phone_sign_in(const std::string& url) {
+    if (url == impl_->aoraton_phone_url) return;
+    impl_->aoraton_phone_url = url;
+    if (impl_->current_view == UiView::FileTransfer) impl_->render(UiView::FileTransfer);
+}
 
 void AuraUi::show(UiView view) {
     impl_->weather_typing = false;

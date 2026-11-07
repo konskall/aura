@@ -165,6 +165,9 @@ struct AuraUiCallbacks {
     std::function<bool()> on_aoraton_confirm;
     std::function<void()> on_aoraton_cancel;
     std::function<bool()> on_aoraton_pair_start;
+    // The device: the owner tapped sign-in, so File transfer, once ready, also
+    // offers the phone's way (ADR 0010).
+    std::function<void()> on_aoraton_phone_sign_in;
     std::function<bool()> on_aoraton_pair_confirm_sas;
     std::function<void()> on_aoraton_pair_cancel;
     std::function<void()> on_aoraton_unpair;
@@ -310,6 +313,8 @@ public:
     // The device cannot open Google's page: its sign-in button opens File
     // transfer for the PC helper instead (ADR 0010).
     void set_aoraton_sign_in_relay(bool relay);
+    // The phone's QR on File transfer while a phone sign-in is on; empty: none.
+    void set_aoraton_phone_sign_in(const std::string& url);
     // Opens `view` as if from Home: Back returns Home, never to a screen
     // that happened to be open before.
     void show_from_home(UiView view);

@@ -53,7 +53,7 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 |---|---|
 | Conversation | The assistant, with recent history, follow-up and new-topic actions |
 | Weather | Open-Meteo forecast for any city, hourly and daily views, animated conditions, offline cache |
-| Messages | Aoraton end-to-end-encrypted rooms: sign-in through the PC browser, read and send with confirmation, optional `@inco` AI answers. Photos show in the conversation and open full screen. Voice messages play (AAC, Opus or WAV), and are recorded and sent after a confirmation. On the device the encrypted files are kept on the microSD card, so they open again without a second download. New messages arrive at once over a realtime connection, with a periodic check (10 s to 5 min, or off) as a fallback. On the device realtime runs while the screen is lit or on USB power, and a five-minute check takes over on battery with the screen dark |
+| Messages | Aoraton end-to-end-encrypted rooms: sign-in with Google (in the simulator through the PC browser; on the device by scanning its QR with your phone, or through the PC), read and send with confirmation, optional `@inco` AI answers. Photos show in the conversation and open full screen. Voice messages play (AAC, Opus or WAV), and are recorded and sent after a confirmation. On the device the encrypted files are kept on the microSD card, so they open again without a second download. New messages arrive at once over a realtime connection, with a periodic check (10 s to 5 min, or off) as a fallback. On the device realtime runs while the screen is lit or on USB power, and a five-minute check takes over on battery with the screen dark |
 | Clock | Timers, alarms (once or daily) and reminders, with a full-screen alert that rings even when muted |
 | Notes | Typed and voice notes; a voice note is dictated (up to 30 s, past short pauses) and transcribed |
 | Today | Greeting, namedays, next public holiday, weather, average Greek fuel prices, alarms, reminders, timers and unread messages |
@@ -200,13 +200,13 @@ The authoritative suite runs everything that can be checked on a PC. It contacts
   - Interoperability checks against the Node tools:
     - the device's assistant instructions match the bridge's;
     - update signatures made by `scripts/update-signing.mjs` verify on the device's parser;
-    - `scripts/aoraton-device-sign-in.mjs` signs a stand-in device in through the real transfer server, and the simulator's device mode in against a local fake Supabase.
+    - `scripts/aoraton-device-sign-in.mjs` signs a stand-in device in through the real transfer server, and the simulator's device mode in against a local fake Supabase, both through the PC helper and through a stand-in phone that follows the QR.
   - Media Foundation decodes voice messages (AAC, and Opus where installed) back to the encoded tone.
   - A check of the firmware's configuration: LVGL's memory, power management, encrypted NVS and the production security profile.
   - Bridge and control-page tests (`node --test`).
   - A smoke run and a 370-transition UI stress run.
 - **Evidence.**
-  - Real SDL/LVGL pointer checks of every route at 1× and 2× scale (281 checks each). The run fails on any LVGL error, on an animation drawn through a transform layer, or when LVGL's memory peak exceeds the device's budget.
+  - Real SDL/LVGL pointer checks of every route at 1× and 2× scale (283 checks each). The run fails on any LVGL error, on an animation drawn through a transform layer, or when LVGL's memory peak exceeds the device's budget.
   - Screenshot and motion evidence of every screen, written to the ignored `artifacts/` folder.
 
 Single test programs can be built and run from `build/native`, for example `ninja -C build/native aura_radio_tests`. Bridge tests run with `node --test` inside `bridge/`.
@@ -259,7 +259,12 @@ See [docs/HARDWARE.md](docs/HARDWARE.md).
 
 Until the public key is set, the device refuses every update.
 
-**Signing the device in to aoraton.com.** Open Settings → Μεταφορά αρχείων on the device (or the account screen's button), then run:
+**Signing the device in to aoraton.com.** On the device: Messages → account → **Σύνδεση με Google**. File transfer opens with a QR. Scan it with your phone, on the same Wi-Fi, and sign in with Google. This needs two things ([ADR 0010](docs/ADR/0010-device-aoraton-account.md)):
+
+- the device's network allowed as a return address in the aoraton.com Supabase project, for example `http://192.168.*.*/**`;
+- the project's public values built in, from `config/aoraton.local.json`.
+
+Or from a PC, with the address and the code File transfer shows:
 
 ```powershell
 node scripts/aoraton-device-sign-in.mjs --address http://<device address>:<port> --code <six digits>

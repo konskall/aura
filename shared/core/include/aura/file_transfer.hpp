@@ -120,6 +120,7 @@ public:
 private:
     TransferResponse store_keys(const TransferRequest& request, ITransferReader& reader);
     TransferResponse aoraton_request(const TransferRequest& request, ITransferReader& reader);
+    TransferResponse phone_request(const TransferRequest& request);
     TransferSession& session_;
     ITransferStorage& storage_;
     std::function<std::uint64_t()> clock_;

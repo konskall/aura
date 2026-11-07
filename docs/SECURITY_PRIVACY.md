@@ -133,6 +133,11 @@ See [ADR 0010](ADR/0010-device-aoraton-account.md).
   - sends the project's public URL and anon key;
   - opens Google's page;
   - hands the one-time code back. The code is useless without the device's verifier.
+- **Sign-in from the phone (2026-11-07).** Without a PC, the phone does the PC's part. The device's QR leads it to Google's page, and Google's page sends the code back to the device over the local network.
+  - **The QR's secret.** It is 16 random bytes, new for each tap, compared in constant time. Eight wrong ones end the sign-in. It also ends with the sign-in itself, with File transfer, or with the PC's sign-in.
+  - **The two pages** (`/aoraton/phone`, `/aoraton/callback`) answer only the local network, at the device's own address. They run no script, send no referrer and never show the code.
+  - **The project's values.** The public URL and anon key are built into the firmware from the git-ignored `config/aoraton.local.json`. Neither is a secret: aoraton.com's web app ships both.
+  - **The Supabase setting it needs** (the owner's). The device's local network must be among the project's Redirect URLs, for example `http://192.168.*.*/**`. With it, a sign-in link someone else started could hand that person a session at a host on the network the phone is on, if the owner signs in through that link. PKCE does not stop this, because such a link carries the other person's own challenge. Sign in only from the QR your own device shows.
 - **Secrets at rest.** The refresh token and the room keys live in encrypted NVS (namespace `aura_aoraton`) as one bounded record. The access token stays in memory. Αποσύνδεση wipes the record.
 - **Room keys.** The vault passphrase is typed on the device and never crosses the network. An invite link from the PC (`--invite`) carries one room's key over the local network in plain HTTP: use a trusted Wi-Fi.
 - **Files.**
