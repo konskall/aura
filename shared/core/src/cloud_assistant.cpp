@@ -157,9 +157,7 @@ void wipe_headers(HttpsRequest& request) {
 AssistantReply ask_groq(IHttpsClient& https, const std::string& key, const TurnRequest& request) {
     if (request.prompt.size() > kTurnMaxPromptBytes) return {false, {}, "PROMPT_TOO_LARGE"};
     const std::string instructions = build_turn_instructions(request);
-    if (instructions.empty()) {
-        return {false, {}, request.mode == TurnMode::Translate ? "INVALID_LANGUAGE" : "INVALID_REQUEST"};
-    }
+    if (instructions.empty()) return {false, {}, "INVALID_REQUEST"};
     if (instructions.size() > kTurnMaxInstructionsBytes) return {false, {}, "PROMPT_TOO_LARGE"};
     // The PC bridge's Groq runner: one user message, streamed, temperature 0.2.
     HttpsRequest http;

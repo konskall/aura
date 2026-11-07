@@ -51,7 +51,6 @@ struct VisualStrings {
     const char* track_artist_demo;
     const char* notes;
     const char* reminders;
-    const char* translate;
     const char* calculator;
     const char* in_development;
     const char* calendar;

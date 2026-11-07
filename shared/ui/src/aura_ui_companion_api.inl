@@ -61,15 +61,7 @@ void AuraUi::apply_voice(const VoiceSnapshot& snapshot) {
         }
         return;
     }
-    if (self.current_view == UiView::Translate && structural) self.render(UiView::Translate);
     if (self.current_view == UiView::AoratonVoiceRecord && !structural) self.update_record_widgets();
-}
-
-void AuraUi::apply_translation(const TranslationSnapshot& snapshot) {
-    auto& self = *impl_;
-    if (snapshot.sequence == self.translation.sequence) return;
-    self.translation = snapshot;
-    if (self.current_view == UiView::Translate) self.render(UiView::Translate);
 }
 
 void AuraUi::apply_phone(const PhoneSnapshot& snapshot) {

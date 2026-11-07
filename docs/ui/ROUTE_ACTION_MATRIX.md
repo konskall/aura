@@ -44,6 +44,6 @@ This is the product action source of truth. Enabled actions must appear in the m
 
 ## Intentionally disabled or hidden
 
-Search, weather, navigation/GPS, generic applications, notes, reminders, translation, calculator, calendar, camera capture, Bluetooth headset audio and alternate voice/TTS choices have no verified implementation. They are absent from enabled product navigation. The former `Not available` review routes for search, navigation and camera were removed on 2026-10-29.
+Search, weather, navigation/GPS, generic applications, notes, reminders, calculator, calendar, camera capture, Bluetooth headset audio and alternate voice/TTS choices have no verified implementation. They are absent from enabled product navigation. The former `Not available` review routes for search, navigation and camera were removed on 2026-10-29.
 
 Decorative artwork, icons, labels, halos, cards and status text are `NON_INTERACTIVE`; they must not carry `LV_OBJ_FLAG_CLICKABLE` or intercept their semantic parent.

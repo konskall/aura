@@ -10,8 +10,8 @@ namespace {
 
 constexpr std::string_view kHeader{"AURA_APP_LAYOUT_V1"};
 constexpr std::array<std::string_view, kLauncherAppCount> kCodes{
-    "conversation", "weather", "messages", "clock", "notes", "translate",
-    "today", "radio", "notifications", "settings", "organizer", "photos",
+    "conversation", "weather", "messages", "clock", "notes", "today",
+    "radio", "notifications", "settings", "organizer", "photos",
 };
 
 std::string_view trim_line(std::string_view value) noexcept {

@@ -15,7 +15,6 @@ enum class LauncherApp : std::uint8_t {
     Messages,
     Clock,
     Notes,
-    Translate,
     Today,
     Radio,
     Notifications,
@@ -29,9 +28,9 @@ constexpr std::size_t kLauncherAppCount = static_cast<std::size_t>(LauncherApp::
 
 constexpr std::array<LauncherApp, kLauncherAppCount> kDefaultLauncherOrder{
     LauncherApp::Conversation, LauncherApp::Weather, LauncherApp::Messages,
-    LauncherApp::Clock, LauncherApp::Notes, LauncherApp::Translate,
-    LauncherApp::Today, LauncherApp::Radio, LauncherApp::Notifications,
-    LauncherApp::Settings, LauncherApp::Organizer, LauncherApp::Photos,
+    LauncherApp::Clock, LauncherApp::Notes, LauncherApp::Today,
+    LauncherApp::Radio, LauncherApp::Notifications, LauncherApp::Settings,
+    LauncherApp::Organizer, LauncherApp::Photos,
 };
 
 struct LauncherLayoutSnapshot {

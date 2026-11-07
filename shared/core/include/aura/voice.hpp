@@ -11,7 +11,7 @@
 
 namespace aura {
 
-enum class VoicePurpose { Assistant, Note, Translate, Message };
+enum class VoicePurpose { Assistant, Note, Message };
 enum class VoiceCaptureState { Idle, Recording, Processing };
 
 struct VoiceSnapshot {

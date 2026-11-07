@@ -8,7 +8,6 @@
     NotesSnapshot notes{};
     OrganizerSnapshot organizer{};
     VoiceSnapshot voice{};
-    TranslationSnapshot translation{};
     PhoneSnapshot phone{};
     UpdateSnapshot update{};
     DisplaySnapshot display_power{};
@@ -55,7 +54,6 @@
     lv_obj_t* alert_ring{};
     lv_obj_t* record_ring{};
     lv_obj_t* record_time{};
-    lv_obj_t* translate_ring{};
     lv_obj_t* reminder_area{};
     lv_obj_t* note_area{};
     lv_obj_t* organizer_area{};
@@ -77,21 +75,12 @@
         alert_ring = nullptr;
         record_ring = nullptr;
         record_time = nullptr;
-        translate_ring = nullptr;
         reminder_area = nullptr;
         note_area = nullptr;
         organizer_area = nullptr;
         update_bar = nullptr;
         update_label = nullptr;
         radio_search_area = nullptr;
-    }
-
-    static int language_index(const std::string& code) {
-        static constexpr const char* kCodes[] = {"el", "en", "de", "fr", "it", "es"};
-        for (int index = 0; index < 6; ++index) {
-            if (code == kCodes[index]) return index;
-        }
-        return 1;
     }
 
     static std::string countdown_text(std::uint64_t remaining_ms) {
@@ -562,29 +551,6 @@
                                  interface_language_code(self->interface_language));
     }
 
-    static void translate_record_event(lv_event_t* event) {
-        auto* self = self_of(event);
-        if (!self->accept_action() || !self->callbacks.on_translate_record) return;
-        const auto side = user_value(event) == 0 ? TranslateSide::Mine : TranslateSide::Theirs;
-        const bool recording_this = self->voice.state == VoiceCaptureState::Recording &&
-                                    self->voice.purpose == VoicePurpose::Translate &&
-                                    self->translation_active_side() == side;
-        if (recording_this) {
-            if (self->callbacks.on_translate_stop) self->callbacks.on_translate_stop();
-        } else if (!self->callbacks.on_translate_record(side)) {
-            self->show_toast(self->c().translate_needs_voice, ui::tokens::coral);
-        }
-    }
-
-    static void translate_language_event(lv_event_t* event) {
-        auto* self = self_of(event);
-        if (!self->accept_action() || !self->callbacks.on_translate_language) return;
-        static constexpr const char* kTheirs[] = {"en", "de", "fr", "it", "es"};
-        const int current = language_index(self->translation.their_language);
-        const int next = current >= 5 ? 0 : current;  // index in kTheirs of the following language
-        self->callbacks.on_translate_language(kTheirs[next]);
-    }
-
     static void wake_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (self->callbacks.on_wake) self->callbacks.on_wake();
@@ -907,10 +873,6 @@
                 case LauncherApp::Notes:
                     cell = app_cell_in(grid, column, row, index, c().app_notes, ui::IconRole::Notebook,
                                        ui::tokens::pink, UiView::Notes);
-                    break;
-                case LauncherApp::Translate:
-                    cell = app_cell_in(grid, column, row, index, c().app_translate, ui::IconRole::Languages,
-                                       ui::tokens::ice, UiView::Translate);
                     break;
                 case LauncherApp::Today:
                     cell = app_cell_in(grid, column, row, index, c().app_today, ui::IconRole::Sunrise,
@@ -2195,113 +2157,6 @@
         list_end(list, y);
     }
 
-    // ---- Translation -------------------------------------------------------
-
-    TranslateSide translation_active_side() const {
-        if (translation.entries.empty()) return TranslateSide::Mine;
-        return translation.entries.back().side;
-    }
-
-    // One half of the table: language, the latest text in that language, and
-    // its own microphone. The top half is drawn upside down for the other person.
-    void translate_half(lv_obj_t* parent, int top, TranslateSide side, int language, const std::string& text,
-                        bool placeholder) {
-        const bool recording = voice.state == VoiceCaptureState::Recording && voice.purpose == VoicePurpose::Translate &&
-                               translation_active_side() == side;
-        const std::uint32_t accent = recording ? ui::tokens::coral :
-            (side == TranslateSide::Mine ? ui::tokens::ice : ui::tokens::magenta);
-        auto* card = lv_obj_create(parent);
-        ui::reset(card);
-        ui::style_platter(card, accent, ui::tokens::radius_large, false);
-        lv_obj_set_size(card, kWidth, 188);
-        lv_obj_set_pos(card, kGutter, top + 8);
-        auto* language_tag = ui::make_tag(card, c().language_names[language], accent);
-        lv_obj_set_pos(language_tag, 16, 14);
-        auto* body = label(card, text.c_str(), 16, 52, 316, text.size() > 60 ? ui::font_body() :
-                           ui::font_title(), placeholder ? ui::tokens::text_secondary : ui::tokens::text);
-        lv_obj_set_height(body, 118);
-        lv_label_set_long_mode(body, LV_LABEL_LONG_DOT);
-        auto* mic = round_button(card, 344, 56, 72, recording ? ui::IconRole::Stop : ui::IconRole::Microphone,
-                                 accent, translate_record_event);
-        set_value(mic, side == TranslateSide::Mine ? 0U : 1U);
-        ui::set_button_disabled(mic, !capabilities.microphone || !capabilities.speech_recognition ||
-                                     !callbacks.on_translate_record);
-        if (recording) {
-            translate_ring = spinner_arc(card, 84, ui::tokens::coral, 4);
-            lv_arc_set_angles(translate_ring, 0, 360);
-            lv_obj_set_pos(translate_ring, 338, 50);
-        }
-    }
-
-    void render_translate() {
-        header_action = true;
-        const int mine = 0;
-        const int theirs = language_index(translation.their_language);
-        std::string mine_text = c().translate_tap[mine];
-        std::string theirs_text = c().translate_tap[theirs];
-        bool mine_placeholder = true;
-        bool theirs_placeholder = true;
-        if (!(capabilities.microphone && capabilities.speech_recognition)) {
-            mine_text = c().translate_needs_voice;
-        }
-        if (!translation.entries.empty()) {
-            const auto& entry = translation.entries.back();
-            const bool from_mine = entry.side == TranslateSide::Mine;
-            const int source = from_mine ? mine : theirs;
-            const int target = from_mine ? theirs : mine;
-            std::string source_text;
-            std::string target_text;
-            bool target_placeholder = true;
-            switch (entry.status) {
-                case TranslationStatus::Listening: source_text = c().translate_listening[source]; break;
-                case TranslationStatus::Transcribing: source_text = c().translate_working[source]; break;
-                case TranslationStatus::Translating:
-                    source_text = entry.source;
-                    target_text = c().translate_working[target];
-                    break;
-                case TranslationStatus::Ready:
-                    source_text = entry.source;
-                    target_text = entry.translated;
-                    target_placeholder = false;
-                    break;
-                case TranslationStatus::Failed:
-                    source_text = entry.source.empty() ? c().translate_failed : entry.source;
-                    target_text = c().translate_failed;
-                    break;
-            }
-            const bool source_placeholder = entry.status == TranslationStatus::Listening ||
-                                            entry.status == TranslationStatus::Transcribing;
-            if (from_mine) {
-                mine_text = source_text;
-                mine_placeholder = source_placeholder;
-                if (!target_text.empty()) { theirs_text = target_text; theirs_placeholder = target_placeholder; }
-            } else {
-                theirs_text = source_text;
-                theirs_placeholder = source_placeholder;
-                if (!target_text.empty()) { mine_text = target_text; mine_placeholder = target_placeholder; }
-            }
-        }
-        auto* top = lv_obj_create(content);
-        ui::reset(top);
-        lv_obj_set_size(top, ui::tokens::display_width, 208);
-        lv_obj_set_pos(top, 0, 0);
-        lv_obj_set_style_transform_pivot_x(top, ui::tokens::display_width / 2, 0);
-        lv_obj_set_style_transform_pivot_y(top, 104, 0);
-        lv_obj_set_style_transform_rotation(top, 1800, 0);
-        translate_half(top, 0, TranslateSide::Theirs, theirs, theirs_text, theirs_placeholder);
-        translate_half(content, 272, TranslateSide::Mine, mine, mine_text, mine_placeholder);
-        // The middle band: back, and the other person's language.
-        auto* back = round_button(content, 16, 208, ui::tokens::HEADER_BUTTON, ui::IconRole::ChevronLeft,
-                                  ui::tokens::text, back_event, true);
-        lv_obj_add_event_cb(back, home_event, LV_EVENT_LONG_PRESSED, this);
-        char languages[32];
-        std::snprintf(languages, sizeof(languages), "%s  \xE2\x86\x92  %s", c().language_codes[mine],
-                      c().language_codes[theirs]);
-        auto* swap = pill(content, languages, ui::ButtonTone::Secondary, 124, 208, 232, translate_language_event);
-        lv_obj_set_height(swap, ui::tokens::HEADER_BUTTON);
-        ui::set_button_disabled(swap, !callbacks.on_translate_language);
-    }
-
     // ---- Always-on clock, calls and phone ------------------------------------
 
     // Where the newest notification came from; DEMO data says so.
@@ -2688,7 +2543,6 @@
             case UiView::NoteDetail: render_note_detail(); break;
             case UiView::NoteRecord: render_note_record(); break;
             case UiView::Briefing: render_briefing(); break;
-            case UiView::Translate: render_translate(); break;
             case UiView::ConversationHistory: render_conversation_history(); break;
             case UiView::AlwaysOn: render_always_on(); break;
             case UiView::Photos: render_photos(); break;
@@ -2723,10 +2577,6 @@
             return true;
         }
         if (current_view == UiView::NoteRecord && callbacks.on_note_record_cancel) callbacks.on_note_record_cancel();
-        if (current_view == UiView::Translate && voice.state != VoiceCaptureState::Idle &&
-            voice.purpose == VoicePurpose::Translate && callbacks.on_translate_stop) {
-            callbacks.on_translate_stop();
-        }
         if (current_view == UiView::OrganizerNew && organizer_kind == OrganizerKind::Event && organizer_step == 1) {
             organizer_step = 0;
             render(UiView::OrganizerNew);
@@ -2742,7 +2592,7 @@
 
     // Full-screen moments carry no status chrome.
     static bool immersive(UiView view) {
-        return view == UiView::AlwaysOn || view == UiView::Translate || view == UiView::ClockAlert ||
+        return view == UiView::AlwaysOn || view == UiView::ClockAlert ||
                view == UiView::PhoneCall || view == UiView::PowerOff || view == UiView::Boot;
     }
 
@@ -2751,9 +2601,6 @@
             const auto phase = static_cast<int>(phase_ms % 1200U);
             const int pulse = phase < 600 ? phase : 1200 - phase;
             lv_obj_set_style_arc_opa(alert_ring, static_cast<lv_opa_t>(90 + pulse * 150 / 600), LV_PART_INDICATOR);
-        }
-        if (translate_ring && voice.state == VoiceCaptureState::Recording) {
-            lv_obj_set_style_arc_width(translate_ring, 3 + static_cast<int>(voice.level * 9.0F), LV_PART_INDICATOR);
         }
         if (note_delete_armed && phase_ms - note_delete_armed_at > kForgetArmMs) note_delete_armed = false;
     }

@@ -71,7 +71,6 @@ add_library(aura_core STATIC
     shared/core/src/ota_update.cpp
     shared/core/src/phone_link.cpp
     shared/core/src/text_util.cpp
-    shared/core/src/translation.cpp
     shared/core/src/voice.cpp
     shared/core/src/aoraton_crypto.cpp
     shared/core/src/aoraton_real.cpp

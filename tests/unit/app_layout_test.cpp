@@ -45,8 +45,8 @@ int main() {
     auto sequence = model.snapshot().sequence;
     expect(model.move(0, 5), "a valid move is accepted");
     const auto& moved = model.snapshot().order;
-    expect(moved[0] == LauncherApp::Weather && moved[4] == LauncherApp::Translate &&
-           moved[5] == LauncherApp::Conversation && moved[6] == LauncherApp::Today,
+    expect(moved[0] == LauncherApp::Weather && moved[4] == LauncherApp::Today &&
+           moved[5] == LauncherApp::Conversation && moved[6] == LauncherApp::Radio,
            "moving forward shifts the apps in between");
     expect(model.snapshot().sequence == sequence + 1, "a move is a change");
 
@@ -54,9 +54,9 @@ int main() {
     expect(model.move(5, 0), "moving back is accepted");
     expect(model.snapshot().order == kDefaultLauncherOrder, "moving back restores the order");
     expect(model.move(10, 1), "the last app can move near the front");
-    expect(model.snapshot().order[1] == LauncherApp::Organizer &&
+    expect(model.snapshot().order[1] == LauncherApp::Photos &&
            model.snapshot().order[2] == LauncherApp::Weather &&
-           model.snapshot().order[10] == LauncherApp::Settings,
+           model.snapshot().order[10] == LauncherApp::Organizer,
            "moving backward shifts the apps in between");
 
     sequence = model.snapshot().sequence;
@@ -92,11 +92,11 @@ int main() {
 
     const auto before = restored.snapshot();
     expect(!restored.restore(layout_text({"conversation", "conversation"})), "a duplicate app is rejected");
-    expect(!restored.restore(layout_text({"conversation", "weather", "messages", "clock", "notes", "translate",
-                                          "today", "radio", "notifications", "settings"})),
+    expect(!restored.restore(layout_text({"conversation", "weather", "messages", "clock", "notes", "today",
+                                          "radio", "notifications", "settings"})),
            "a missing app is rejected");
-    expect(!restored.restore(layout_text({"conversation", "weather", "messages", "clock", "notes", "translate",
-                                          "today", "radio", "notifications", "settings", "camera"})),
+    expect(!restored.restore(layout_text({"conversation", "weather", "messages", "clock", "notes", "today",
+                                          "radio", "notifications", "settings", "camera"})),
            "an unknown app is rejected");
     expect(!restored.restore(saved + "organizer\n"), "extra entries are rejected");
     expect(!restored.restore("AURA_APP_LAYOUT_V2\n"), "another version is rejected");

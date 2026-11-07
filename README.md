@@ -6,7 +6,7 @@
 
 ![AURA production screens: home, listening, thinking, speaking, answers, apps, settings, sound, messages, Wi-Fi and system](docs/images/aura-production-screens.png)
 
-![AURA companion screens: apps, timers, clock, notes, voice notes, Today, translation, always-on clock, phone calls and notifications](docs/images/aura-companion-screens.png)
+![AURA companion screens: apps, timers, clock, notes, voice notes, Today, always-on clock, phone calls and notifications](docs/images/aura-companion-screens.png)
 
 ![Newer screens: photos, the always-on clock over a photo, file transfer with its QR code, credits, the appearance setting, Aoraton sign-in, the Aoraton account, and a conversation with a photo and the voice-message button](docs/images/aura-newer-screens.png)
 
@@ -14,7 +14,7 @@ All names, rooms, messages, photos and data in the screenshots are fictional `DE
 
 ## Σύντομα στα ελληνικά
 
-Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, μετάφραση πρόσωπο με πρόσωπο, φωτογραφίες από την κάρτα microSD, μεταφορά αρχείων από το κινητό ή τον υπολογιστή μέσα από το τοπικό Wi-Fi, μηνύματα Aoraton με κρυπτογράφηση που φτάνουν αμέσως και ειδοποιήσεις από το iPhone. Έχει τέσσερις εμφανίσεις (Άλως, Μάρμαρο, Σέλας, Γραφίτης) που επιλέγεις από τις Ρυθμίσεις → Εμφάνιση. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Στη συσκευή ο βοηθός μιλά απευθείας με το Groq και το Azure, με κλειδιά που στέλνεις μία φορά από τον υπολογιστή και φυλάσσονται κρυπτογραφημένα. Ο προσομοιωτής δουλεύει σήμερα· το firmware χτίζεται, αλλά δεν έχει δοκιμαστεί ακόμα σε πραγματική πλακέτα.
+Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, φωτογραφίες από την κάρτα microSD, μεταφορά αρχείων από το κινητό ή τον υπολογιστή μέσα από το τοπικό Wi-Fi, μηνύματα Aoraton με κρυπτογράφηση που φτάνουν αμέσως και ειδοποιήσεις από το iPhone. Έχει τέσσερις εμφανίσεις (Άλως, Μάρμαρο, Σέλας, Γραφίτης) που επιλέγεις από τις Ρυθμίσεις → Εμφάνιση. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Στη συσκευή ο βοηθός μιλά απευθείας με το Groq και το Azure, με κλειδιά που στέλνεις μία φορά από τον υπολογιστή και φυλάσσονται κρυπτογραφημένα. Ο προσομοιωτής δουλεύει σήμερα· το firmware χτίζεται, αλλά δεν έχει δοκιμαστεί ακόμα σε πραγματική πλακέτα.
 
 ## Contents
 
@@ -43,7 +43,7 @@ All names, rooms, messages, photos and data in the screenshots are fictional `DE
 - **Works offline for everyday commands.** Timers, alarms, notes, tasks, shopping, volume, mute, brightness, the time, the battery and opening apps are understood on the device itself, in Greek and English. A sentence that merely mentions these words is left to the assistant.
 - **Local answers.** "Who celebrates today?", "When does Γιώργος celebrate?" and "When is the next public holiday?" are answered from an offline Greek Orthodox calendar.
 - **Explicit web search.** "Ψάξε…" / "search for…" uses live search only when the provider has a real search tool (the Codex CLI); otherwise the assistant says it cannot search right now.
-- **On the device, without a PC.** The firmware talks to Groq (speech recognition, and answers from `gpt-oss-120b`) and to Azure Speech (the voice) directly over HTTPS, with the same instructions as the bridge ([ADR 0009](docs/ADR/0009-device-direct-cloud-assistant.md)). Spoken questions and answers work there; translation and confirming a proposed action are not wired on the device yet, so it declines actions.
+- **On the device, without a PC.** The firmware talks to Groq (speech recognition, and answers from `gpt-oss-120b`) and to Azure Speech (the voice) directly over HTTPS, with the same instructions as the bridge ([ADR 0009](docs/ADR/0009-device-direct-cloud-assistant.md)). Spoken questions and answers work there; confirming a proposed action is not wired on the device yet, so it declines actions.
 
 ### Apps
 
@@ -56,7 +56,6 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 | Messages | Aoraton end-to-end-encrypted rooms: sign-in through the PC browser, read and send with confirmation, optional `@inco` AI answers. Photos show in the conversation and open full screen. Voice messages play (AAC, Opus or WAV), and are recorded and sent after a confirmation. On the device the encrypted files are kept on the microSD card, so they open again without a second download. New messages arrive at once over a realtime connection, with a periodic check (10 s to 5 min, or off) as a fallback. On the device realtime runs while the screen is lit or on USB power, and a five-minute check takes over on battery with the screen dark |
 | Clock | Timers, alarms (once or daily) and reminders, with a full-screen alert that rings even when muted |
 | Notes | Typed and voice notes; a voice note is dictated (up to 30 s, past short pauses) and transcribed |
-| Translate | Face-to-face translation with one card turned towards the other person |
 | Today | Greeting, namedays, next public holiday, weather, average Greek fuel prices, alarms, reminders, timers and unread messages |
 | Radio | Greek stations, a station directory search (worldwide when no Greek station matches), favourites with your own order, now-playing titles, automatic reconnection; "βάλε ραδιόφωνο" plays the last station again |
 | Photos | JPG and PNG photos from the microSD card: gallery, full screen, swipes, a slideshow, deletion with confirmation, and an optional dimmed photo behind the always-on clock |
@@ -205,9 +204,9 @@ The authoritative suite runs everything that can be checked on a PC. It contacts
   - Media Foundation decodes voice messages (AAC, and Opus where installed) back to the encoded tone.
   - A check of the firmware's configuration: LVGL's memory, power management, encrypted NVS and the production security profile.
   - Bridge and control-page tests (`node --test`).
-  - A smoke run and a 380-transition UI stress run.
+  - A smoke run and a 370-transition UI stress run.
 - **Evidence.**
-  - Real SDL/LVGL pointer checks of every route at 1× and 2× scale (284 checks each). The run fails on any LVGL error, on an animation drawn through a transform layer, or when LVGL's memory peak exceeds the device's budget.
+  - Real SDL/LVGL pointer checks of every route at 1× and 2× scale (281 checks each). The run fails on any LVGL error, on an animation drawn through a transform layer, or when LVGL's memory peak exceeds the device's budget.
   - Screenshot and motion evidence of every screen, written to the ignored `artifacts/` folder.
 
 Single test programs can be built and run from `build/native`, for example `ninja -C build/native aura_radio_tests`. Bridge tests run with `node --test` inside `bridge/`.
@@ -272,7 +271,7 @@ Google's page opens in the PC's browser; the device keeps its own session, and t
 
 - **Needs more work.**
   - Radio by voice: the device plays stations from the Ράδιο app, but "βάλε Σφαίρα" is understood only in the simulator.
-  - Translation, and confirming the assistant's proposed actions.
+  - Confirming the assistant's proposed actions.
 - **Needs the board.** Everything physical still has to be validated: display, touch, audio, battery and Wi-Fi/TLS behaviour.
 
 The production and update signing keys are never stored in the repository.

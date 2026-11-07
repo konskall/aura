@@ -11,9 +11,6 @@ namespace aura {
 
 AssistantReply mock_answer(const TurnRequest& request) {
     const auto& prompt = request.prompt;
-    if (request.mode == TurnMode::Translate) {
-        return AssistantReply{true, "DEMO [" + request.target_language + "] " + prompt, {}};
-    }
     const bool english = request.interface_language == InterfaceLanguage::English;
     const auto folded = fold_text(prompt);
     // Actions use the same ACTION line a live provider is asked for, so the

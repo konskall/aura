@@ -120,32 +120,7 @@ test('a new question replaces the running one; cancellation and recovery', async
 });
 
 
-test('a translation runs beside a chat question', async () => {
-  const runner = slowRunner();
-  const slowTurn = runner.runTurn;
-  runner.runTurn = (request) => (/professional interpreter/.test(request.instructions) ?
-    Promise.resolve({ ok: true, text: 'Thank you' }) : slowTurn(request));
-  await withServer(runner, async (base) => {
-    const chat = fetch(`${base}/v1/assistant/turn`, {
-      method: 'POST', headers: headers(), body: JSON.stringify({ id: 'chat', prompt: 'wait' }),
-    });
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    const translate = await fetch(`${base}/v1/assistant/turn`, {
-      method: 'POST', headers: headers(),
-      body: JSON.stringify({ id: 'tr', prompt: 'Ευχαριστώ', mode: 'translate', source: 'el', target: 'en' }),
-    });
-    assert.equal(translate.status, 200);
-    assert.equal((await translate.json()).text, 'Thank you');
-    // The chat question is still running: only its own cancel ends it.
-    const cancelled = await fetch(`${base}/v1/assistant/cancel`, {
-      method: 'POST', headers: headers(), body: JSON.stringify({ id: 'chat' }),
-    });
-    assert.equal(cancelled.status, 200);
-    assert.equal((await chat).status, 499);
-  });
-});
-
-test('turns send device facts, history and translation as built instructions', async () => {
+test('turns send device facts and history as built instructions', async () => {
   const seen = [];
   const runner = {
     health: async () => ({ installed: true, loggedIn: true }),
@@ -156,19 +131,13 @@ test('turns send device facts, history and translation as built instructions', a
     assert.deepEqual(health.speech, { stt: true, tts_el: true, tts_en: false });
     const chat = await fetch(`${base}/v1/assistant/turn`, {
       method: 'POST', headers: headers(), body: JSON.stringify({
-        id: 'chat', prompt: 'Και αύριο;', mode: 'chat', context: 'weather for Αθήνα: now 22 C',
+        id: 'chat', prompt: 'Και αύριο;', context: 'weather for Αθήνα: now 22 C',
         history: [{ q: 'Τι καιρό κάνει;', a: 'Λιακάδα.' }],
       }),
     });
     assert.equal(chat.status, 200);
     assert.match(seen[0], /weather for Αθήνα/);
     assert.match(seen[0], /AURA: Λιακάδα\./);
-    const translate = await fetch(`${base}/v1/assistant/turn`, {
-      method: 'POST', headers: headers(),
-      body: JSON.stringify({ id: 'tr', prompt: 'Ευχαριστώ', mode: 'translate', source: 'el', target: 'en' }),
-    });
-    assert.equal(translate.status, 200);
-    assert.match(seen[1], /from Greek to English/);
     const invalid = await fetch(`${base}/v1/assistant/turn`, {
       method: 'POST', headers: headers(),
       body: JSON.stringify({ id: 'bad', prompt: 'x', history: [{ q: 'a' }] }),

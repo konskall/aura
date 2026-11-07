@@ -1,33 +1,12 @@
 #include "aura/companion_strings.hpp"
 
-#include <array>
-#include <cstddef>
-
 namespace aura::l10n {
-namespace {
-
-void set(const char* (&target)[6], const std::array<const char*, 6>& values) {
-    for (std::size_t index = 0; index < values.size(); ++index) target[index] = values[index];
-}
-
-// Endonyms and per-language prompts: the other person reads their own language.
-void set_languages(CompanionStrings& s) {
-    set(s.language_names, {"Ελληνικά", "English", "Deutsch", "Français", "Italiano", "Español"});
-    set(s.translate_tap, {"Πάτα και μίλα", "Tap and speak", "Tippen und sprechen", "Touchez et parlez",
-                          "Tocca e parla", "Toca y habla"});
-    set(s.translate_listening, {"Ακούω…", "Listening…", "Ich höre zu…", "J’écoute…", "Ascolto…", "Escuchando…"});
-    set(s.translate_working, {"Μεταφράζω…", "Translating…", "Übersetze…", "Traduction…", "Traduco…",
-                              "Traduciendo…"});
-}
-
-}  // namespace
 
 const CompanionStrings& companion_el_gr() noexcept {
     static const CompanionStrings strings = [] {
         CompanionStrings s{};
         s.app_clock = "Ρολόι";
         s.app_notes = "Σημειώσεις";
-        s.app_translate = "Μετάφραση";
         s.app_today = "Σήμερα";
         s.app_radio = "Ραδιόφωνο";
         s.app_organizer = "Οργάνωση";
@@ -196,12 +175,6 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.offline_brightness_format = "Η φωτεινότητα ρυθμίστηκε στο %d%%.";
         s.offline_muted = "Ο ήχος τέθηκε σε σίγαση.";
         s.offline_unmuted = "Η σίγαση απενεργοποιήθηκε.";
-
-        s.translate_title = "Μετάφραση";
-        s.translate_needs_voice = "Η μετάφραση χρειάζεται μικρόφωνο και αναγνώριση ομιλίας";
-        s.translate_failed = "Δεν μεταφράστηκε";
-        set(s.language_codes, {"ΕΛ", "EN", "DE", "FR", "IT", "ES"});
-        set_languages(s);
 
         s.greeting_morning = "Καλημέρα";
         s.greeting_afternoon = "Καλό απόγευμα";
@@ -464,7 +437,6 @@ const CompanionStrings& companion_en_us() noexcept {
         CompanionStrings s{};
         s.app_clock = "Clock";
         s.app_notes = "Notes";
-        s.app_translate = "Translate";
         s.app_today = "Today";
         s.app_radio = "Radio";
         s.app_organizer = "Organizer";
@@ -633,12 +605,6 @@ const CompanionStrings& companion_en_us() noexcept {
         s.offline_brightness_format = "Brightness set to %d%%.";
         s.offline_muted = "Audio muted.";
         s.offline_unmuted = "Audio unmuted.";
-
-        s.translate_title = "Translate";
-        s.translate_needs_voice = "Translation needs a microphone and speech recognition";
-        s.translate_failed = "Not translated";
-        set(s.language_codes, {"EL", "EN", "DE", "FR", "IT", "ES"});
-        set_languages(s);
 
         s.greeting_morning = "Good morning";
         s.greeting_afternoon = "Good afternoon";

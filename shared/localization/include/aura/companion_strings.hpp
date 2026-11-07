@@ -2,14 +2,13 @@
 
 namespace aura::l10n {
 
-// v13 "Companion" copy: clock, notes, translation, today, phone, display,
+// v13 "Companion" copy: clock, notes, today, phone, display,
 // software update and the assistant's action cards. Like Strings, a table of
 // `const char*` only (tests/unit/ui_assets_test.cpp checks every entry).
 struct CompanionStrings {
     // Apps and shared words
     const char* app_clock;
     const char* app_notes;
-    const char* app_translate;
     const char* app_today;
     const char* app_radio;
     const char* app_organizer;
@@ -186,16 +185,6 @@ struct CompanionStrings {
     const char* offline_brightness_format; // %d
     const char* offline_muted;
     const char* offline_unmuted;
-
-    // Translation: the prompts are shown in each person's own language.
-    const char* translate_title;
-    const char* translate_needs_voice;
-    const char* translate_failed;
-    const char* language_codes[6];   // el en de fr it es
-    const char* language_names[6];   // endonyms
-    const char* translate_tap[6];
-    const char* translate_listening[6];
-    const char* translate_working[6];
 
     // Today
     const char* greeting_morning;

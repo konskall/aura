@@ -14,9 +14,9 @@ SCREENS = (
     ("07", "clock-new"), ("08", "timer-new"), ("09", "alarm-new"),
     ("10", "reminder-new"), ("11", "clock-alert"), ("12", "notes"),
     ("13", "note-detail"), ("14", "note-record"), ("15", "briefing"),
-    ("16", "translate"), ("17", "always-on"), ("18", "phone-call"),
-    ("19", "notifications-phone"), ("20", "phone-notification"), ("21", "phone-link"),
-    ("22", "display-settings"), ("23", "update"),
+    ("16", "always-on"), ("17", "phone-call"), ("18", "notifications-phone"),
+    ("19", "phone-notification"), ("20", "phone-link"), ("21", "display-settings"),
+    ("22", "update"),
 )
 
 

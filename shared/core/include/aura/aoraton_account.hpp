@@ -168,7 +168,9 @@ std::string aoraton_pkce_verifier(IAoratonAccountCrypto& crypto);
 std::string aoraton_pkce_challenge(const std::string& verifier, IAoratonAccountCrypto& crypto);
 // RFC 3986 percent-encoding; only unreserved characters stay literal.
 std::string aoraton_url_encode(std::string_view value);
-std::string aoraton_authorize_url(const AoratonAccountConfig& config, const std::string& challenge);
+// `redirect_url`, when given, replaces the configured return address.
+std::string aoraton_authorize_url(const AoratonAccountConfig& config, const std::string& challenge,
+                                  const std::string& redirect_url = {});
 // `temp_aura` + 32 lowercase hex characters (the web client's temp_ prefix); empty on failure.
 std::string aoraton_new_client_message_id(IAoratonAccountCrypto& crypto);
 // A room's folder in the public `attachments` bucket: the lower-case hex

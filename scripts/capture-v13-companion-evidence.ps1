@@ -15,7 +15,7 @@ New-Item -ItemType Directory -Force -Path $screens | Out-Null
 $scenarios = @(
     'quick-actions','home-timer','transcribing','answer-action','voice-error','clock',
     'clock-new','timer-new','alarm-new','reminder-new','clock-alert','notes',
-    'note-detail','note-record','briefing','translate','always-on','phone-call',
+    'note-detail','note-record','briefing','always-on','phone-call',
     'notifications-phone','phone-notification','phone-link','display-settings','update'
 )
 foreach ($scenario in $scenarios) {

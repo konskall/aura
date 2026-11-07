@@ -2,7 +2,7 @@
 
 Status: **IMPLEMENTED IN THE SIMULATOR** (`scripts/test.ps1` green, see `docs/VERIFICATION.md`) · firmware adapters written, **not compiled** · physical board untested.
 
-The owner asked for every proposal from the v12 review: a real assistant (follow-ups, device knowledge, confirmed actions, voice), everyday tools (timers, alarms, reminders, voice notes, morning briefing, conversation translation) and board features (raise to wake, always-on clock, phone notifications, OTA, wake word). Decisions taken with the owner on 2026-10-22:
+The owner asked for every proposal from the v12 review: a real assistant (follow-ups, device knowledge, confirmed actions, voice), everyday tools (timers, alarms, reminders, voice notes, morning briefing) and board features (raise to wake, always-on clock, phone notifications, OTA, wake word). Decisions taken with the owner on 2026-10-22:
 
 - **AI provider:** Codex through the local bridge for now; a cloud API and a gateway come later. Nothing in this release contacts a paid API.
 - **Phone:** both platforms. The shared model, screens and the iPhone (ANCS) link are built; Android gets a written protocol for a companion app (`docs/phone/ANDROID_COMPANION.md`), not the app.
@@ -20,9 +20,9 @@ The owner asked for every proposal from the v12 review: a real assistant (follow
 
 | Layer | Pieces |
 |---|---|
-| Shared core | `text_util` (UTF-8 safe text, Greek folding, flat JSON, civil time), `assistant_companion` (memory, device context, action parser), `clock_services`, `notes`, `briefing`, `translation`, `display_power` (IMU gestures + screen power), `phone_link` (+ ANCS codec), `ota_update` (manifest, versions, install rule), `voice` (recorder, VAD, WAV) |
+| Shared core | `text_util` (UTF-8 safe text, Greek folding, flat JSON, civil time), `assistant_companion` (memory, device context, action parser), `clock_services`, `notes`, `briefing`, `display_power` (IMU gestures + screen power), `phone_link` (+ ANCS codec), `ota_update` (manifest, versions, install rule), `voice` (recorder, VAD, WAV) |
 | Shared UI | `aura_ui_companion.inl` (screens, included inside `AuraUi::Impl`) and `aura_ui_companion_api.inl` (apply_*), 19 new views, 13 new icon roles, `CompanionStrings` (el/en) |
-| Bridge | `turn-prompt.mjs` (validation and instructions for chat/translate), `speech.mjs` (whisper.cpp, Windows voices), `/v1/speech/transcribe`, `/v1/speech/synthesize`, speech health |
+| Bridge | `turn-prompt.mjs` (validation and instructions for chat), `speech.mjs` (whisper.cpp, Windows voices), `/v1/speech/transcribe`, `/v1/speech/synthesize`, speech health |
 | Simulator | `CompanionRuntime` (models, callbacks, persistence in `simulator/runtime/companion/`), `BridgeSpeechService`, `SdlVoiceCapture` (PC microphone, open only while recording), AURA LAB "Companion" controls |
 | Firmware | `aura_companion`: `Esp32Motion` (QMI8658), `Esp32PhoneLink` (NimBLE ANCS client), `Esp32Ota` (HTTPS manifest + streamed image, SHA-256, rollback), `Esp32Microphone` (ES7210), `Esp32CompanionStore` (microSD), `Esp32Companion` glue |
 
@@ -34,7 +34,6 @@ The owner asked for every proposal from the v12 review: a real assistant (follow
 - **Clock app:** timers (nine one-tap presets), alarms (hour/minute rollers, once or daily), reminders (text, then a time choice). Full-screen alert with pulsing ring and a repeating melody: C5–E5–G5–C6 bell notes every 2 s, starting at 30 % and reaching full loudness after 30 s (owner request 2026-10-24). New messages (Aoraton, phone, DEMO) get a soft two-note chime. It is skipped when the device is face down or muted, while something plays or rings, or while the microphone is open, and it sounds at most once every 3 s. Both sounds are synthesised in `shared/core/src/sounds.cpp`, so the simulator and the ESP32 play the same samples; «Τέλος», «Αναβολή 5 λεπτά» or «+1 λεπτό». Alarms missed for over an hour are not rung late; overdue reminders are.
 - **Notes:** typed or voice notes (WAV plus transcript), detail view with playback, two-tap delete. Stored locally (simulator runtime folder; device microSD).
 - **Today:** greeting by time of day, date, weather, next alarm, today's reminders, running timers, unread messages and phone notifications; tap a row to open it; read aloud when a voice exists. Opens by itself on the first wake each morning (05:00–11:59).
-- **Translation:** the device lies between two people; the top half is drawn upside down for the other person with their own microphone. Greek with English, German, French, Italian or Spanish; translations are spoken when a voice for that language exists (el and en on this PC).
 - **Display power:** active → dimmed (30 s) → always-on clock (or off). The always-on clock is dim and moves a few pixels each minute against burn-in. Since 2026-10-23 it is an ambient screen, approved by the owner, showing:
   - the weather: icon, temperature, city, and the day's high and low, labelled DEMO or cached when it is;
   - a faint halo in the colour of the sky behind the clock;
@@ -52,7 +51,7 @@ QMI8658 on the shared I2C bus (GPIO14/15, INT1 17, INT2 21), address 0x6B or 0x6
 
 ## Not in this release
 
-- A cloud AI gateway (provider, key custody, cost): on the device the assistant, recognition, spoken replies and translation stay unavailable until it exists.
+- A cloud AI gateway (provider, key custody, cost): on the device the assistant, recognition and spoken replies stay unavailable until it exists.
 - The Android companion app itself.
 - A trained wake-word model; signed images / secure boot for OTA (the manifest hash and HTTPS are the current guard).
 - RTC alarms that wake the board from deep sleep (no deep-sleep design yet).

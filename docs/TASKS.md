@@ -19,8 +19,8 @@
 
 ## Pending gates
 
-- [x] The device's own assistant (the owner's choice, 2026-11-05; ADR 0009): Groq listens and answers, Azure speaks, keys sent from the PC into encrypted NVS (`scripts/send-device-keys.ps1`). Spoken questions and replies are wired; translation on the device and confirming the model's actions on the device are still to do.
-- [ ] Translation on the device through the same services, and confirming the model's proposed actions on the device.
+- [x] The device's own assistant (the owner's choice, 2026-11-05; ADR 0009): Groq listens and answers, Azure speaks, keys sent from the PC into encrypted NVS (`scripts/send-device-keys.ps1`). Spoken questions and replies are wired; confirming the model's actions on the device is still to do.
+- [ ] Confirming the model's proposed actions on the device.
 - [ ] Build the AURA Link Android app and the device-side GATT server (`docs/phone/ANDROID_COMPANION.md`).
 - [ ] Train and license a Greek wake-word model for «Αύρα» (ESP-SR WakeNet, openWakeWord or microWakeWord); measure false accepts/rejects and battery cost before enabling the existing capability.
 - [x] Signed updates in code (2026-11-05): the manifest carries the owner's ECDSA P-256 signature (`scripts/update-signing.mjs`); production adds Secure Boot V2.

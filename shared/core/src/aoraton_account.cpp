@@ -170,10 +170,11 @@ std::string aoraton_url_encode(std::string_view value) {
     return out;
 }
 
-std::string aoraton_authorize_url(const AoratonAccountConfig& config, const std::string& challenge) {
+std::string aoraton_authorize_url(const AoratonAccountConfig& config, const std::string& challenge,
+                                  const std::string& redirect_url) {
     return trim_base(config.base_url) + "/auth/v1/authorize?provider=google&redirect_to=" +
-           aoraton_url_encode(config.redirect_url) + "&code_challenge=" + aoraton_url_encode(challenge) +
-           "&code_challenge_method=s256";
+           aoraton_url_encode(redirect_url.empty() ? config.redirect_url : redirect_url) +
+           "&code_challenge=" + aoraton_url_encode(challenge) + "&code_challenge_method=s256";
 }
 
 std::string aoraton_sha256_hex(const std::string& text, IAoratonAccountCrypto& crypto) {

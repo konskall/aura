@@ -274,7 +274,7 @@ void AoratonAccountWorker::begin_sign_in() {
     const std::string challenge = aoraton_pkce_challenge(verifier_, account_crypto_);
     AoratonEvent event;
     if (verifier_.empty() || challenge.empty() || config_.base_url.empty() ||
-        !channel_.open(aoraton_authorize_url(config_, challenge))) {
+        !channel_.open(aoraton_authorize_url(config_, challenge, channel_.redirect_url()))) {
         wipe(verifier_);
         event.type = AoratonEventType::PairingFailed;
         event.error = "SIGN_IN_UNAVAILABLE";

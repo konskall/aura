@@ -25,7 +25,7 @@ export const supportedEventTypes = Object.freeze([
   // v13 companion (DEMO stand-ins for hardware and phone input)
   'timer_start', 'alarm_soon', 'reminder_soon', 'briefing', 'imu', 'display_sleep',
   'phone_notification', 'phone_call', 'phone_call_end', 'phone_clear', 'phone_pair',
-  'update_available', 'translate_text', 'note_text',
+  'update_available', 'note_text',
 ]);
 const allowedTypes = new Set(supportedEventTypes);
 

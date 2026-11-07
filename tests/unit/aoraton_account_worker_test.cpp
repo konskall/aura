@@ -394,8 +394,10 @@ public:
         return AoratonCallbackStatus::Pending;
     }
     void close() override { opened = false; }
+    std::string redirect_url() const override { return redirect; }
     std::string url;
     std::string code;
+    std::string redirect;  // the device's phone way: its own LAN address
     bool opened{false};
 };
 
@@ -884,6 +886,30 @@ int main() {
         rig.pump();
         expect(!rig.realtime.enabled && rig.realtime.token.empty() && !rig.service.snapshot().realtime_active,
                "sign-out stops subscriptions and erases the adapter token");
+    }
+
+    // sign_in_return_address: the device's phone way returns Google's page to the
+    // device's own LAN address; without one, to the configured (PC loopback) one.
+    {
+        Rig rig;
+        rig.worker.start(rig.now_ms, 1792760000);
+        rig.pump();
+        rig.channel.redirect = "http://192.168.1.23:8788/aoraton/callback?s=AbCdEfGhIjKlMnOpQrStUv";
+        expect(rig.service.begin_pairing(), "a phone sign-in starts");
+        rig.pump();
+        expect(rig.channel.url.find("&redirect_to=http%3A%2F%2F192.168.1.23%3A8788%2Faoraton%2Fcallback%3Fs%3D"
+                                    "AbCdEfGhIjKlMnOpQrStUv&code_challenge=") != std::string::npos,
+               "the phone's sign-in returns to the device's own address");
+    }
+    {
+        Rig rig;
+        rig.worker.start(rig.now_ms, 1792760000);
+        rig.pump();
+        expect(rig.service.begin_pairing(), "a PC sign-in starts");
+        rig.pump();
+        expect(rig.channel.url.find("&redirect_to=http%3A%2F%2F127.0.0.1%3A4779%2Faoraton%2Fcallback&code_challenge=") !=
+                   std::string::npos,
+               "without one, the sign-in returns to the configured address");
     }
 
     // sign_in_happy_path, rooms_overview_and_locked_room, unlock_vault_then_rooms_unlocked

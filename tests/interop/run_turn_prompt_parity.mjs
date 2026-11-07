@@ -21,8 +21,6 @@ const turns = [
     history: [{ q: 'Hi', a: 'Hello!' }, { q: 'Και αύριο;', a: 'Βροχή.\tΚρύο.' }],
   },
   { prompt: 'Βρες μου ένα εστιατόριο', web_search: true, context: 'Τοποθεσία: Αθήνα' },
-  { mode: 'translate', prompt: 'Καλημέρα, τι κάνεις;', source: 'el', target: 'en' },
-  { mode: 'translate', prompt: 'Guten Morgen', source: 'de', target: 'fr' },
 ];
 
 const directory = mkdtempSync(join(tmpdir(), 'aura-turn-prompt-'));

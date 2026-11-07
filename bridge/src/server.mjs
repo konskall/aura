@@ -64,7 +64,7 @@ export function createBridgeServer(options = {}) {
   const serviceToken = options.token ?? token;
   const fuelFile = options.fuelFile ?? fileURLToPath(new URL('../runtime/fuel-prices.json', import.meta.url));
   const fuelReader = options.fuelReader ?? (() => readFuelSnapshot(fuelFile));
-  // Running turns by id: { controller, lane }. The lane is the turn's mode.
+  // Running turns by id: { controller }.
   const active = new Map();
   const speechJobs = new Set();
   let speechTail = Promise.resolve();
@@ -145,20 +145,17 @@ export function createBridgeServer(options = {}) {
           send(response, 409, { ok: false, code: 'BUSY' });
           return;
         }
-        // One turn per lane: a new question replaces the one still running
-        // (the client's cancel for it may not have arrived yet), and a
-        // translation runs beside a chat question.
-        const lane = turn.value.mode;
+        // One turn at a time: a new question replaces the one still running
+        // (the client's cancel for it may not have arrived yet).
         for (const [id, running] of active) {
-          if (running.lane !== lane) continue;
           running.controller.abort();
           active.delete(id);
         }
         const controller = new AbortController();
-        active.set(body.id, { controller, lane });
+        active.set(body.id, { controller });
         const started = Date.now();
         // Sizes and counts only: no prompt, history or device facts are logged.
-        console.log(JSON.stringify({ event: 'turn_started', id: body.id, mode: turn.value.mode,
+        console.log(JSON.stringify({ event: 'turn_started', id: body.id,
           promptBytes: Buffer.byteLength(turn.value.prompt), historyTurns: turn.value.history?.length ?? 0,
           contextBytes: Buffer.byteLength(turn.value.context ?? '') }));
         // A provider without a search tool still answers: the model is told it

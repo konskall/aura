@@ -46,13 +46,18 @@ public:
 enum class AoratonCallbackStatus { Pending, Received, Failed };
 
 // The platform's way back from the Google sign-in page: the simulator opens
-// the PC browser and listens on 127.0.0.1; a phone could do the same later.
+// the PC browser and listens on 127.0.0.1; the device hands the page to the
+// owner's PC or phone (AoratonDeviceLink).
 class IAoratonSignInChannel {
 public:
     virtual ~IAoratonSignInChannel() = default;
     virtual bool open(const std::string& authorize_url) = 0;
     virtual AoratonCallbackStatus poll(std::string& code) = 0;
     virtual void close() = 0;
+    // Where Google's page returns, asked as each sign-in starts. Empty: the
+    // configured address (the PC's loopback). The device's phone way returns
+    // to the device's own address on the owner's Wi-Fi.
+    virtual std::string redirect_url() const { return {}; }
 };
 
 struct AoratonStoredSecrets {

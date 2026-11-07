@@ -1,6 +1,8 @@
 #include "aura/aoraton_device_link.hpp"
 #include "aura/aoraton_real.hpp"
 
+#include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -197,6 +199,126 @@ int main() {
         aura::AoratonDeviceLink test_link([](const aura::AoratonLinkConfig&) { return true; }, true);
         expect(test_link.configure(loopback) && test_link.open(authorize), "a test's link takes it");
         test_link.close();
+    }
+
+    {
+        // The phone's way (no PC): the device's own transfer server sends the
+        // phone to Google's page and takes the code back over the owner's Wi-Fi.
+        using aura::AoratonPhoneAnswer;
+        using aura::AoratonPhonePage;
+        const auto bytes = [](int step, int start) {
+            std::array<std::uint8_t, 16> value{};
+            for (std::size_t index = 0; index < value.size(); ++index)
+                value[index] = static_cast<std::uint8_t>((static_cast<int>(index) * step + start) & 0xFF);
+            return value;
+        };
+        const std::string origin = "http://192.168.1.23:8788";
+        const std::string nonce = "AxQlNkdYaXqLnK2-z-DxAg";  // base64url of bytes(17, 3)
+        const std::string wrong = "AAAAAAAAAAAAAAAAAAAAAA";
+        const std::string code_value = "de300000-0000-4000-8000-00000000c0de";
+        std::string url;
+        std::string code;
+        aura::AoratonDeviceLink phone([](const aura::AoratonLinkConfig&) { return true; });
+        expect(!phone.request_phone_sign_in(origin, bytes(17, 3)), "no phone sign-in before the configuration");
+        expect(phone.configure(config(kUrl, anon_key())), "the project's settings");
+        expect(!phone.request_phone_sign_in("http://8.8.8.8:8788", bytes(17, 3)) &&
+                   !phone.request_phone_sign_in("https://192.168.1.23:8788", bytes(17, 3)) &&
+                   !phone.request_phone_sign_in("http://192.168.1.23:8788/x", bytes(17, 3)) &&
+                   !phone.request_phone_sign_in("http://192.168.1.23", bytes(17, 3)) &&
+                   !phone.request_phone_sign_in("http://192.168.1.23:0", bytes(17, 3)) &&
+                   !phone.request_phone_sign_in("http://192.168.1.23:65536", bytes(17, 3)) &&
+                   !phone.request_phone_sign_in("http://192.168.1:8788", bytes(17, 3)) &&
+                   !phone.request_phone_sign_in("http://127.0.0.1:8788", bytes(17, 3)),
+               "only the device's own address on a private network");
+        expect(phone.phone_url().empty() && phone.redirect_url().empty() && !phone.take_sign_in_request(),
+               "nothing was asked for");
+        expect(phone.phone_page(nonce, url) == AoratonPhonePage::Gone, "no phone sign-in: no page");
+
+        expect(phone.request_phone_sign_in(origin, bytes(17, 3)), "a phone sign-in");
+        expect(phone.phone_url() == origin + "/aoraton/phone?s=" + nonce,
+               "the QR's address carries a 22-character secret");
+        expect(phone.redirect_url() == origin + "/aoraton/callback?s=" + nonce, "Google's page returns to the device");
+        expect(phone.take_sign_in_request(), "the account is asked to start it");
+        expect(phone.phone_page(nonce, url) == AoratonPhonePage::Wait && url.empty(),
+               "until the account has Google's page, the phone waits");
+        expect(phone.open(kAuthorize), "the account opens its sign-in");
+        expect(phone.phone_page(nonce, url) == AoratonPhonePage::Google && url == kAuthorize,
+               "then the phone goes to Google's page");
+        expect(phone.status().state == AoratonLinkState::Waiting && phone.status().authorize_url.empty(),
+               "a PC helper does not get a phone's sign-in");
+        expect(phone.phone_page(wrong, url) == AoratonPhonePage::Gone && url.empty(), "a wrong link shows nothing");
+        expect(phone.phone_answer(wrong, code_value, false) == AoratonPhoneAnswer::Gone &&
+                   phone.poll(code) == AoratonCallbackStatus::Pending,
+               "nor takes a code");
+        expect(phone.phone_answer(nonce, code_value, false) == AoratonPhoneAnswer::Taken, "the code comes back");
+        expect(phone.phone_answer(nonce, code_value, false) == AoratonPhoneAnswer::Gone, "once");
+        expect(phone.poll(code) == AoratonCallbackStatus::Received && code == code_value, "the account takes it");
+        expect(phone.phone_url().empty() && phone.redirect_url().empty() &&
+                   phone.phone_page(nonce, url) == AoratonPhonePage::Gone,
+               "then the link is spent");
+
+        // Google's page declined, or a code of the wrong shape: the sign-in ends.
+        expect(phone.request_phone_sign_in(origin, bytes(29, 7)) && phone.take_sign_in_request() &&
+                   phone.open(kAuthorize),
+               "a second phone sign-in");
+        expect(phone.phone_answer("ByRBXnuYtdLvDClGY4Cdug", "", true) == AoratonPhoneAnswer::Refused &&
+                   phone.poll(code) == AoratonCallbackStatus::Failed && code.empty() && phone.phone_url().empty(),
+               "declined on the phone: the account is told");
+        expect(phone.request_phone_sign_in(origin, bytes(29, 7)) && phone.take_sign_in_request() &&
+                   phone.open(kAuthorize) &&
+                   phone.phone_answer("ByRBXnuYtdLvDClGY4Cdug", "bad code!", false) == AoratonPhoneAnswer::Refused &&
+                   phone.poll(code) == AoratonCallbackStatus::Failed,
+               "a malformed code ends it too");
+
+        // Guessing: eight wrong links close the sign-in.
+        expect(phone.request_phone_sign_in(origin, bytes(31, 11)) && phone.take_sign_in_request() &&
+                   phone.open(kAuthorize),
+               "a third phone sign-in");
+        for (unsigned miss = 0; miss < aura::AoratonDeviceLink::kMaxPhoneMisses; ++miss) phone.phone_page(wrong, url);
+        expect(phone.phone_page("CypJaIemxeQDIkFgf5693A", url) == AoratonPhonePage::Gone &&
+                   phone.poll(code) == AoratonCallbackStatus::Failed && phone.phone_url().empty(),
+               "after eight wrong links the sign-in is closed and the account told");
+
+        // A new tap replaces the QR, even across the account's restart (close, then
+        // open); the PC's request ends a phone's.
+        expect(phone.request_phone_sign_in(origin, bytes(17, 3)) && phone.take_sign_in_request() &&
+                   phone.open(kAuthorize),
+               "a phone sign-in");
+        expect(phone.request_phone_sign_in(origin, bytes(37, 13)) && phone.take_sign_in_request(), "tapped again");
+        phone.close();
+        expect(phone.redirect_url() == origin + "/aoraton/callback?s=DTJXfKHG6xA1Wn-kye4TOA" && phone.open(kAuthorize),
+               "the new secret survives the restart");
+        expect(phone.phone_page(nonce, url) == AoratonPhonePage::Gone &&
+                   phone.phone_page("DTJXfKHG6xA1Wn-kye4TOA", url) == AoratonPhonePage::Google,
+               "only the newest QR works");
+        expect(phone.request_sign_in() && phone.redirect_url().empty() && phone.phone_url().empty() &&
+                   phone.phone_page("DTJXfKHG6xA1Wn-kye4TOA", url) == AoratonPhonePage::Gone,
+               "the PC's request ends the phone's");
+        phone.close();
+        expect(phone.take_sign_in_request(), "and the PC's sign-in starts");
+
+        // The owner stops: before the account started it, and while it waits. The
+        // account's own timeout (close) ends it as well.
+        expect(phone.request_phone_sign_in(origin, bytes(17, 3)), "a phone sign-in");
+        phone.cancel_phone_sign_in();
+        expect(!phone.take_sign_in_request() && phone.phone_url().empty(), "stopped before it started");
+        expect(phone.request_phone_sign_in(origin, bytes(17, 3)) && phone.take_sign_in_request() &&
+                   phone.open(kAuthorize),
+               "a phone sign-in");
+        phone.cancel_phone_sign_in();
+        expect(phone.poll(code) == AoratonCallbackStatus::Failed && phone.phone_url().empty(),
+               "stopped while waiting: the account is told");
+        expect(phone.request_phone_sign_in(origin, bytes(17, 3)) && phone.take_sign_in_request() &&
+                   phone.open(kAuthorize),
+               "a phone sign-in");
+        phone.close();
+        expect(phone.phone_url().empty() && phone.phone_page(nonce, url) == AoratonPhonePage::Gone,
+               "the account's timeout ends it");
+
+        aura::AoratonDeviceLink test_link([](const aura::AoratonLinkConfig&) { return true; }, true);
+        expect(test_link.configure(config("http://127.0.0.1:47123", anon_key())) &&
+                   test_link.request_phone_sign_in("http://127.0.0.1:47124", bytes(17, 3)),
+               "a test's link takes a loopback transfer server");
     }
 
     std::cout << "aoraton device link tests passed\n";

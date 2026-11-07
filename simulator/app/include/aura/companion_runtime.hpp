@@ -19,7 +19,6 @@
 #include "aura/file_transfer_runtime.hpp"
 #include "aura/provider.hpp"
 #include "aura/sounds.hpp"
-#include "aura/translation.hpp"
 #include "aura/voice.hpp"
 #include "aura/weather.hpp"
 #include "aura/windows_audio_backend.hpp"
@@ -60,8 +59,6 @@ struct CompanionContext {
     std::function<void(std::uint32_t uid, bool positive)> on_phone_action;
     std::function<void()> on_phone_pair;
     std::function<void()> on_phone_forget;
-    // Translations use a provider of their own, so they never cancel a turn.
-    std::function<std::unique_ptr<IAssistantProvider>()> make_translator;
     bool deterministic{false};
     std::string store_dir;
     // The Aoraton device mode's link: File transfer then serves the PC helper's
@@ -69,8 +66,8 @@ struct CompanionContext {
     IAoratonLinkEndpoint* aoraton_link{nullptr};
 };
 
-// The v13 "Companion" half of the simulator: clock, notes, translation,
-// display power, phone link (DEMO), software update (DEMO), conversation memory
+// The v13 "Companion" half of the simulator: clock, notes, display power,
+// phone link (DEMO), software update (DEMO), conversation memory
 // and real voice through the PC microphone and the loopback bridge.
 class CompanionRuntime {
 public:
@@ -122,7 +119,6 @@ public:
     PhotoModel& photos() noexcept { return photos_->model(); }
     FileTransferRuntime& transfer() noexcept { return *transfer_; }
     OrganizerModel& organizer() noexcept { return organizer_; }
-    TranslationModel& translation() noexcept { return translation_; }
     PhoneNotificationModel& phone() noexcept { return phone_; }
     OtaUpdateModel& ota() noexcept { return ota_; }
     DisplayPowerModel& display() noexcept { return display_; }
@@ -155,19 +151,18 @@ private:
     std::uint64_t transfer_removal_revision_{0};
     bool transfer_removals_pending_{false};
     bool transfer_photos_pending_{false};
-    enum class VoiceJob { None, Assistant, Note, Translate, Message };
+    enum class VoiceJob { None, Assistant, Note, Message };
     enum class ListenOrigin { Manual, FollowUp, BargeIn };
 
     std::int64_t now_minute() const;
     void bump_voice() { ++voice_.sequence; }
     void bump_extras() { ++extras_.sequence; }
-    bool begin_voice(VoiceJob job, TranslateSide side, ListenOrigin origin = ListenOrigin::Manual);
+    bool begin_voice(VoiceJob job, ListenOrigin origin = ListenOrigin::Manual);
     bool begin_automatic_listening(ListenOrigin origin);
     void finish_voice();
-    // Recognition for the assistant or a translation (voice notes have their own).
+    // Recognition for the assistant (voice notes have their own).
     void transcribe(std::vector<std::uint8_t> wav, const std::string& language, VoiceJob job);
     void deliver_transcript(VoiceJob job, TranscriptResult result);
-    void translate(std::uint32_t entry, const std::string& text);
     bool speak(const std::string& text, const std::string& language);
     void stop_speech();
     void pump_speech();
@@ -192,7 +187,6 @@ private:
     ClockServicesModel clock_;
     NotesModel notes_;
     OrganizerModel organizer_;
-    TranslationModel translation_;
     PhoneNotificationModel phone_;
     OtaUpdateModel ota_{"13.0.0"};
     DisplayPowerModel display_;
@@ -203,7 +197,6 @@ private:
     AcousticEchoCanceller barge_aec_;
     SdlVoiceCapture capture_;
     std::shared_ptr<BridgeSpeechService> speech_;
-    std::unique_ptr<IAssistantProvider> translator_;
     VoiceSnapshot voice_{};
     AssistantExtras extras_{};
     CompanionCapabilities capabilities_{};
@@ -215,8 +208,6 @@ private:
     VoiceJob job_{VoiceJob::None};
     ListenOrigin listen_origin_{ListenOrigin::Manual};
     bool barge_monitoring_{false};
-    TranslateSide translate_side_{TranslateSide::Mine};
-    std::uint32_t translate_entry_{0};
 
     std::optional<std::future<TranscriptResult>> transcript_;
     VoiceJob transcript_job_{VoiceJob::None};
@@ -231,12 +222,9 @@ private:
         std::string language;
     };
     std::deque<PendingSpeech> speech_queue_;
-    std::optional<std::future<AssistantReply>> translation_reply_;
-    std::uint32_t translation_entry_{0};
     std::optional<std::future<void>> health_;
     std::vector<std::future<TranscriptResult>> retired_transcripts_;
     std::vector<std::future<SpeechResult>> retired_speech_;
-    std::vector<std::future<AssistantReply>> retired_translations_;
     bool voice_turn_{false};
     bool private_message_turn_{false};
     std::string streamed_spoken_prefix_;

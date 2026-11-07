@@ -31,7 +31,6 @@ idf_component_register(
         "${AURA_ROOT}/shared/core/src/ota_update.cpp"
         "${AURA_ROOT}/shared/core/src/phone_link.cpp"
         "${AURA_ROOT}/shared/core/src/text_util.cpp"
-        "${AURA_ROOT}/shared/core/src/translation.cpp"
         "${AURA_ROOT}/shared/core/src/voice.cpp"
         "${AURA_ROOT}/shared/core/src/aoraton_crypto.cpp"
         "${AURA_ROOT}/shared/core/src/aoraton_real.cpp"

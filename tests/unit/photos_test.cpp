@@ -222,7 +222,7 @@ int main() {
     LauncherLayoutModel layout;
     expect(
         layout.restore(
-            "AURA_APP_LAYOUT_V1\nweather\nconversation\nmessages\nclock\nnotes\ntranslate\ntoday\nradio\nnotifications\nsettings\norganizer\n") &&
+            "AURA_APP_LAYOUT_V1\nweather\nconversation\nmessages\nclock\nnotes\ntoday\nradio\nnotifications\nsettings\norganizer\n") &&
             layout.snapshot().order.front() == LauncherApp::Weather &&
             layout.snapshot().order.back() == LauncherApp::Photos,
         "existing owner launcher order migrates with Photos appended");

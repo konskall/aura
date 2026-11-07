@@ -3,6 +3,7 @@
 #include "aura/aoraton.hpp"
 #include "aura/aoraton_account_worker.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -46,6 +47,13 @@ struct AoratonLinkStatus {
     std::string error;          // an error code, only when Failed
 };
 
+// What GET /aoraton/phone (the QR's address) shows the owner's phone:
+// Google's page once the device's sign-in has it, a short wait before that,
+// nothing for a stale or wrong link.
+enum class AoratonPhonePage { Gone, Wait, Google };
+// What became of the answer Google's page sent back to the device.
+enum class AoratonPhoneAnswer { Gone, Taken, Refused };
+
 // The calls the file-transfer server makes for POST /api/aoraton/*. Each
 // returns at once; the server already checked the signed-in session.
 class IAoratonLinkEndpoint {
@@ -57,17 +65,36 @@ public:
     // `cancelled` reports the browser's refusal; then `code` is empty.
     virtual bool deliver(const std::string& code, bool cancelled) = 0;
     virtual bool add_invite(const std::string& invite) = 0;
+    // The phone's way (no PC): GET /aoraton/phone?s=<secret> and
+    // GET /aoraton/callback?s=<secret>&code=... (or &error=...). There is no
+    // PIN on these: the secret in the QR stands in for it.
+    virtual AoratonPhonePage phone_page(std::string_view secret, std::string& authorize_url) {
+        (void)secret;
+        authorize_url.clear();
+        return AoratonPhonePage::Gone;
+    }
+    virtual AoratonPhoneAnswer phone_answer(std::string_view secret, const std::string& code, bool refused) {
+        (void)secret;
+        (void)code;
+        (void)refused;
+        return AoratonPhoneAnswer::Gone;
+    }
 };
 
-// The device cannot show Google's sign-in page, so the owner's PC relays it
-// (ADR 0010): scripts/aoraton-device-sign-in.mjs reads the authorize URL over
-// the signed-in file-transfer session, opens it in the PC browser, receives
-// the code on 127.0.0.1 and hands it back. The PKCE verifier, the session and
-// the room keys never leave the device. Thread-safe: the transfer server, the
-// UI thread and the account worker all call it.
+// The device cannot show Google's sign-in page, so the owner's PC or phone
+// does (ADR 0010). The PC: scripts/aoraton-device-sign-in.mjs reads the
+// authorize URL over the signed-in file-transfer session, opens it in the PC
+// browser, receives the code on 127.0.0.1 and hands it back. The phone: it
+// scans the device's QR, the device's transfer server sends it on to Google's
+// page, and Google's page returns it, with the code, to that server over the
+// owner's Wi-Fi. The PKCE verifier, the session and the room keys never leave
+// the device. Thread-safe: the transfer server, the UI thread and the account
+// worker all call it.
 class AoratonDeviceLink final : public IAoratonLinkEndpoint, public IAoratonSignInChannel {
 public:
     static constexpr std::size_t kMaxInvites = 4;
+    // Wrong secrets a phone sign-in survives before it is closed.
+    static constexpr unsigned kMaxPhoneMisses = 8;
     using ConfigSink = std::function<bool(const AoratonLinkConfig&)>;
 
     explicit AoratonDeviceLink(ConfigSink config_sink, bool allow_loopback = false);
@@ -81,6 +108,19 @@ public:
     AoratonLinkStatus status() const override;
     bool deliver(const std::string& code, bool cancelled) override;
     bool add_invite(const std::string& invite) override;
+    AoratonPhonePage phone_page(std::string_view secret, std::string& authorize_url) override;
+    AoratonPhoneAnswer phone_answer(std::string_view secret, const std::string& code, bool refused) override;
+
+    // The phone's way (the UI thread). `origin` is the device's transfer
+    // server, http://<private IPv4>:<port>; `random` makes the QR's secret.
+    // The QR shows phone_url(); Google's page returns to
+    // <origin>/aoraton/callback?s=<secret>. A new request replaces the last
+    // one and the PC's request_sign_in() ends it. False: not configured, or
+    // not such an address.
+    bool request_phone_sign_in(const std::string& origin, const std::array<std::uint8_t, 16>& random);
+    std::string phone_url() const;  // empty unless a phone sign-in is on
+    // The owner stopped (File transfer closed): the account is told at once.
+    void cancel_phone_sign_in();
 
     // The UI thread: take the PC's requests and report the account's state
     // after each snapshot. The caller wipes a taken invite.
@@ -92,10 +132,14 @@ public:
     bool open(const std::string& authorize_url) override;
     AoratonCallbackStatus poll(std::string& code) override;
     void close() override;
+    std::string redirect_url() const override;
 
 private:
     enum class Answer { None, Code, Refused };
     void clear_answer_locked() noexcept;
+    bool phone_secret_matches_locked(std::string_view secret);
+    void stop_phone_locked() noexcept;
+    void end_phone_locked() noexcept;
 
     ConfigSink config_sink_;
     bool allow_loopback_{false};
@@ -109,6 +153,15 @@ private:
     AoratonPairingState pairing_{AoratonPairingState::NotPaired};
     std::string error_;
     std::deque<std::string> invites_;
+    // A phone sign-in: the transfer server's origin and the QR's secret (both
+    // empty when there is none); `phone_open_` once the account opened it.
+    std::string phone_origin_;
+    std::string phone_secret_;
+    bool phone_open_{false};
+    unsigned phone_misses_{0};
+    // A phone sign-in stopped after the account took the request but before it
+    // opened: that opening is refused at once.
+    bool refuse_next_open_{false};
 };
 
 // The UI thread's share, once per frame, on the device and in the simulator's

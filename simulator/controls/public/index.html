@@ -128,7 +128,7 @@
         <button data-event="ui_view" data-value="notifications">Notifications</button>
         <button data-event="ui_view" data-value="briefing">Σήμερα</button><button data-event="ui_view" data-value="weather">Καιρός</button>
         <button data-event="ui_view" data-value="radio">Ραδιόφωνο</button><button data-event="ui_view" data-value="clock">Ρολόι</button>
-        <button data-event="ui_view" data-value="notes">Σημειώσεις</button><button data-event="ui_view" data-value="translate">Μετάφραση</button>
+        <button data-event="ui_view" data-value="notes">Σημειώσεις</button>
         <button data-event="ui_view" data-value="aoraton">Aoraton</button><button data-event="ui_view" data-value="phone">Τηλέφωνο</button>
         <button data-event="ui_view" data-value="settings">Ρυθμίσεις</button><button data-event="ui_view" data-value="language">Γλώσσα</button>
         <button data-event="ui_view" data-value="weather-settings">Ρυθμίσεις καιρού</button><button data-event="ui_view" data-value="weather-location">Πόλη καιρού</button>
@@ -183,7 +183,7 @@
       <div class="row"><button data-event="imu" data-value="raise">IMU raise</button><button data-event="imu" data-value="face_down">Face down</button><button data-event="imu" data-value="face_up">Face up</button><button data-event="display_sleep">Display sleep</button></div>
       <label class="field">Δοκιμαστικό περιεχόμενο<input id="companionText" value="WhatsApp|Μαρία|Θα αργήσω 10 λεπτά" maxlength="600"></label>
       <div class="row"><button class="primary" id="phoneNotification">iPhone notification · DEMO</button><button id="phoneCall">Incoming call · DEMO</button><button data-event="phone_call_end">End call</button><button data-event="phone_clear">Clear phone</button><button data-event="phone_pair">Pair phone · DEMO</button></div>
-      <div class="row"><button id="translateMine">Translate mine</button><button id="translateTheirs">Translate theirs</button><button id="noteText">Νέα σημείωση</button><button data-event="update_available">Update available · DEMO</button></div>
+      <div class="row"><button id="noteText">Νέα σημείωση</button><button data-event="update_available">Update available · DEMO</button></div>
       <p class="hint">Τα παραπάνω είναι σαφώς επισημασμένα inputs προσομοίωσης. Το πραγματικό ANCS χρησιμοποιείται μόνο όταν ο simulator ξεκινήσει με -EnableIphoneAncs.</p>
     </section>
 
@@ -277,8 +277,6 @@
   const companionText=()=>document.querySelector('#companionText').value;
   document.querySelector('#phoneNotification').onclick=()=>send('phone_notification',companionText());
   document.querySelector('#phoneCall').onclick=()=>send('phone_call',companionText().split('|')[1]||companionText());
-  document.querySelector('#translateMine').onclick=()=>send('translate_text','mine|'+companionText());
-  document.querySelector('#translateTheirs').onclick=()=>send('translate_text','theirs|'+companionText());
   document.querySelector('#noteText').onclick=()=>send('note_text',companionText());
   document.querySelector('#clearLog').onclick=()=>{ eventCount=0; log.textContent='Δεν έχει σταλεί συμβάν σε αυτή τη συνεδρία.'; document.querySelector('#eventCount').textContent='0 events'; };
   document.querySelectorAll('textarea,input').forEach(input=>input.addEventListener('keydown',event=>{

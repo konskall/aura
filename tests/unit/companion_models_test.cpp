@@ -9,7 +9,6 @@
 #include "aura/runtime_metrics.hpp"
 #include "aura/sounds.hpp"
 #include "aura/text_util.hpp"
-#include "aura/translation.hpp"
 #include "aura/voice.hpp"
 
 #include <algorithm>
@@ -512,21 +511,6 @@ void briefing_tests() {
                                      [](const BriefingItem& value) { return value.kind == BriefingItemKind::Timers; });
     expect(timers != timer_briefing.items.end() && timers->count == 2 && timers->value == 60 && timers->text == "Αυγά",
            "the briefing names the timer that ends first");
-}
-
-void translation_tests() {
-    using namespace aura;
-    TranslationModel model;
-    const auto id = model.begin(TranslateSide::Mine);
-    model.set_source(id, "Πού είναι ο σταθμός;");
-    model.complete(id, "Where is the station?");
-    expect(model.find(id)->status == TranslationStatus::Ready, "a translation completes");
-    expect(model.source_language(TranslateSide::Theirs) == "en" && model.target_language(TranslateSide::Theirs) == "el",
-           "the other side speaks the other language");
-    expect(!model.set_their_language("xx") && model.set_their_language("de") && model.snapshot().entries.empty(),
-           "changing the language starts a new conversation");
-    for (int index = 0; index < 9; ++index) model.begin(TranslateSide::Theirs);
-    expect(model.snapshot().entries.size() == TranslationModel::kMaxEntries, "translation history is bounded");
 }
 
 void motion_tests() {
@@ -1111,7 +1095,6 @@ int main() {
     notes_tests();
     assistant_tests();
     briefing_tests();
-    translation_tests();
     motion_tests();
     phone_tests();
     ota_tests();

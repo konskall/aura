@@ -19,7 +19,6 @@
 #include "aura/radio.hpp"
 #include "aura/sounds.hpp"
 #include "aura/text_util.hpp"
-#include "aura/translation.hpp"
 #include "aura/voice.hpp"
 #include "aura/weather.hpp"
 #include "aura/wifi.hpp"
@@ -74,7 +73,6 @@ enum class UiView {
     NoteDetail,
     NoteRecord,
     Briefing,
-    Translate,
     AlwaysOn,
     PhoneCall,
     PhoneNotification,
@@ -228,9 +226,6 @@ struct AuraUiCallbacks {
     std::function<bool(const std::string& text)> on_organizer_shopping_add;
     std::function<void(OrganizerKind kind, std::uint32_t id)> on_organizer_toggle;
     std::function<void(OrganizerKind kind, std::uint32_t id)> on_organizer_remove;
-    std::function<bool(TranslateSide side)> on_translate_record;
-    std::function<void()> on_translate_stop;
-    std::function<void(const std::string& language)> on_translate_language;
     std::function<void()> on_briefing_open;
     std::function<void(const DisplaySettings& settings)> on_display_settings;
     std::function<void()> on_wake;
@@ -271,7 +266,6 @@ public:
     void apply_notes(const NotesSnapshot& snapshot);
     void apply_organizer(const OrganizerSnapshot& snapshot);
     void apply_voice(const VoiceSnapshot& snapshot);
-    void apply_translation(const TranslationSnapshot& snapshot);
     void apply_phone(const PhoneSnapshot& snapshot);
     void apply_update(const UpdateSnapshot& snapshot);
     void apply_display(const DisplaySnapshot& snapshot);

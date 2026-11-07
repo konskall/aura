@@ -4062,7 +4062,6 @@ struct AuraUi::Impl {
             case UiView::NoteDetail:
             case UiView::NoteRecord:
             case UiView::Briefing:
-            case UiView::Translate:
             case UiView::AlwaysOn:
             case UiView::PhoneCall:
             case UiView::PhoneNotification:

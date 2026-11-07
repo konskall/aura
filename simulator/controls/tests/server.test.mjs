@@ -35,7 +35,7 @@ test('accepts known bounded events', () => {
 test('accepts the v13 companion stand-ins', () => {
   for (const type of ['timer_start', 'alarm_soon', 'reminder_soon', 'briefing', 'imu', 'display_sleep',
     'phone_notification', 'phone_call', 'phone_call_end', 'phone_clear', 'phone_pair', 'update_available',
-    'translate_text', 'note_text']) {
+    'note_text']) {
     assert.equal(validateEvent({ type, payload: 'DEMO' })?.type, type);
   }
   assert.deepEqual(validateEvent({ type: 'imu', payload: 'face_down' }), { type: 'imu', payload: 'face_down' });

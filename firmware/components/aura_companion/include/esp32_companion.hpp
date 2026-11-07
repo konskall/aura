@@ -41,7 +41,7 @@ namespace aura::firmware {
 // Every method runs on the UI loop under the BSP display lock. The assistant's
 // spoken questions are recorded here (the microphone is shared with notes) and
 // handed to app_main's VoiceAssistantTurn; speech recognition and spoken
-// replies are on once the device has its cloud keys. Translation stays off.
+// replies are on once the device has its cloud keys.
 // Compiles with ESP-IDF 5.5.5; NOT VERIFIED ON HARDWARE.
 class Esp32Companion {
 public:

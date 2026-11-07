@@ -572,8 +572,6 @@ int main(int argc, char** argv) {
     float manual_input_amplitude = -1.0F;
     struct {
         int ask{0};
-        int translate_mine{0};
-        int translate_theirs{0};
         int finish_listening{0};
         int cancel{0};
         int retry{0};
@@ -1197,13 +1195,6 @@ int main(int argc, char** argv) {
 #endif
         };
     }
-    companion_context.make_translator = [&]() -> std::unique_ptr<aura::IAssistantProvider> {
-        if (live_provider) {
-            return std::make_unique<aura::simulator::LocalCodexProvider>(environment("AURA_BRIDGE_TOKEN"),
-                static_cast<std::uint16_t>(integer(environment("AURA_BRIDGE_PORT", "4778"), 4778)));
-        }
-        return std::make_unique<aura::MockProvider>(deterministic_run ? 0U : 600U);
-    };
     companion_context.deterministic = deterministic_run;
     companion_context.store_dir = companion_store_dir;
     companion_context.aoraton_link = aoraton_device_mode ? aoraton_device_mode->endpoint() : nullptr;
@@ -1539,13 +1530,6 @@ int main(int argc, char** argv) {
         ui_callbacks.on_voice_preview = [&interaction_counts, preview](aura::AssistantVoice voice) {
             ++interaction_counts.voice_preview;
             preview(voice);
-        };
-    }
-    {
-        auto translate_record = ui_callbacks.on_translate_record;
-        ui_callbacks.on_translate_record = [&interaction_counts, translate_record](aura::TranslateSide side) {
-            ++(side == aura::TranslateSide::Mine ? interaction_counts.translate_mine : interaction_counts.translate_theirs);
-            return translate_record(side);
         };
     }
     ui.create(display, std::move(ui_callbacks));
@@ -2150,7 +2134,7 @@ int main(int argc, char** argv) {
             aura::UiView::Diagnostics, aura::UiView::Wifi, aura::UiView::WifiPassword,
             aura::UiView::WifiDetails, aura::UiView::Clock, aura::UiView::ClockNew, aura::UiView::TimerNew,
             aura::UiView::AlarmNew, aura::UiView::ReminderNew, aura::UiView::Notes, aura::UiView::NoteNew,
-            aura::UiView::Briefing, aura::UiView::Translate, aura::UiView::PhoneLink,
+            aura::UiView::Briefing, aura::UiView::PhoneLink,
             aura::UiView::DisplaySettings, aura::UiView::AppearanceSettings, aura::UiView::Update,
             aura::UiView::Radio, aura::UiView::RadioSearch, aura::UiView::Home,
         };
@@ -2462,7 +2446,7 @@ int main(int argc, char** argv) {
         test_launcher_route("launcher.aoraton", left_middle.data(), aura::UiView::AoratonRooms, false);
         test_launcher_route("launcher.clock", right_middle.data(), aura::UiView::Clock, false);
         test_launcher_route("launcher.notes", left_bottom.data(), aura::UiView::Notes, false);
-        test_launcher_route("launcher.translate", right_bottom.data(), aura::UiView::Translate, false);
+        test_launcher_route("launcher.today", right_bottom.data(), aura::UiView::Briefing, false);
 
         // The 200 px halo around the orb (centre 240,260) is the talk button.
         const Point home_ask[]{{"orb-center",240,260},{"halo-edge",152,260},{"orb-top",240,176},{"orb-bottom",240,344}};
@@ -2481,7 +2465,7 @@ int main(int argc, char** argv) {
         lv_obj_update_layout(ui.root());
         if (auto* grid = find_scrollable(ui.root())) lv_obj_scroll_to_y(grid, 680, LV_ANIM_OFF);
         pump(3);
-        tap(96, 360);
+        tap(384, 188);
         record("launcher.settings", "icon-center", ui.view() == aura::UiView::Settings,
                std::to_string(static_cast<int>(ui.view())));
         reset_to(aura::UiView::Home);
@@ -3743,10 +3727,10 @@ int main(int argc, char** argv) {
                    controller.snapshot().state == aura::AssistantState::Idle,
                view_text());
 
-        // Launcher: row three contains Today, Radio and Notifications.
-        const Point third_row[]{{"today", 96, 360}, {"radio", 240, 360}, {"notifications", 384, 360}};
-        const aura::UiView third_row_views[]{aura::UiView::Briefing, aura::UiView::Radio,
-                                             aura::UiView::Notifications};
+        // Launcher: row three contains Radio, Notifications and Settings.
+        const Point third_row[]{{"radio", 96, 360}, {"notifications", 240, 360}, {"settings", 384, 360}};
+        const aura::UiView third_row_views[]{aura::UiView::Radio, aura::UiView::Notifications,
+                                             aura::UiView::Settings};
         for (int index = 0; index < 3; ++index) {
             reset_to(aura::UiView::Launcher);
             scroll_view_to(148);
@@ -3755,8 +3739,8 @@ int main(int argc, char** argv) {
         }
         reset_to(aura::UiView::Launcher);
         scroll_view_to(680);
-        tap(96, 360);
-        record("launcher.row4", "settings", ui.view() == aura::UiView::Settings, view_text());
+        tap(240, 360);
+        record("launcher.row4", "photos", ui.view() == aura::UiView::Photos, view_text());
 
         // Launcher edit mode: Edit, pick an app, pick its new place. The order
         // is stored at once, and the grid opens apps again when editing ends.
@@ -3802,7 +3786,7 @@ int main(int argc, char** argv) {
 
         reset_to(aura::UiView::Launcher);
         scroll_view_to(680);
-        tap(240, 360);
+        tap(96, 360);
         record("launcher.row4", "organizer", ui.view() == aura::UiView::Calendar, view_text());
         tap(432, 48);
         record("organizer.new", "plus", ui.view() == aura::UiView::OrganizerNew, view_text());
@@ -4266,21 +4250,6 @@ int main(int argc, char** argv) {
         voice_capabilities.imu = true;
         voice_capabilities.phone_link = true;
         companion.set_capabilities(voice_capabilities);
-        reset_to(aura::UiView::Translate);
-        const int mine_before = interaction_counts.translate_mine;
-        const int theirs_before = interaction_counts.translate_theirs;
-        tap(412, 404);
-        // The other person's microphone is drawn rotated 180 degrees.
-        tap(68, 76);
-        record("translate.microphones", "mine-and-rotated-theirs",
-               interaction_counts.translate_mine == mine_before + 1 &&
-               interaction_counts.translate_theirs == theirs_before + 1, view_text());
-        const auto language_before = companion.translation().snapshot().their_language;
-        tap(240, 240);
-        const bool language_changed = companion.translation().snapshot().their_language != language_before;
-        tap(48, 240);
-        record("translate.language_back", "pill-then-back",
-               language_changed && ui.view() != aura::UiView::Translate, view_text());
         aura::CompanionCapabilities plain_capabilities;
         plain_capabilities.imu = true;
         plain_capabilities.phone_link = true;
@@ -6339,7 +6308,7 @@ int main(int argc, char** argv) {
                 aura::UiView::Battery, aura::UiView::VoiceSettings, aura::UiView::Diagnostics,
                 aura::UiView::Wifi, aura::UiView::Clock, aura::UiView::ClockNew, aura::UiView::TimerNew,
                 aura::UiView::AlarmNew, aura::UiView::ReminderNew, aura::UiView::Notes, aura::UiView::NoteNew,
-                aura::UiView::Briefing, aura::UiView::Translate, aura::UiView::PhoneLink,
+                aura::UiView::Briefing, aura::UiView::PhoneLink,
                 aura::UiView::DisplaySettings, aura::UiView::Update, aura::UiView::Radio,
                 aura::UiView::RadioSearch, aura::UiView::System, aura::UiView::Credits,
             };
@@ -6617,18 +6586,6 @@ int main(int argc, char** argv) {
             for (const auto& station : radio_model.snapshot().results) check_label(station.name);
             record("capture.demo_first", "seed-labels", unmarked.empty(), unmarked);
 
-            // The owner's side of a translation speaks Greek in either interface
-            // language (every pair is Greek with another language).
-            companion.set_language(aura::InterfaceLanguage::English);
-            companion.capture("translate");
-            bool greek_mine = false;
-            for (const auto& entry : companion.translation().snapshot().entries) {
-                if (entry.side != aura::TranslateSide::Mine) continue;
-                greek_mine = std::any_of(entry.source.begin(), entry.source.end(),
-                                         [](char ch) { return static_cast<unsigned char>(ch) >= 0x80; });
-            }
-            companion.set_language(aura::InterfaceLanguage::Greek);
-            record("capture.translate_sides", "greek-mine-in-english", greek_mine, view_text());
         }
 
         {
@@ -6741,8 +6698,7 @@ int main(int argc, char** argv) {
             // A widget whose style scales, rotates or skews it is drawn through a
             // transform layer: an ARGB8888 copy of its whole area, redrawn and
             // transformed in software on every frame. Animations move, resize or
-            // fade instead; the one exception is a static half-turn (the other
-            // person's side of face-to-face translation).
+            // fade instead.
             std::string transformed;
             std::function<void(lv_obj_t*, const char*)> scan = [&](lv_obj_t* object, const char* where) {
                 const std::int32_t rotation = lv_obj_get_style_transform_rotation(object, LV_PART_MAIN);
@@ -6750,7 +6706,7 @@ int main(int argc, char** argv) {
                                     lv_obj_get_style_transform_scale_y(object, LV_PART_MAIN) != LV_SCALE_NONE;
                 const bool skewed = lv_obj_get_style_transform_skew_x(object, LV_PART_MAIN) != 0 ||
                                     lv_obj_get_style_transform_skew_y(object, LV_PART_MAIN) != 0;
-                if (scaled || skewed || (rotation != 0 && rotation != 1800)) {
+                if (scaled || skewed || rotation != 0) {
                     const std::string item = std::string(where) + ':' + std::to_string(lv_obj_get_width(object)) +
                                              'x' + std::to_string(lv_obj_get_height(object));
                     if (transformed.find(item) == std::string::npos) {
@@ -6781,9 +6737,7 @@ int main(int argc, char** argv) {
             long_press(240, 240);
             sample("boot");
             wait_for_home();
-            reset_to(aura::UiView::Translate);
-            sample("translate");
-            record("lvgl.transform_layers", "static-half-turns-only", transformed.empty(),
+            record("lvgl.transform_layers", "none", transformed.empty(),
                    transformed.empty() ? "none" : transformed);
         }
         {
@@ -6944,7 +6898,6 @@ int main(int argc, char** argv) {
                 else if (event.payload == "clock") ui.show(aura::UiView::Clock);
                 else if (event.payload == "notes") ui.show(aura::UiView::Notes);
                 else if (event.payload == "briefing") ui.show(aura::UiView::Briefing);
-                else if (event.payload == "translate") ui.show(aura::UiView::Translate);
                 else if (event.payload == "phone") ui.show(aura::UiView::PhoneLink);
                 else if (event.payload == "display") ui.show(aura::UiView::DisplaySettings);
                 else if (event.payload == "update") ui.show(aura::UiView::Update);

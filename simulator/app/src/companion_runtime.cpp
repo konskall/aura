@@ -152,10 +152,6 @@ UpdateManifest demo_manifest(InterfaceLanguage language) {
     return manifest;
 }
 
-const char* source_language(TranslateSide side, const TranslationModel& model) {
-    return model.source_language(side).c_str();
-}
-
 const l10n::CompanionStrings& strings_for(InterfaceLanguage language) {
     return language == InterfaceLanguage::English ? l10n::companion_en_us() : l10n::companion_el_gr();
 }
@@ -191,33 +187,26 @@ CompanionRuntime::~CompanionRuntime() {
     capture_.stop();
     if (job_ != VoiceJob::None && ctx_.on_voice_active) ctx_.on_voice_active(false);
     for (auto& job : note_transcriptions_.release()) retired_transcripts_.push_back(std::move(job));
-    const bool pending_work = has_work(transcript_) || has_work(speech_job_) ||
-        has_work(translation_reply_) || has_work(health_) || !retired_transcripts_.empty() ||
-        !retired_speech_.empty() || !retired_translations_.empty();
+    const bool pending_work = has_work(transcript_) || has_work(speech_job_) || has_work(health_) ||
+        !retired_transcripts_.empty() || !retired_speech_.empty();
     if (pending_work) {
         // std::future values returned by std::async block in their destructor.
         // Transfer bounded, self-contained network jobs to a tiny reaper so
         // closing the simulator never freezes the UI for provider timeouts.
         std::thread([
             transcript = std::move(transcript_), speech_job = std::move(speech_job_),
-            translation = std::move(translation_reply_), health = std::move(health_),
-            retired_transcripts = std::move(retired_transcripts_),
-            retired_speech = std::move(retired_speech_),
-            retired_translations = std::move(retired_translations_),
-            speech = std::move(speech_), translator = std::move(translator_)
+            health = std::move(health_), retired_transcripts = std::move(retired_transcripts_),
+            retired_speech = std::move(retired_speech_), speech = std::move(speech_)
         ]() mutable {
             wait_for_work(transcript);
             wait_for_work(speech_job);
-            wait_for_work(translation);
             wait_for_work(health);
             wait_for_work(retired_transcripts);
             wait_for_work(retired_speech);
-            wait_for_work(retired_translations);
-            // `speech` and `translator` intentionally stay alive until their
-            // futures finish, including future platform implementations that
-            // may retain their service object.
+            // `speech` intentionally stays alive until its futures finish,
+            // including future platform implementations that may retain
+            // their service object.
             speech.reset();
-            translator.reset();
         }).detach();
     }
 }
@@ -233,7 +222,6 @@ std::int64_t CompanionRuntime::now_minute() const {
 
 void CompanionRuntime::start(std::shared_ptr<BridgeSpeechService> speech) {
     speech_ = std::move(speech);
-    translator_ = ctx_.make_translator ? ctx_.make_translator() : nullptr;
     if (!ctx_.deterministic) {
         capabilities_.microphone = SDL_GetNumAudioDevices(1) > 0;
         load_stores();
@@ -244,7 +232,6 @@ void CompanionRuntime::start(std::shared_ptr<BridgeSpeechService> speech) {
 }
 
 void CompanionRuntime::provider_changed() {
-    if (ctx_.make_translator) translator_ = ctx_.make_translator();
     refresh_provider_status();
 }
 
@@ -356,7 +343,7 @@ void CompanionRuntime::install(AuraUiCallbacks& callbacks) {
     callbacks.on_note_add = [this](const std::string& text) {
         return notes_.add_text(text, now_minute()) == NoteResult::Ok;
     };
-    callbacks.on_note_record = [this] { return begin_voice(VoiceJob::Note, TranslateSide::Mine); };
+    callbacks.on_note_record = [this] { return begin_voice(VoiceJob::Note); };
     callbacks.on_note_record_stop = [this] { if (job_ == VoiceJob::Note) finish_voice(); };
     callbacks.on_note_record_cancel = [this] { if (job_ == VoiceJob::Note) cancel_voice(); };
     callbacks.on_note_play = [this](std::uint32_t id) {
@@ -371,9 +358,6 @@ void CompanionRuntime::install(AuraUiCallbacks& callbacks) {
             std::filesystem::remove(std::filesystem::path(ctx_.store_dir) / "notes" / file, error);
         }
     };
-    callbacks.on_translate_record = [this](TranslateSide side) { return begin_voice(VoiceJob::Translate, side); };
-    callbacks.on_translate_stop = [this] { if (job_ == VoiceJob::Translate) finish_voice(); };
-    callbacks.on_translate_language = [this](const std::string& code) { translation_.set_their_language(code); };
     callbacks.on_briefing_open = [this] {
         const auto& status = ctx_.status->snapshot();
         if (status.date_valid) last_briefing_day_ = days_from_civil(status.year, status.month, status.day);
@@ -745,7 +729,7 @@ bool CompanionRuntime::route_message(const AssistantAction& action) {
     return true;
 }
 
-bool CompanionRuntime::begin_voice(VoiceJob job, TranslateSide side, ListenOrigin origin) {
+bool CompanionRuntime::begin_voice(VoiceJob job, ListenOrigin origin) {
     if (ctx_.deterministic || !capabilities_.microphone || job_ != VoiceJob::None) return false;
     if (job != VoiceJob::Note && !capabilities_.speech_recognition) return false;
     stop_barge_monitor();
@@ -761,21 +745,18 @@ bool CompanionRuntime::begin_voice(VoiceJob job, TranslateSide side, ListenOrigi
                                                                       : VoiceRecorder::Mode::Turn);
     job_ = job;
     listen_origin_ = job == VoiceJob::Assistant ? origin : ListenOrigin::Manual;
-    translate_side_ = side;
     voice_.state = VoiceCaptureState::Recording;
     voice_.purpose = job == VoiceJob::Note ? VoicePurpose::Note :
-                     job == VoiceJob::Message ? VoicePurpose::Message :
-                     (job == VoiceJob::Translate ? VoicePurpose::Translate : VoicePurpose::Assistant);
+                     job == VoiceJob::Message ? VoicePurpose::Message : VoicePurpose::Assistant;
     voice_.level = 0.0F;
     voice_.elapsed_ms = 0;
     voice_.speech_detected = false;
     voice_.error_code.clear();
     bump_voice();
-    if (job == VoiceJob::Translate) translate_entry_ = translation_.begin(side, TranslationStatus::Listening);
     return true;
 }
 
-bool CompanionRuntime::begin_voice_message() { return begin_voice(VoiceJob::Message, TranslateSide::Mine); }
+bool CompanionRuntime::begin_voice_message() { return begin_voice(VoiceJob::Message); }
 
 void CompanionRuntime::finish_voice_message() {
     if (job_ == VoiceJob::Message) finish_voice();
@@ -787,7 +768,7 @@ void CompanionRuntime::cancel_voice_message() {
 
 bool CompanionRuntime::begin_listening() {
     follow_up_armed_ = false;
-    return begin_voice(VoiceJob::Assistant, TranslateSide::Mine, ListenOrigin::Manual);
+    return begin_voice(VoiceJob::Assistant, ListenOrigin::Manual);
 }
 
 bool CompanionRuntime::begin_automatic_listening(ListenOrigin origin) {
@@ -795,7 +776,7 @@ bool CompanionRuntime::begin_automatic_listening(ListenOrigin origin) {
     if (!controller.dispatch({EventType::WakeDetected}) || !controller.dispatch({EventType::BeginRecording})) {
         return false;
     }
-    if (begin_voice(VoiceJob::Assistant, TranslateSide::Mine, origin)) return true;
+    if (begin_voice(VoiceJob::Assistant, origin)) return true;
     controller.dispatch({EventType::ListeningExpired});
     return false;
 }
@@ -809,7 +790,6 @@ void CompanionRuntime::cancel_voice() {
     capture_.stop();
     if (job_ != VoiceJob::None && ctx_.on_voice_active) ctx_.on_voice_active(false);
     recorder_.cancel();
-    if (job_ == VoiceJob::Translate) translation_.cancel(translate_entry_);
     job_ = VoiceJob::None;
     transcript_ignored_ = true;
     voice_turn_ = false;
@@ -889,16 +869,6 @@ void CompanionRuntime::finish_voice() {
             voice_.state = VoiceCaptureState::Idle;
             if (ctx_.on_voice_message && !wav.empty()) ctx_.on_voice_message(std::move(wav));
             break;
-        case VoiceJob::Translate:
-            if (!heard) {
-                translation_.fail(translate_entry_, "NO_SPEECH");
-                voice_.state = VoiceCaptureState::Idle;
-                break;
-            }
-            translation_.set_status(translate_entry_, TranslationStatus::Transcribing);
-            voice_.state = VoiceCaptureState::Processing;
-            transcribe(std::move(wav), source_language(translate_side_, translation_), VoiceJob::Translate);
-            break;
         case VoiceJob::None: break;
     }
     bump_voice();
@@ -935,38 +905,8 @@ void CompanionRuntime::deliver_transcript(VoiceJob job, TranscriptResult result)
             return;
         }
         case VoiceJob::Note: return;  // notes use note_transcriptions_
-        case VoiceJob::Translate:
-            voice_.state = VoiceCaptureState::Idle;
-            bump_voice();
-            if (!result.ok) {
-                translation_.fail(translate_entry_, result.error_code);
-                return;
-            }
-            translation_.set_source(translate_entry_, result.text);
-            translate(translate_entry_, result.text);
-            return;
         case VoiceJob::None: return;
     }
-}
-
-void CompanionRuntime::translate(std::uint32_t entry, const std::string& text) {
-    const auto* item = translation_.find(entry);
-    if (!item || !translator_) {
-        translation_.fail(entry, "PROVIDER_UNAVAILABLE");
-        return;
-    }
-    TurnRequest request;
-    request.prompt = text;
-    request.mode = TurnMode::Translate;
-    request.interface_language = language_;
-    request.source_language = translation_.source_language(item->side);
-    request.target_language = translation_.target_language(item->side);
-    if (!retire(translation_reply_, retired_translations_)) {
-        translation_.fail(entry, "PROVIDER_BUSY");
-        return;
-    }
-    translation_reply_ = translator_->start_turn(std::move(request));
-    translation_entry_ = entry;
 }
 
 bool CompanionRuntime::speak(const std::string& text, const std::string& language) {
@@ -1093,7 +1033,6 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
     clock_.tick(elapsed_ms);
     prune(retired_transcripts_);
     prune(retired_speech_);
-    prune(retired_translations_);
 
     if (barge_monitoring_) {
         samples_.clear();
@@ -1141,18 +1080,6 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
         if (!transcript_ignored_) deliver_transcript(job, std::move(result));
     }
     note_transcriptions_.poll(notes_);
-    if (ready(translation_reply_)) {
-        const auto reply = translation_reply_->get();
-        translation_reply_.reset();
-        if (reply.ok) {
-            translation_.complete(translation_entry_, reply.text);
-            if (const auto* item = translation_.find(translation_entry_)) {
-                speak(item->translated, translation_.target_language(item->side));
-            }
-        } else if (reply.error_code != "CANCELLED") {
-            translation_.fail(translation_entry_, reply.error_code);
-        }
-    }
     if (ready(speech_job_)) {
         auto result = speech_job_->get();
         if (!speech_job_ignored_) speech_ready_ = std::move(result);
@@ -1288,7 +1215,6 @@ void CompanionRuntime::apply() {
     ui.apply_notes(notes_.snapshot());
     ui.apply_organizer(organizer_.snapshot());
     ui.apply_voice(voice_);
-    ui.apply_translation(translation_.snapshot());
     ui.apply_phone(phone_.snapshot());
     ui.apply_update(ota_.snapshot());
     ui.apply_assistant_extras(extras_);
@@ -1317,7 +1243,6 @@ void CompanionRuntime::soft_restart() {
     extras_.memory_turns = 0;
     extras_.conversation_history.clear();
     bump_extras();
-    translation_.clear();
     ctx_.controller->dispatch({EventType::Reset});
     set_powered_off(false);
 }
@@ -1486,15 +1411,6 @@ bool CompanionRuntime::handle_event(const std::string& type, const std::string& 
         ota_.set_source(true, true);
         ota_.reset();
         if (ota_.begin_check()) ota_.check_finished(demo_manifest(language_));
-    } else if (type == "translate_text") {
-        // "mine|text" or "theirs|text": the typed stand-in for a spoken phrase.
-        const auto bar = payload.find('|');
-        const auto side = payload.compare(0, bar, "theirs") == 0 ? TranslateSide::Theirs : TranslateSide::Mine;
-        const std::string text = bar == std::string::npos ? payload : payload.substr(bar + 1);
-        if (sanitize_text(text, 600).empty()) return true;
-        const auto entry = translation_.begin(side, TranslationStatus::Translating);
-        translation_.set_source(entry, text);
-        translate(entry, text);
     } else if (type == "note_text") {
         notes_.add_text(payload.empty() ?
             (language_ == InterfaceLanguage::English ? std::string("DEMO note") :
@@ -1719,14 +1635,6 @@ bool CompanionRuntime::capture(const std::string& scenario) {
         seed_phone();
         set_capabilities(voice_capabilities);
         ui.show(UiView::Briefing);
-    } else if (scenario == "translate") {
-        set_capabilities(voice_capabilities);
-        // The owner's side speaks Greek in either interface language: every
-        // pair is Greek with another language.
-        const auto entry = translation_.begin(TranslateSide::Mine, TranslationStatus::Translating);
-        translation_.set_source(entry, "Πού είναι ο σταθμός του μετρό;");
-        translation_.complete(entry, "Where is the metro station?");
-        ui.show(UiView::Translate);
     } else if (scenario == "conversation-history") {
         memory_.clear();
         memory_.record(english ? "DEMO · Find pizza in Sparta" : "DEMO · Ψάξε για πίτσα στη Σπάρτη",

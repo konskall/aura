@@ -1,8 +1,10 @@
 #include "aura/aoraton_device_link.hpp"
 
 #include "aura/aoraton_account.hpp"
+#include "aura/file_transfer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iterator>
 #include <string_view>
@@ -82,6 +84,40 @@ bool code_shaped(std::string_view code) {
         if (!base64url_char(c) && c != '.') return false;
     }
     return true;
+}
+
+// The QR's secret: 16 random bytes as 22 base64url characters.
+std::string phone_secret(const std::array<std::uint8_t, 16>& random) {
+    static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    std::string out;
+    std::uint32_t buffer = 0;
+    int bits = 0;
+    for (const auto byte : random) {
+        buffer = (buffer << 8) | byte;
+        bits += 8;
+        while (bits >= 6) {
+            bits -= 6;
+            out.push_back(kAlphabet[(buffer >> bits) & 0x3F]);
+        }
+    }
+    if (bits > 0) out.push_back(kAlphabet[(buffer << (6 - bits)) & 0x3F]);
+    return out;
+}
+
+// Constant time over the secret's (public, fixed) length.
+bool same_secret(std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) return false;
+    unsigned char difference = 0;
+    for (std::size_t index = 0; index < a.size(); ++index)
+        difference |= static_cast<unsigned char>(a[index] ^ b[index]);
+    return difference == 0;
+}
+
+// The device's transfer server: http://<private IPv4>:<port>, nothing more.
+// 127.0.0.1 only for a test's link.
+bool phone_origin(std::string_view origin, bool allow_loopback) {
+    if (!transfer_address_valid(origin)) return false;
+    return allow_loopback || origin.substr(0, 17) != "http://127.0.0.1:";
 }
 
 bool error_code_shaped(std::string_view error) {
@@ -206,6 +242,8 @@ bool AoratonDeviceLink::configure(const AoratonLinkConfig& config) {
 bool AoratonDeviceLink::request_sign_in() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!configured_) return false;
+    end_phone_locked();  // the PC's sign-in replaces a phone's
+    refuse_next_open_ = false;
     sign_in_requested_ = true;
     return true;
 }
@@ -216,7 +254,7 @@ AoratonLinkStatus AoratonDeviceLink::status() const {
     if (!configured_) return status;
     if (open_) {
         status.state = AoratonLinkState::Waiting;
-        status.authorize_url = authorize_url_;
+        if (!phone_open_) status.authorize_url = authorize_url_;  // never a phone's
         return status;
     }
     if (sign_in_requested_) {
@@ -291,6 +329,11 @@ bool AoratonDeviceLink::open(const std::string& authorize_url) {
     authorize_url_ = authorize_url;
     open_ = true;
     sign_in_requested_ = false;
+    phone_open_ = !phone_secret_.empty();
+    if (refuse_next_open_) {
+        refuse_next_open_ = false;
+        answer_ = Answer::Refused;
+    }
     return true;
 }
 
@@ -303,6 +346,7 @@ AoratonCallbackStatus AoratonDeviceLink::poll(std::string& code) {
     clear_answer_locked();
     open_ = false;
     authorize_url_.clear();
+    if (phone_open_) end_phone_locked();
     return answer == Answer::Code ? AoratonCallbackStatus::Received : AoratonCallbackStatus::Failed;
 }
 
@@ -311,6 +355,93 @@ void AoratonDeviceLink::close() {
     clear_answer_locked();
     open_ = false;
     authorize_url_.clear();
+    // A phone sign-in the account gave up on (its timeout, or a restart). A
+    // new tap's secret, not yet opened, stays for the restart's opening.
+    if (phone_open_) end_phone_locked();
+}
+
+std::string AoratonDeviceLink::redirect_url() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return phone_secret_.empty() ? std::string{} : phone_origin_ + "/aoraton/callback?s=" + phone_secret_;
+}
+
+bool AoratonDeviceLink::request_phone_sign_in(const std::string& origin, const std::array<std::uint8_t, 16>& random) {
+    if (!phone_origin(origin, allow_loopback_)) return false;
+    std::string secret = phone_secret(random);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!configured_) {
+        wipe(secret);
+        return false;
+    }
+    end_phone_locked();
+    phone_origin_ = origin;
+    phone_secret_ = std::move(secret);
+    refuse_next_open_ = false;
+    sign_in_requested_ = true;
+    return true;
+}
+
+std::string AoratonDeviceLink::phone_url() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return phone_secret_.empty() ? std::string{} : phone_origin_ + "/aoraton/phone?s=" + phone_secret_;
+}
+
+void AoratonDeviceLink::cancel_phone_sign_in() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stop_phone_locked();
+}
+
+AoratonPhonePage AoratonDeviceLink::phone_page(std::string_view secret, std::string& authorize_url) {
+    authorize_url.clear();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!phone_secret_matches_locked(secret)) return AoratonPhonePage::Gone;
+    if (!phone_open_) return AoratonPhonePage::Wait;
+    if (!open_ || answer_ != Answer::None) return AoratonPhonePage::Gone;
+    authorize_url = authorize_url_;
+    return AoratonPhonePage::Google;
+}
+
+AoratonPhoneAnswer AoratonDeviceLink::phone_answer(std::string_view secret, const std::string& code, bool refused) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!phone_secret_matches_locked(secret) || !phone_open_ || !open_ || answer_ != Answer::None)
+        return AoratonPhoneAnswer::Gone;
+    if (!refused && code_shaped(code)) {
+        answer_ = Answer::Code;
+        code_ = code;
+        return AoratonPhoneAnswer::Taken;
+    }
+    answer_ = Answer::Refused;  // declined on the phone, or not a code
+    return AoratonPhoneAnswer::Refused;
+}
+
+// A wrong secret counts; kMaxPhoneMisses of them close the phone sign-in.
+bool AoratonDeviceLink::phone_secret_matches_locked(std::string_view secret) {
+    if (phone_secret_.empty()) return false;
+    if (same_secret(secret, phone_secret_)) return true;
+    if (++phone_misses_ >= kMaxPhoneMisses) stop_phone_locked();
+    return false;
+}
+
+// Ends a phone sign-in so that the account hears of it: refused if it is open,
+// never started if only asked for, refused at its opening if the account has
+// already taken the request.
+void AoratonDeviceLink::stop_phone_locked() noexcept {
+    if (phone_secret_.empty()) return;
+    if (phone_open_) {
+        if (open_ && answer_ == Answer::None) answer_ = Answer::Refused;
+    } else if (sign_in_requested_) {
+        sign_in_requested_ = false;
+    } else {
+        refuse_next_open_ = true;
+    }
+    end_phone_locked();
+}
+
+void AoratonDeviceLink::end_phone_locked() noexcept {
+    wipe(phone_secret_);
+    phone_origin_.clear();
+    phone_open_ = false;
+    phone_misses_ = 0;
 }
 
 void aoraton_link_pump(AoratonDeviceLink& link, IAoratonService& service, bool configured, bool account_ready) {

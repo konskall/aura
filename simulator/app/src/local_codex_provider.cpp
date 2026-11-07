@@ -18,23 +18,17 @@ constexpr std::size_t kMaxStreamBytes = 1024 * 1024;
 // data for the model, never instructions (bridge/src/turn-prompt.mjs).
 std::string turn_payload(const std::string& id, const TurnRequest& request) {
     std::string payload = "{\"id\":\"" + json_escape(id) + "\",\"prompt\":\"" + json_escape(request.prompt) + "\"";
-    if (request.mode == TurnMode::Translate) {
-        payload += ",\"mode\":\"translate\",\"source\":\"" + json_escape(request.source_language) +
-                   "\",\"target\":\"" + json_escape(request.target_language) + "\"";
-    } else {
-        payload += ",\"mode\":\"chat\",\"language\":\"" +
-                   std::string(interface_language_code(request.interface_language)) + "\"";
-        if (request.web_search) payload += ",\"web_search\":true";
-        if (!request.context.empty()) payload += ",\"context\":\"" + json_escape(request.context) + "\"";
-        if (!request.history.empty()) {
-            payload += ",\"history\":[";
-            for (std::size_t index = 0; index < request.history.size(); ++index) {
-                if (index > 0) payload += ',';
-                payload += "{\"q\":\"" + json_escape(request.history[index].question) + "\",\"a\":\"" +
-                           json_escape(request.history[index].answer) + "\"}";
-            }
-            payload += ']';
+    payload += ",\"language\":\"" + std::string(interface_language_code(request.interface_language)) + "\"";
+    if (request.web_search) payload += ",\"web_search\":true";
+    if (!request.context.empty()) payload += ",\"context\":\"" + json_escape(request.context) + "\"";
+    if (!request.history.empty()) {
+        payload += ",\"history\":[";
+        for (std::size_t index = 0; index < request.history.size(); ++index) {
+            if (index > 0) payload += ',';
+            payload += "{\"q\":\"" + json_escape(request.history[index].question) + "\",\"a\":\"" +
+                       json_escape(request.history[index].answer) + "\"}";
         }
+        payload += ']';
     }
     payload += '}';
     return payload;
