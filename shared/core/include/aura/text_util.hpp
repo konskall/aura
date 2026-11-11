@@ -24,6 +24,13 @@ std::string sanitize_fragment(std::string_view text, bool keep_newlines);
 // UTF-8 sequence.
 std::size_t complete_utf8_prefix(std::string_view bytes) noexcept;
 
+// An assistant's answer as plain text for the screen and the voice: the models
+// write Markdown despite the instruction. Bold and italics, headings, bullets,
+// quotes, rules, code, links and tables lose their marks and keep their words;
+// a numbered list keeps its numbers, and an asterisk that marks nothing ("5 * 3")
+// stays. A mark cut off at the end of a streamed answer is not shown.
+std::string strip_markdown(std::string_view text);
+
 // Lower-case ASCII and Greek, without tonos/dialytika, for keyword matching.
 std::string fold_text(std::string_view text);
 

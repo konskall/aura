@@ -2,6 +2,7 @@
 
 #include "aura/json_reader.hpp"
 #include "aura/mp3_decoder.hpp"
+#include "aura/offline_commands.hpp"
 #include "aura/text_util.hpp"
 
 #include <algorithm>
@@ -138,6 +139,27 @@ RadioIntent analyze_radio_intent(std::string_view text) {
     // sentence or question about the radio belongs to the assistant.
     if (radio && std::all_of(words.begin(), words.end(), request_filler)) return {RadioIntentKind::Open, true};
     return {};
+}
+
+RadioRequest radio_request(std::string_view question, const RadioModel& model) {
+    const auto command = parse_offline_command(std::string(question));
+    if (command.kind == OfflineCommandKind::OpenRadio) return {RadioRequestKind::Open, nullptr};
+    if (command.kind != OfflineCommandKind::None) return {};
+    // A reminder is the assistant's, whatever it is about.
+    const auto words = folded_words(fold_text(question));
+    if (folded_has_word_prefix(words, {"υπενθυμ", "θυμισ"}) || folded_has_word_prefix(words, {"remind"})) return {};
+    const auto intent = analyze_radio_intent(question);
+    if (intent.kind == RadioIntentKind::Stop) return {RadioRequestKind::Stop, nullptr};
+    if (intent.kind == RadioIntentKind::PlayStation) {
+        if (const auto* spoken = model.find_spoken(question)) return {RadioRequestKind::Play, spoken};
+    }
+    if (!intent.explicit_radio || intent.kind == RadioIntentKind::None) return {};
+    // "Βάλε ραδιόφωνο" with no station named plays the last one again (or the
+    // first favourite); a station already on keeps playing.
+    if (intent.kind == RadioIntentKind::PlayStation && model.snapshot().state == RadioState::Idle) {
+        if (const auto* resume = model.station_to_resume()) return {RadioRequestKind::Play, resume};
+    }
+    return {RadioRequestKind::Open, nullptr};
 }
 
 bool split_stream_url(std::string_view url, StreamUrl& out) {

@@ -115,6 +115,20 @@ RadioSearchResult search_radio_directory(std::string_view query,
 // through the assistant/model path.
 RadioIntent analyze_radio_intent(std::string_view text);
 
+enum class RadioRequestKind { None, Open, Play, Stop };
+
+struct RadioRequest {
+    RadioRequestKind kind{RadioRequestKind::None};
+    const RadioStation* station{nullptr};  // Play's: in the model, valid until it changes
+};
+
+// What a question asks of the radio, decided the same way by the simulator and
+// the device: stop it, play a station (the one named, or for "βάλε ραδιόφωνο"
+// the last one heard), or only show it. None leaves the question to the
+// assistant. A timer, reminder or setting comes first: "βάλε υπενθύμιση ...
+// ραδιόφωνο" is a reminder.
+RadioRequest radio_request(std::string_view question, const RadioModel& model);
+
 // Splits an ICY stream ("Icy-MetaData: 1") into audio bytes and the
 // StreamTitle it announces every `metaint` bytes. metaint 0 means no metadata.
 class IcyStreamReader {

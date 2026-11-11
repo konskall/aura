@@ -233,6 +233,19 @@ extern "C" void app_main(void) {
     static std::unique_ptr<aura::firmware::Esp32RadioService> radio;
     static std::uint64_t radio_generation = 0;
     static bool radio_held = false;
+    // A station plays or stops from the Ράδιο app or from the owner's voice.
+    static const auto play_radio = [](const aura::RadioStation& selected) {
+        const aura::RadioStation station = selected;  // `selected` may be the model's own
+        radio_model.begin_connect(station);
+        radio_generation = radio->play(station);
+        ui.apply_radio(radio_model.snapshot());
+    };
+    static const auto stop_radio = [] {
+        radio->stop();
+        radio_generation = radio->generation();
+        radio_model.stop();
+        ui.apply_radio(radio_model.snapshot());
+    };
     static aura::firmware::Esp32HttpsClient cloud_https;
     static aura::firmware::Esp32CloudKeyStore cloud_keys;
     static std::unique_ptr<aura::CloudWorker> cloud_worker = start_cloud_worker();
@@ -408,17 +421,8 @@ extern "C" void app_main(void) {
         });
         // The radio (no output: the app stays greyed out, as before).
         if (radio) {
-            callbacks.on_radio_play = [](const aura::RadioStation& station) {
-                radio_model.begin_connect(station);
-                radio_generation = radio->play(station);
-                ui.apply_radio(radio_model.snapshot());
-            };
-            callbacks.on_radio_stop = [] {
-                radio->stop();
-                radio_generation = radio->generation();
-                radio_model.stop();
-                ui.apply_radio(radio_model.snapshot());
-            };
+            callbacks.on_radio_play = play_radio;
+            callbacks.on_radio_stop = stop_radio;
             callbacks.on_radio_search = [](const std::string& query) {
                 radio_model.begin_search(query);
                 if (!radio->search(query)) radio_model.search_finished({}, "RADIO_BUSY");
@@ -507,6 +511,19 @@ extern "C" void app_main(void) {
         const auto& strings = companion_strings(assistant_language);
         assistant.turn->set_language(assistant_language);
         assistant.turn->set_answer_copy(strings.action_question, strings.action_refused, strings.empty_answer);
+        // "Βάλε Σφαίρα", "σταμάτα το ραδιόφωνο": the radio does it, decided as
+        // in the simulator (radio_request); the assistant is not asked.
+        assistant.turn->set_local_request([](const std::string& question) {
+            if (!radio) return false;
+            const auto request = aura::radio_request(question, radio_model);
+            if (request.kind == aura::RadioRequestKind::None) return false;
+            controller.dispatch({aura::EventType::Cancel, {}, 0});
+            ui.show(aura::UiView::Radio);
+            if (request.kind == aura::RadioRequestKind::Stop) stop_radio();
+            else if (request.kind == aura::RadioRequestKind::Play) play_radio(*request.station);
+            else ui.apply_radio(radio_model.snapshot());
+            return true;
+        });
         assistant.turn->set_context([](const std::string& question) {
             aura::DeviceContextInput input;
             input.status = &device_status.snapshot();

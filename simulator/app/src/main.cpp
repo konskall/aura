@@ -1017,25 +1017,15 @@ int main(int argc, char** argv) {
             if (status.date_valid) nameday_match = aura::greek_nameday_of(prompt, status.year);
             if (!nameday_match) calendar_intent = aura::GreekCalendarIntent::None;
         }
-        // Timers, reminders and settings come first: "βάλε υπενθύμιση ... ραδιόφωνο"
-        // is a reminder, not a radio request.
-        const bool offline_command = aura::parse_offline_command(prompt).kind != aura::OfflineCommandKind::None;
-        const auto radio_intent = offline_command ? aura::RadioIntent{} : aura::analyze_radio_intent(prompt);
-        const auto* spoken_station = radio_intent.kind == aura::RadioIntentKind::PlayStation ?
-            radio_model.find_spoken(prompt) : nullptr;
-        if (!message_help && (radio_intent.kind == aura::RadioIntentKind::Stop || spoken_station ||
-            (radio_intent.explicit_radio && radio_intent.kind != aura::RadioIntentKind::None))) {
+        // A radio request, decided as on the device (radio_request): timers,
+        // reminders and settings come first.
+        const auto radio_asked = message_help ? aura::RadioRequest{} : aura::radio_request(prompt, radio_model);
+        if (radio_asked.kind != aura::RadioRequestKind::None) {
             if (aura::is_turn_active(controller.snapshot().state)) controller.dispatch({aura::EventType::Cancel});
             if (end_voice_turn_hook) end_voice_turn_hook();
             ui.show(aura::UiView::Radio);
-            // "Βάλε ραδιόφωνο" with no station named plays the last one again
-            // (or the first favourite); a station already on keeps playing.
-            const auto* resume = radio_intent.kind == aura::RadioIntentKind::PlayStation && !spoken_station &&
-                                         radio_model.snapshot().state == aura::RadioState::Idle ?
-                radio_model.station_to_resume() : nullptr;
-            if (radio_intent.kind == aura::RadioIntentKind::Stop) stop_radio();
-            else if (spoken_station) play_radio(*spoken_station);
-            else if (resume) play_radio(*resume);
+            if (radio_asked.kind == aura::RadioRequestKind::Stop) stop_radio();
+            else if (radio_asked.kind == aura::RadioRequestKind::Play) play_radio(*radio_asked.station);
             else apply_radio();
             return;
         }
@@ -2437,22 +2427,24 @@ int main(int argc, char** argv) {
                        std::string("view=") + std::to_string(static_cast<int>(ui.view())));
             }
         };
+        // The first two rows, in the owner's order: Συνομιλία, Σημειώσεις,
+        // Μηνύματα; Σήμερα, Καιρός, Ειδοποιήσεις.
         test_launcher_route("launcher.assistant", left_top.data(), aura::UiView::Assistant, true);
+        test_launcher_route("launcher.notes", right_top.data(), aura::UiView::Notes, false);
+        test_launcher_route("launcher.aoraton", left_middle.data(), aura::UiView::AoratonRooms, false);
+        test_launcher_route("launcher.today", right_middle.data(), aura::UiView::Briefing, false);
         for (int index = 0; index < 4; ++index) {
             weather_model.clear_location();
             apply_weather();
             reset_to(aura::UiView::Launcher);
             const int before = interaction_counts.weather_open;
-            tap(right_top[index].x, right_top[index].y);
-            record("launcher.weather", right_top[index].name,
+            tap(left_bottom[index].x, left_bottom[index].y);
+            record("launcher.weather", left_bottom[index].name,
                    interaction_counts.weather_open == before + 1 && ui.view() == aura::UiView::Weather &&
                    weather_model.snapshot().state == aura::WeatherState::Unconfigured,
                    aura::weather_state_name(weather_model.snapshot().state));
         }
-        test_launcher_route("launcher.aoraton", left_middle.data(), aura::UiView::AoratonRooms, false);
-        test_launcher_route("launcher.clock", right_middle.data(), aura::UiView::Clock, false);
-        test_launcher_route("launcher.notes", left_bottom.data(), aura::UiView::Notes, false);
-        test_launcher_route("launcher.today", right_bottom.data(), aura::UiView::Briefing, false);
+        test_launcher_route("launcher.notifications", right_bottom.data(), aura::UiView::Notifications, false);
 
         // The 200 px halo around the orb (centre 240,260) is the talk button.
         const Point home_ask[]{{"orb-center",240,260},{"halo-edge",152,260},{"orb-top",240,176},{"orb-bottom",240,344}};
@@ -2471,7 +2463,7 @@ int main(int argc, char** argv) {
         lv_obj_update_layout(ui.root());
         if (auto* grid = find_scrollable(ui.root())) lv_obj_scroll_to_y(grid, 680, LV_ANIM_OFF);
         pump(3);
-        tap(384, 188);
+        tap(240, 360);
         record("launcher.settings", "icon-center", ui.view() == aura::UiView::Settings,
                std::to_string(static_cast<int>(ui.view())));
         reset_to(aura::UiView::Home);
@@ -2483,9 +2475,13 @@ int main(int argc, char** argv) {
         record("home.swipe_down", "notifications", ui.view() == aura::UiView::Notifications,
                std::to_string(static_cast<int>(ui.view())));
         reset_to(aura::UiView::Launcher);
-        tap(96, 336);
+        lv_obj_update_layout(ui.root());
+        if (auto* grid = find_scrollable(ui.root())) lv_obj_scroll_to_y(grid, 148, LV_ANIM_OFF);
+        pump(3);
+        tap(96, 360);  // Ρολόι, the third row's first
+        const bool clock_opened = ui.view() == aura::UiView::Clock;
         swipe(60, 300, 420, 300);
-        record("nav.swipe_back", "clock-screen", ui.view() == aura::UiView::Launcher,
+        record("nav.swipe_back", "clock-screen", clock_opened && ui.view() == aura::UiView::Launcher,
                std::to_string(static_cast<int>(ui.view())));
 
         // Settings is a scrolling list: rows are 88 px high on a 96 px pitch
@@ -3761,10 +3757,9 @@ int main(int argc, char** argv) {
                    controller.snapshot().state == aura::AssistantState::Idle,
                view_text());
 
-        // Launcher: row three contains Radio, Notifications and Settings.
-        const Point third_row[]{{"radio", 96, 360}, {"notifications", 240, 360}, {"settings", 384, 360}};
-        const aura::UiView third_row_views[]{aura::UiView::Radio, aura::UiView::Notifications,
-                                             aura::UiView::Settings};
+        // Launcher: row three contains Clock, Radio and Photos.
+        const Point third_row[]{{"clock", 96, 360}, {"radio", 240, 360}, {"photos", 384, 360}};
+        const aura::UiView third_row_views[]{aura::UiView::Clock, aura::UiView::Radio, aura::UiView::Photos};
         for (int index = 0; index < 3; ++index) {
             reset_to(aura::UiView::Launcher);
             scroll_view_to(148);
@@ -3774,7 +3769,7 @@ int main(int argc, char** argv) {
         reset_to(aura::UiView::Launcher);
         scroll_view_to(680);
         tap(240, 360);
-        record("launcher.row4", "photos", ui.view() == aura::UiView::Photos, view_text());
+        record("launcher.row4", "settings", ui.view() == aura::UiView::Settings, view_text());
 
         // Launcher edit mode: Edit, pick an app, pick its new place. The order
         // is stored at once, and the grid opens apps again when editing ends.
@@ -3792,14 +3787,11 @@ int main(int argc, char** argv) {
         record("launcher.reorder", "select-then-place",
                reorder_selected && interaction_counts.launcher_move == reorder_moves_before + 1 &&
                    reordered[5] == aura::LauncherApp::Conversation &&
-                   reordered[0] == aura::LauncherApp::Weather && ui.view() == aura::UiView::Launcher,
+                   reordered[0] == aura::LauncherApp::Notes && ui.view() == aura::UiView::Launcher,
                std::to_string(interaction_counts.launcher_move - reorder_moves_before));
         tap(432, 48);
-        const int reorder_weather_before = interaction_counts.weather_open;
         tap(96, 164);
-        record("launcher.reorder", "done-then-open",
-               ui.view() == aura::UiView::Weather && interaction_counts.weather_open == reorder_weather_before + 1,
-               view_text());
+        record("launcher.reorder", "done-then-open", ui.view() == aura::UiView::Notes, view_text());
         // Leaving by a swipe also ends editing. The grid is reached the way the
         // owner reaches it (Home, then Apps), so Back has a real Home below it.
         reset_to(aura::UiView::Home);
@@ -3809,12 +3801,8 @@ int main(int argc, char** argv) {
         swipe(60, 300, 420, 300);
         const bool reorder_left = reorder_on_grid && ui.view() == aura::UiView::Home;
         tap(424, 436);
-        const int reorder_weather_again = interaction_counts.weather_open;
         tap(96, 164);
-        record("launcher.reorder", "swipe-ends-edit",
-               reorder_left && ui.view() == aura::UiView::Weather &&
-                   interaction_counts.weather_open == reorder_weather_again + 1,
-               view_text());
+        record("launcher.reorder", "swipe-ends-edit", reorder_left && ui.view() == aura::UiView::Notes, view_text());
         launcher_layout_model.reset();
         apply_launcher_layout();
 

@@ -26,11 +26,12 @@ enum class LauncherApp : std::uint8_t {
 
 constexpr std::size_t kLauncherAppCount = static_cast<std::size_t>(LauncherApp::Count);
 
+// The owner's order (2026-11-11), three to a row. A stored order is kept.
 constexpr std::array<LauncherApp, kLauncherAppCount> kDefaultLauncherOrder{
-    LauncherApp::Conversation, LauncherApp::Weather, LauncherApp::Messages,
-    LauncherApp::Clock, LauncherApp::Notes, LauncherApp::Today,
-    LauncherApp::Radio, LauncherApp::Notifications, LauncherApp::Settings,
-    LauncherApp::Organizer, LauncherApp::Photos,
+    LauncherApp::Conversation, LauncherApp::Notes, LauncherApp::Messages,
+    LauncherApp::Today, LauncherApp::Weather, LauncherApp::Notifications,
+    LauncherApp::Clock, LauncherApp::Radio, LauncherApp::Photos,
+    LauncherApp::Organizer, LauncherApp::Settings,
 };
 
 struct LauncherLayoutSnapshot {

@@ -1,4 +1,5 @@
 #include "aura/assistant_stream.hpp"
+#include "aura/text_util.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -110,6 +111,32 @@ int main() {
     expect(whole.take_after(0, whole_update) && pieces.take_after(0, pieces_update) &&
                whole_update.text == pieces_update.text && whole_update.first_sentence == pieces_update.first_sentence,
            "small deltas give the same text as one");
+
+    // The models write Markdown despite the plain-text instruction (Groq's
+    // search answers most of all). The screen and the voice get plain text.
+    expect(strip_markdown("Το **Athinorama** προτείνει.") == "Το Athinorama προτείνει.", "bold");
+    expect(strip_markdown("*πλάγια* γράμματα, (*σημείωση*)") == "πλάγια γράμματα, (σημείωση)", "italics");
+    expect(strip_markdown("### Εστιατόρια\n- **Α**: καλό\n- Β\n  * Γ\n+ Δ") == "Εστιατόρια\nΑ: καλό\nΒ\nΓ\nΔ",
+           "a heading and bullets");
+    expect(strip_markdown("1. Πρώτο\n2. Δεύτερο") == "1. Πρώτο\n2. Δεύτερο", "a numbered list keeps its numbers");
+    expect(strip_markdown("Δες [Athinorama](https://www.athinorama.gr/a_b) για ώρες.") == "Δες Athinorama για ώρες.",
+           "a link keeps its words");
+    expect(strip_markdown("Γράψε `ls`.\n```\nκώδικας\n```") == "Γράψε ls.\nκώδικας", "code");
+    expect(strip_markdown("> παράθεση\nΑ\n---\nΒ") == "παράθεση\nΑ\nΒ", "a quote and a rule");
+    expect(strip_markdown("| Όνομα | Βαθμός |\n|---|:---:|\n| Α | 4.5 |") == "Όνομα, Βαθμός\nΑ, 4.5", "a table");
+    expect(strip_markdown("5 * 3 = 15, a*b, https://x.gr/a_b?q=1") == "5 * 3 = 15, a*b, https://x.gr/a_b?q=1",
+           "an asterisk that marks nothing stays");
+    expect(strip_markdown("Καλησπέρα σου.\n\nΠώς είσαι;") == "Καλησπέρα σου.\n\nΠώς είσαι;", "plain text is kept");
+    expect(strip_markdown("Το *") == "Το" && strip_markdown("Το **Athin") == "Το Athin",
+           "a marker cut off by the stream is not shown");
+
+    AssistantStreamMailbox marked;
+    marked.publish_delta("Το *");
+    expect(marked.take_after(0, update) && update.text == "Το", "a split marker is not flashed");
+    marked.publish_delta("*Athinorama** είναι ανοιχτό. Και");
+    expect(marked.take_after(0, update) && update.text == "Το Athinorama είναι ανοιχτό. Και" &&
+               update.first_sentence == "Το Athinorama είναι ανοιχτό.",
+           "streamed text and early speech are plain");
 
     std::cout << "assistant_stream_test: PASS\n";
     return 0;

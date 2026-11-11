@@ -40,13 +40,20 @@ int main() {
 
     LauncherLayoutModel model;
     expect(model.snapshot().order == kDefaultLauncherOrder, "the default order comes first");
+    // The owner's order (2026-11-11), left to right and row by row.
+    expect(kDefaultLauncherOrder == std::array<LauncherApp, kLauncherAppCount>{
+               LauncherApp::Conversation, LauncherApp::Notes, LauncherApp::Messages,
+               LauncherApp::Today, LauncherApp::Weather, LauncherApp::Notifications,
+               LauncherApp::Clock, LauncherApp::Radio, LauncherApp::Photos,
+               LauncherApp::Organizer, LauncherApp::Settings},
+           "the default order is the owner's");
 
     // Forward: the moved app lands on the target and the ones between shift left.
     auto sequence = model.snapshot().sequence;
     expect(model.move(0, 5), "a valid move is accepted");
     const auto& moved = model.snapshot().order;
-    expect(moved[0] == LauncherApp::Weather && moved[4] == LauncherApp::Today &&
-           moved[5] == LauncherApp::Conversation && moved[6] == LauncherApp::Radio,
+    expect(moved[0] == LauncherApp::Notes && moved[4] == LauncherApp::Notifications &&
+           moved[5] == LauncherApp::Conversation && moved[6] == LauncherApp::Clock,
            "moving forward shifts the apps in between");
     expect(model.snapshot().sequence == sequence + 1, "a move is a change");
 
@@ -54,8 +61,8 @@ int main() {
     expect(model.move(5, 0), "moving back is accepted");
     expect(model.snapshot().order == kDefaultLauncherOrder, "moving back restores the order");
     expect(model.move(10, 1), "the last app can move near the front");
-    expect(model.snapshot().order[1] == LauncherApp::Photos &&
-           model.snapshot().order[2] == LauncherApp::Weather &&
+    expect(model.snapshot().order[1] == LauncherApp::Settings &&
+           model.snapshot().order[2] == LauncherApp::Notes &&
            model.snapshot().order[10] == LauncherApp::Organizer,
            "moving backward shifts the apps in between");
 

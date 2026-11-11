@@ -194,6 +194,29 @@ int main() {
     settle(turn);
     expect(controller.snapshot().answer_text == "Σιωπηλά." && speech.spoken.size() == spoken_before,
            "without Azure the answer is shown, not spoken");
+
+    // A question the device answers itself (the radio) never reaches the
+    // assistant, and the turn ends.
+    controller.dispatch({aura::EventType::Reset});
+    std::vector<std::string> local;
+    turn.set_local_request([&local](const std::string& question) {
+        local.push_back(question);
+        return question == "Βάλε Σφαίρα";
+    });
+    const std::size_t asked_before = provider.requests.size();
+    speech.transcript = {true, "Βάλε Σφαίρα", {}};
+    turn.begin_listening();
+    turn.finish_listening(aura::make_wav(std::vector<std::int16_t>(8000, 0), 16000));
+    settle(turn);
+    expect(local.size() == 1 && local[0] == "Βάλε Σφαίρα" && provider.requests.size() == asked_before &&
+               controller.snapshot().state == AssistantState::Idle,
+           "a local request is the device's own, and the turn ends");
+    speech.transcript = {true, "Τι ώρα είναι;", {}};
+    turn.begin_listening();
+    turn.finish_listening(aura::make_wav(std::vector<std::int16_t>(8000, 0), 16000));
+    settle(turn);
+    expect(local.size() == 2 && provider.requests.size() == asked_before + 1,
+           "anything else still goes to the assistant");
     std::cout << "voice_turn_test: PASS\n";
     return 0;
 }

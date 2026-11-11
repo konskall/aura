@@ -47,7 +47,7 @@ All names, rooms, messages, photos and data in the screenshots are fictional `DE
 
 ### Apps
 
-The apps grid can be rearranged: tap the pencil, then an app, then its new place.
+The apps grid can be rearranged: tap the pencil, then an app, then its new place. By default it reads Συνομιλία, Σημειώσεις, Μηνύματα, Σήμερα, Καιρός, Ειδοποιήσεις, Ρολόι, Ραδιόφωνο, Φωτογραφίες, Οργάνωση, Ρυθμίσεις.
 
 | App | What it offers |
 |---|---|
@@ -272,7 +272,6 @@ Google's page opens in the PC's browser; the device keeps its own session, and t
 **What is not available on the device yet.**
 
 - **Needs more work.**
-  - Radio by voice: the device plays stations from the Ράδιο app, but "βάλε Σφαίρα" is understood only in the simulator.
   - Confirming the assistant's proposed actions.
 - **Needs the board.** Everything physical still has to be validated: display, touch, audio, battery and Wi-Fi/TLS behaviour.
 

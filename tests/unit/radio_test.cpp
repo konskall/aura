@@ -472,9 +472,45 @@ void url_tests() {
 
 }  // namespace
 
+// The simulator and the device decide a radio request the same way (the
+// device's spoken questions too, since 2026-11-11).
+void request_tests() {
+    using namespace aura;
+    RadioModel model;
+    auto request = radio_request("Βάλε Σφαίρα", model);
+    expect(request.kind == RadioRequestKind::Play && request.station && request.station->name.find("Sfera") == 0,
+           "a named station plays");
+    request = radio_request("Σταμάτα το ραδιόφωνο", model);
+    expect(request.kind == RadioRequestKind::Stop && !request.station, "stop");
+    request = radio_request("Βάλε ραδιόφωνο", model);
+    expect(request.kind == RadioRequestKind::Play && request.station &&
+               request.station->id == model.snapshot().favorites.front().id,
+           "the radio alone plays the first favourite");
+    expect(radio_request("Άνοιξε το ραδιόφωνο", model).kind == RadioRequestKind::Open, "opening it only shows it");
+    model.begin_connect(*model.find_spoken("Βάλε Σφαίρα"));
+    model.set_playing();
+    expect(radio_request("Βάλε ραδιόφωνο", model).kind == RadioRequestKind::Open,
+           "a station already on keeps playing");
+    expect(radio_request("Βάλε υπενθύμιση σε 10 λεπτά για το ραδιόφωνο", model).kind == RadioRequestKind::None &&
+               radio_request("Θύμισέ μου να βάλω ραδιόφωνο", model).kind == RadioRequestKind::None &&
+               radio_request("Remind me to play the radio", model).kind == RadioRequestKind::None,
+           "a reminder comes first");
+    expect(radio_request("Βάλε χρονόμετρο 10 λεπτά για το ραδιόφωνο", model).kind == RadioRequestKind::None,
+           "a timer comes first");
+    expect(radio_request("Τι καιρό θα κάνει αύριο;", model).kind == RadioRequestKind::None,
+           "another question is the assistant's");
+    expect(radio_request("Πες μου την ιστορία του ραδιοφώνου", model).kind == RadioRequestKind::None,
+           "a sentence about radio is the assistant's");
+    RadioModel empty;
+    empty.restore_favorites("aura-radio 1\n");
+    expect(radio_request("Βάλε ραδιόφωνο", empty).kind == RadioRequestKind::Open,
+           "with nothing to play, the app opens");
+}
+
 int main() {
     station_tests();
     model_tests();
+    request_tests();
     icy_tests();
     mp3_tests();
     pump_tests();

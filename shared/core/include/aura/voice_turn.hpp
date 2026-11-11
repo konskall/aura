@@ -40,6 +40,9 @@ public:
     // Localized copy: the question under an action with no words, the note under
     // a refused action, and the text for an empty answer.
     void set_answer_copy(std::string action_question, std::string action_refused, std::string empty_answer);
+    // A spoken question the host answers itself ("βάλε Σφαίρα": the radio).
+    // True: the host has done it, the assistant is not asked and the turn ends.
+    void set_local_request(std::function<bool(const std::string& question)> local) { local_ = std::move(local); }
 
     // The talk target was pressed: the assistant listens (the host starts its microphone).
     void begin_listening();
@@ -67,6 +70,7 @@ private:
     std::string voice_{"nestoras"};
     bool spoken_{true};
     std::function<std::string(const std::string&)> context_;
+    std::function<bool(const std::string&)> local_;
     std::string action_question_;
     std::string action_refused_;
     std::string empty_answer_;

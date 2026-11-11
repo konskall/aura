@@ -1,6 +1,7 @@
 #include "aura/text_util.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 
 namespace aura {
@@ -273,6 +274,161 @@ std::string sanitize_fragment(std::string_view text, bool keep_newlines) {
         append_utf8(output, code);
     }
     return output;
+}
+
+namespace {
+
+bool md_space(char value) noexcept {
+    return value == ' ' || value == '\t';
+}
+
+// ASCII punctuation (UTF-8 lead and continuation bytes are letters here).
+bool md_punctuation(char value) noexcept {
+    const auto byte = static_cast<unsigned char>(value);
+    return byte < 0x80 && byte > ' ' && !std::isalnum(byte);
+}
+
+std::string_view md_trim_left(std::string_view text) noexcept {
+    while (!text.empty() && md_space(text.front())) text.remove_prefix(1);
+    return text;
+}
+
+std::string_view md_trim(std::string_view text) noexcept {
+    text = md_trim_left(text);
+    while (!text.empty() && md_space(text.back())) text.remove_suffix(1);
+    return text;
+}
+
+// Three or more of one of - * _ and nothing else: a rule.
+bool md_rule(std::string_view line) noexcept {
+    char mark = 0;
+    int count = 0;
+    for (const char value : line) {
+        if (md_space(value)) continue;
+        if ((value != '-' && value != '*' && value != '_') || (mark != 0 && value != mark)) return false;
+        mark = value;
+        ++count;
+    }
+    return count >= 3;
+}
+
+// A table's |---|:---:| line.
+bool md_table_rule(std::string_view line) noexcept {
+    bool pipe = false;
+    bool dash = false;
+    for (const char value : line) {
+        if (value == '|') pipe = true;
+        else if (value == '-') dash = true;
+        else if (value != ':' && !md_space(value)) return false;
+    }
+    return pipe && dash;
+}
+
+// One asterisk marks italics when it faces a word on one side and a space,
+// punctuation or the end on the other; "5 * 3" and "a*b" mark nothing.
+std::string md_single_asterisks(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        if (text[index] != '*') {
+            out += text[index];
+            continue;
+        }
+        const bool has_before = index > 0;
+        const bool has_after = index + 1 < text.size();
+        const bool open = has_after && !md_space(text[index + 1]) &&
+                          (!has_before || md_space(text[index - 1]) || md_punctuation(text[index - 1]));
+        const bool close = has_before && !md_space(text[index - 1]) &&
+                           (!has_after || md_space(text[index + 1]) || md_punctuation(text[index + 1]));
+        if (!open && !close) out += '*';
+    }
+    return out;
+}
+
+// Bold, code and links within a line; then single asterisks.
+std::string md_inline(std::string_view line) {
+    std::string out;
+    out.reserve(line.size());
+    for (std::size_t index = 0; index < line.size(); ++index) {
+        const char value = line[index];
+        if (value == '`') continue;
+        if (value == '*' && index + 1 < line.size() && line[index + 1] == '*') {
+            ++index;
+            continue;
+        }
+        if (value == '[') {
+            const auto close = line.find(']', index + 1);
+            if (close != std::string_view::npos && close + 1 < line.size() && line[close + 1] == '(') {
+                const auto end = line.find(')', close + 2);
+                if (end != std::string_view::npos &&
+                    line.substr(close + 2, end - close - 2).find(' ') == std::string_view::npos) {
+                    out += md_inline(line.substr(index + 1, close - index - 1));
+                    index = end;
+                    continue;
+                }
+            }
+        }
+        out += value;
+    }
+    return md_single_asterisks(out);
+}
+
+// One line as plain text; false drops the line (a rule, a fence).
+bool md_line(std::string_view line, std::string& out) {
+    auto body = md_trim_left(line);
+    if (body.rfind("```", 0) == 0 || body.rfind("~~~", 0) == 0 || md_rule(body) || md_table_rule(body)) {
+        return false;
+    }
+    if (body.size() > 1 && body.front() == '|') {
+        body.remove_prefix(1);
+        if (!body.empty() && body.back() == '|') body.remove_suffix(1);
+        out.clear();
+        while (true) {
+            const auto bar = body.find('|');
+            const auto cell = md_inline(md_trim(body.substr(0, bar)));
+            if (!cell.empty()) {
+                if (!out.empty()) out += ", ";
+                out += cell;
+            }
+            if (bar == std::string_view::npos) break;
+            body.remove_prefix(bar + 1);
+        }
+        return true;
+    }
+    while (!body.empty() && body.front() == '>') body = md_trim_left(body.substr(1));
+    std::size_t hashes = 0;
+    while (hashes < body.size() && hashes < 6 && body[hashes] == '#') ++hashes;
+    if (hashes > 0 && (hashes == body.size() || md_space(body[hashes]))) body = md_trim_left(body.substr(hashes));
+    if (!body.empty() && (body.front() == '-' || body.front() == '*' || body.front() == '+') &&
+        (body.size() == 1 || md_space(body[1]))) {
+        body = md_trim_left(body.substr(1));
+    }
+    out = md_inline(body);
+    while (!out.empty() && md_space(out.back())) out.pop_back();
+    return true;
+}
+
+}  // namespace
+
+std::string strip_markdown(std::string_view text) {
+    std::string plain;
+    plain.reserve(text.size());
+    std::string line;
+    bool first = true;
+    for (std::size_t start = 0;;) {
+        const auto end = text.find('\n', start);
+        if (md_line(text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start), line)) {
+            if (!first) plain += '\n';
+            plain += line;
+            first = false;
+        }
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    // A mark the stream has not finished yet ("Το *") is not shown.
+    while (!plain.empty() && (plain.back() == '*' || plain.back() == ' ' || plain.back() == '\n')) plain.pop_back();
+    const auto begin = plain.find_first_not_of(" \n");
+    return begin == std::string::npos ? std::string{} : plain.substr(begin);
 }
 
 std::string fold_text(std::string_view text) {

@@ -95,7 +95,12 @@ bool VoiceAssistantTurn::poll() {
     if (finished(transcript_)) {
         auto result = transcript_.get();
         if (controller_.snapshot().state == AssistantState::Transcribing) {
-            if (result.ok) {
+            if (result.ok && local_ && local_(result.text)) {
+                // The host did it; the turn ends, unless the host ended it already.
+                if (controller_.snapshot().state == AssistantState::Transcribing) {
+                    controller_.dispatch({EventType::Cancel, {}, 0});
+                }
+            } else if (result.ok) {
                 ask(std::move(result.text));
             } else {
                 fail(result.error_code);

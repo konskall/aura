@@ -115,6 +115,8 @@ void AssistantStreamMailbox::publish_delta(std::string_view delta) {
     // reply. Never flash an incomplete command in the user-facing stream.
     if (const auto action = display.find("\nACTION:"); action != std::string::npos) display.resize(action);
     if (display.rfind("ACTION:", 0) == 0) display.clear();
+    // Plain text on the screen and in the early speech, as in the final answer.
+    display = strip_markdown(display);
     if (display == latest_.text && !truncated) return;
     latest_.text = std::move(display);
     if (latest_.first_sentence.empty()) {

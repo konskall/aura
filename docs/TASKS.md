@@ -27,7 +27,7 @@
 - [x] Updates are hosted on GitHub Releases (2026-11-11, the owner's choice; `releases/README.md`): the device's default source, redirects followed, `update-signing.mjs release`.
 - [ ] When the board is here: generate the owner's update signing key and put its public key in `sdkconfig.defaults`; then run the first update from a GitHub release on the board.
 - [x] Icons stored RLE-compressed (2026-11-11): 1.33 MB of flash back. Measure the drawing cost on the board.
-- [x] Web search through Groq's browser tool (2026-11-11, ADR 0006): PC bridge and device. Search answers still come with Markdown at times.
+- [x] Web search through Groq's browser tool (2026-11-11, ADR 0006): PC bridge and device. Their Markdown is dropped since 2026-11-11 (`strip_markdown`).
 
 - [x] Install/activate ESP-IDF 5.5.5 and compile the firmware; resolve only evidence-backed BSP/API drift (2026-10-24: clean build; see VERIFICATION).
 - [ ] Flash the board and validate display, touch, audio, Wi‑Fi, IMU, BLE and microSD on hardware.
@@ -43,7 +43,8 @@
 - [x] The phone sign-in pages in aoraton's style (2026-11-11): aoraton's mark and Aura's wordmark embedded, the five steps distinct.
 - [ ] Run Aoraton on the board live (`docs/VERIFICATION.md`: NEEDS HARDWARE).
 - [x] Internet radio on the device (2026-11-06): the stream, continuous audio output and the station search, on the shared `radio_pump`. Hear it on the board: NEEDS HARDWARE.
-- [ ] Radio by voice on the device ("βάλε Σφαίρα"): its assistant does not yet handle local commands.
+- [x] Radio by voice on the device ("βάλε Σφαίρα", 2026-11-11): `radio_request`, which the simulator shares. Hear it on the board.
+- [ ] The device's other local commands (the time, the battery, opening an app, timers) still go to the assistant.
 - [ ] Decide on pairing a device without a PC: it needs changes to the aoraton.com server, which this repository only reads.
 - [x] Decide the firmware app partition (2026-11-06, the owner): two 7 MB app slots and 1.8 MB `storage` (everything the owner keeps lives on the microSD card); `aura_firmware_config_tests` checks both tables.
 - [ ] Decide licensing and production authorization before any live Aoraton connectivity.

@@ -409,7 +409,8 @@ ParsedAnswer parse_assistant_answer(const std::string& raw) {
         if (!display.empty()) display += '\n';
         display += lines[index];
     }
-    result.text = sanitize_text(display, 12000, true);
+    // The screen and the voice get plain text (the models write Markdown).
+    result.text = strip_markdown(sanitize_text(display, 12000, true));
     if (action_line >= 0) {
         const auto json = trim(trim(lines[static_cast<std::size_t>(action_line)]).substr(7));
         const auto object = parse_flat_json(json, 1024);

@@ -335,6 +335,9 @@ void assistant_tests() {
     parsed = parse_assistant_answer("OK\n```\nACTION: {\"type\":\"alarm\",\"time\":\"7:05\",\"repeat\":\"daily\"}\n```\n");
     expect(parsed.text == "OK" && parsed.action && parsed.action->hour == 7 && parsed.action->minute == 5 &&
            parsed.action->daily, "a fenced alarm action is parsed and hidden");
+    parsed = parse_assistant_answer("**Ζυμαρικά**\n- σε 10 λεπτά\nACTION: {\"type\":\"timer\",\"seconds\":600}");
+    expect(parsed.text == "Ζυμαρικά\nσε 10 λεπτά" && parsed.action && parsed.action->seconds == 600,
+           "the shown and spoken answer is plain text, and its action still parses");
     parsed = parse_assistant_answer("Done.\nACTION: {\"type\":\"shell\",\"cmd\":\"rm -rf /\"}");
     expect(!parsed.action && parsed.action_rejected && parsed.text == "Done.", "unknown actions are rejected");
     parsed = parse_assistant_answer("ACTION: {\"type\":\"timer\",\"seconds\":600}\nMore text after");
