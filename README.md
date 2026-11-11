@@ -200,7 +200,7 @@ The authoritative suite runs everything that can be checked on a PC. It contacts
   - Interoperability checks against the Node tools:
     - the device's assistant instructions match the bridge's;
     - update signatures made by `scripts/update-signing.mjs` verify on the device's parser;
-    - `scripts/aoraton-device-sign-in.mjs` signs a stand-in device in through the real transfer server, and the simulator's device mode in against a local fake Supabase, both through the PC helper and through a stand-in phone that follows the QR.
+    - `scripts/aoraton-device-sign-in.mjs` signs a stand-in device in through the real transfer server, and the simulator's device mode in against a local fake Supabase, both through the PC helper and through a stand-in phone that follows the QR and aoraton.com's relay page. The fake refuses a local return address, as Supabase does.
   - Media Foundation decodes voice messages (AAC, and Opus where installed) back to the encoded tone.
   - A check of the firmware's configuration: LVGL's memory, power management, encrypted NVS and the production security profile.
   - Bridge and control-page tests (`node --test`).
@@ -259,10 +259,7 @@ See [docs/HARDWARE.md](docs/HARDWARE.md).
 
 Until the public key is set, the device refuses every update.
 
-**Signing the device in to aoraton.com.** On the device: Messages → account → **Σύνδεση με Google**. File transfer opens with a QR. Scan it with your phone, on the same Wi-Fi, and sign in with Google. This needs two things ([ADR 0010](docs/ADR/0010-device-aoraton-account.md)):
-
-- the device's network allowed as a return address in the aoraton.com Supabase project, for example `http://192.168.*.*/**`;
-- the project's public values built in, from `config/aoraton.local.json`.
+**Signing the device in to aoraton.com.** On the device: Messages → account → **Σύνδεση με Google**. File transfer opens with a QR. Scan it with your phone, on the same Wi-Fi, and sign in with Google. A page on aoraton.com then hands the sign-in back to the device over the Wi-Fi, because Supabase returns a phone to no local address. The firmware needs the project's public values built in, from `config/aoraton.local.json` ([ADR 0010](docs/ADR/0010-device-aoraton-account.md)).
 
 Or from a PC, with the address and the code File transfer shows:
 

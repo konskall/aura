@@ -43,7 +43,8 @@ the session; none echoes a key, code or invite.
 The owner's phone can do the same without a PC (ADR 0010, 2026-11-07). The account screen's button
 starts File transfer, and once the server is ready the QR holds
 `http://<device>/aoraton/phone?s=<secret>` instead of the address. `GET /aoraton/phone` sends the
-phone on to Google's page, and `GET /aoraton/callback` takes the one-time code back. These two pages
+phone on to Google's page. Google's page returns it to a page on aoraton.com (Supabase returns a
+phone to no local address), which hands the one-time code to `GET /aoraton/callback`. These two pages
 need no code: the QR's one-time secret stands in for it, and eight wrong secrets end the sign-in. They
 keep the private-peer and Host checks, run no script, send no referrer and never show the code.
 

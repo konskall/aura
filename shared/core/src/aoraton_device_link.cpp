@@ -360,9 +360,14 @@ void AoratonDeviceLink::close() {
     if (phone_open_) end_phone_locked();
 }
 
+// Supabase returns a phone to no IP address but 127.0.0.1 (its referrer check,
+// RFC 9700, since 2026-06-01), so Google's page returns to a static page on
+// aoraton.com (public/aura-phone/ in its repository), which forwards the code
+// to `d`, the device on the local network, at /aoraton/callback.
 std::string AoratonDeviceLink::redirect_url() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return phone_secret_.empty() ? std::string{} : phone_origin_ + "/aoraton/callback?s=" + phone_secret_;
+    if (phone_secret_.empty()) return {};
+    return std::string(kPhoneRelay) + "?d=" + phone_origin_.substr(7) + "&s=" + phone_secret_;
 }
 
 bool AoratonDeviceLink::request_phone_sign_in(const std::string& origin, const std::array<std::uint8_t, 16>& random) {

@@ -4,7 +4,8 @@
 // mode's own account worker redeems it with its PKCE verifier at the local fake
 // Supabase, and after a restart the stored settings and session sign it in
 // again without the PC. Then the phone's way, with no PC at all: the project's
-// values built in, the device's QR, Google's page and back to the device.
+// values built in, the device's QR, Google's page, aoraton.com's relay and back
+// to the device.
 // Nothing secret reaches either program's output.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -15,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { signInDevice } from '../../scripts/aoraton-device-sign-in.mjs';
-import { ANON_KEY, AUTH_CODE, startFakeSupabase } from './aoraton_fake_supabase.mjs';
+import { ANON_KEY, AUTH_CODE, SITE_URL, acceptedRedirect, startFakeSupabase } from './aoraton_fake_supabase.mjs';
 
 const exe = process.argv[2];
 assert.ok(exe && existsSync(exe), 'the device mode host is required');
@@ -143,9 +144,21 @@ try {
     assert.ok(google.startsWith(`${config.url}/auth/v1/authorize?`), 'the phone goes on to Google');
     const authorize = await fetch(google, { redirect: 'manual' });
     assert.equal(authorize.status, 302, 'Google sends the phone back');
-    const back = authorize.headers.get('location');
-    assert.ok(back.startsWith(`${address}/aoraton/callback?code=`), 'to the device, with the code');
-    const done = await fetch(back, { redirect: 'manual' });
+    // Supabase returns a phone to no IP address but 127.0.0.1 (as the fake does
+    // now), so it returns to aoraton.com's relay page, which knows the device by
+    // its address.
+    assert.equal(acceptedRedirect('http://192.168.2.5:8788/aoraton/callback?s=x'), SITE_URL,
+      'a return address on the local network is refused');
+    assert.equal(acceptedRedirect('http://127.0.0.1:4779/aoraton/callback'), 'http://127.0.0.1:4779/aoraton/callback',
+      'loopback is not');
+    const back = new URL(authorize.headers.get('location'));
+    assert.equal(`${back.origin}${back.pathname}`, 'https://aoraton.com/aura-phone/', "to aoraton.com's relay");
+    assert.equal(`http://${back.searchParams.get('d')}`, address, 'which knows the device by its address');
+    assert.ok(back.searchParams.get('code'), 'with the code');
+    // The relay (aoraton's public/aura-phone/relay.js, tested there) hands the
+    // device its secret and the code over the local network.
+    const forward = new URLSearchParams({ s: back.searchParams.get('s'), code: back.searchParams.get('code') });
+    const done = await fetch(`${address}/aoraton/callback?${forward}`, { redirect: 'manual' });
     assert.equal(done.status, 200, 'the device takes the code');
     assert.ok(!(await done.text()).includes(AUTH_CODE), 'and does not show it');
     assert.ok(await waitFor(phone.lines, (line) => line === 'SIGNED_IN'), 'the phone signed the device in');

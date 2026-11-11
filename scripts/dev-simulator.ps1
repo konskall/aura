@@ -169,8 +169,8 @@ try {
         Write-Host 'Aoraton: device mode, signed in the way the board is:'
         Write-Host '  1. In AURA: Messages > account > Sign in with Google (it opens File transfer).'
         Write-Host '  2. Phone on the same Wi-Fi: scan the QR File transfer shows and sign in with Google.'
-        Write-Host '     It needs http://192.168.*.*/** among the Supabase Redirect URLs (docs\ADR\0010),'
-        Write-Host '     and Windows may ask to let AURA through its firewall on private networks.'
+        Write-Host '     Google returns it through aoraton.com/aura-phone/, which hands the code to AURA'
+        Write-Host '     (docs\ADR\0010); Windows may ask to let AURA through its firewall on private networks.'
         Write-Host '     Or this PC: node scripts\aoraton-device-sign-in.mjs --address <address> --code <code>'
         Write-Host '     (the address and the six digits File transfer shows; add --invite "<link>" for a room).'
     } elseif ($env:AURA_AORATON_MODE -eq 'live') {

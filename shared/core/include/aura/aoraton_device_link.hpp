@@ -88,8 +88,9 @@ public:
 // authorize URL over the signed-in file-transfer session, opens it in the PC
 // browser, receives the code on 127.0.0.1 and hands it back. The phone: it
 // scans the device's QR, the device's transfer server sends it on to Google's
-// page, and Google's page returns it, with the code, to that server over the
-// owner's Wi-Fi. The PKCE verifier, the session and the room keys never leave
+// page, and Google's page returns it to aoraton.com's relay page, which sends
+// it on, with the code, to that server over the owner's Wi-Fi (Supabase
+// returns a phone to no local address). The PKCE verifier, the session and the room keys never leave
 // the device. Thread-safe: the transfer server, the UI thread and the account
 // worker all call it.
 class AoratonDeviceLink final : public IAoratonLinkEndpoint, public IAoratonSignInChannel {
@@ -97,6 +98,8 @@ public:
     static constexpr std::size_t kMaxInvites = 4;
     // Wrong secrets a phone sign-in survives before it is closed.
     static constexpr unsigned kMaxPhoneMisses = 8;
+    // Where Google's page returns a phone: aoraton.com forwards it to the device.
+    static constexpr const char* kPhoneRelay = "https://aoraton.com/aura-phone/";
     using ConfigSink = std::function<bool(const AoratonLinkConfig&)>;
 
     explicit AoratonDeviceLink(ConfigSink config_sink, bool allow_loopback = false);
@@ -115,7 +118,8 @@ public:
 
     // The phone's way (the UI thread). `origin` is the device's transfer
     // server, http://<private IPv4>:<port>; `random` makes the QR's secret.
-    // The QR shows phone_url(); Google's page returns to
+    // The QR shows phone_url(); Google's page returns to redirect_url(),
+    // kPhoneRelay?d=<origin's host:port>&s=<secret>, which forwards to
     // <origin>/aoraton/callback?s=<secret>. A new request replaces the last
     // one and the PC's request_sign_in() ends it. False: not configured, or
     // not such an address.

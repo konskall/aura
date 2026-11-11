@@ -14,6 +14,25 @@ export const ALPHA = 'v2.QUFBQUFBQUFBQUFBQUFBQUFB';
 export const BETA = 'demo_room_1234';
 export const INCO_UID = '00000000-0000-0000-0000-000000000000';
 export const INCO_ANSWER = 'DEMO inco: γεια σου';
+// The project's Site URL, where Supabase sends a phone whose return address it refuses.
+export const SITE_URL = 'https://aoraton.com/';
+
+// As Supabase's referrer check (RFC 9700, since 2026-06-01): no IP address but
+// loopback is a return address, whatever the project allows; a refused one
+// falls back to the Site URL. Hostnames pass (the fake has no allow-list).
+export function acceptedRedirect(redirect) {
+  let url;
+  try {
+    url = new URL(redirect);
+  } catch {
+    return SITE_URL;
+  }
+  const host = url.hostname;
+  if (/^[0-9]+$/.test(host)) return SITE_URL;
+  if (/^[0-9.]+$/.test(host)) return host.startsWith('127.') ? redirect : SITE_URL;
+  if (host.startsWith('[')) return host === '[::1]' ? redirect : SITE_URL;
+  return redirect;
+}
 // Shaped like Supabase's PKCE codes (a UUID); synthetic.
 export const AUTH_CODE = 'de300000-0000-4000-8000-00000000c0de';
 
@@ -92,7 +111,7 @@ export async function startFakeSupabase() {
         return json(response, 400, { error: 'bad authorize' });
       }
       state.challenge = url.searchParams.get('code_challenge');
-      state.redirect = url.searchParams.get('redirect_to');
+      state.redirect = acceptedRedirect(url.searchParams.get('redirect_to'));
       // As GoTrue: `code` joins the redirect's own query, keys sorted.
       const back = new URL(state.redirect);
       back.searchParams.set('code', AUTH_CODE);

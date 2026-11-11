@@ -238,7 +238,10 @@ int main() {
         expect(phone.request_phone_sign_in(origin, bytes(17, 3)), "a phone sign-in");
         expect(phone.phone_url() == origin + "/aoraton/phone?s=" + nonce,
                "the QR's address carries a 22-character secret");
-        expect(phone.redirect_url() == origin + "/aoraton/callback?s=" + nonce, "Google's page returns to the device");
+        // Supabase returns a phone to no IP address but 127.0.0.1 (RFC 9700), so
+        // Google's page returns to aoraton.com's relay, which forwards to `d`.
+        expect(phone.redirect_url() == "https://aoraton.com/aura-phone/?d=192.168.1.23:8788&s=" + nonce,
+               "Google's page returns through aoraton.com's relay to the device");
         expect(phone.take_sign_in_request(), "the account is asked to start it");
         expect(phone.phone_page(nonce, url) == AoratonPhonePage::Wait && url.empty(),
                "until the account has Google's page, the phone waits");
@@ -287,7 +290,8 @@ int main() {
                "a phone sign-in");
         expect(phone.request_phone_sign_in(origin, bytes(37, 13)) && phone.take_sign_in_request(), "tapped again");
         phone.close();
-        expect(phone.redirect_url() == origin + "/aoraton/callback?s=DTJXfKHG6xA1Wn-kye4TOA" && phone.open(kAuthorize),
+        expect(phone.redirect_url() == "https://aoraton.com/aura-phone/?d=192.168.1.23:8788&s=DTJXfKHG6xA1Wn-kye4TOA" &&
+                   phone.open(kAuthorize),
                "the new secret survives the restart");
         expect(phone.phone_page(nonce, url) == AoratonPhonePage::Gone &&
                    phone.phone_page("DTJXfKHG6xA1Wn-kye4TOA", url) == AoratonPhonePage::Google,

@@ -61,13 +61,13 @@ Then a message like «@inco τι ώρα είναι;» sent from AURA, in a room 
 
 1. In AURA: Messages → account → **Σύνδεση με Google**. It opens File transfer. Once ready, File transfer shows a QR for the phone, with the address and a six-digit code beside it for the PC.
 2. **From the phone**, on the same Wi-Fi: scan the QR and sign in with Google. The phone brings the code back to the simulator, which completes the sign-in with its own PKCE verifier.
-   - This needs the Supabase setting in ADR 0010: the PC's network among the project's Redirect URLs, for example `http://192.168.*.*/**`.
+   - Google returns the phone through a page on aoraton.com, which hands the code to the simulator over the Wi-Fi (ADR 0010). Supabase needs no setting for it.
    - Windows may ask to let `aura_simulator.exe` through its firewall on private networks. Allow it, or the phone cannot reach the simulator.
 
    **Or from this PC:** `node scripts\aoraton-device-sign-in.mjs --address <address> --code <code>`. The helper sends the project settings, Google's page opens in the browser, and the code goes back to the simulator.
 3. Unlock the room keys in AURA, or add `--invite "<link>"` to the helper for a room.
 
-The settings and the session are kept apart from the usual sign-in (`%LOCALAPPDATA%\AURA\aoraton-device-settings.txt` and `aoraton-device.dpapi`), as the board keeps them in its NVS. A restart signs in again without the PC. `aura_aoraton_device_mode_interop` runs both ways against a local fake Supabase: the PC helper, and a stand-in phone that follows the QR.
+The settings and the session are kept apart from the usual sign-in (`%LOCALAPPDATA%\AURA\aoraton-device-settings.txt` and `aoraton-device.dpapi`), as the board keeps them in its NVS. A restart signs in again without the PC. `aura_aoraton_device_mode_interop` runs both ways against a local fake Supabase, which refuses a local return address as Supabase does: the PC helper, and a stand-in phone that follows the QR and aoraton.com's relay page.
 
 ## Voice and companion features (v13)
 
