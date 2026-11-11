@@ -35,6 +35,11 @@ export function acceptedRedirect(redirect) {
 }
 // Shaped like Supabase's PKCE codes (a UUID); synthetic.
 export const AUTH_CODE = 'de300000-0000-4000-8000-00000000c0de';
+// Every token the fake issues starts with one of these, so a test can tell that
+// none reached a program's output. The dot keeps them out of base64url text (a
+// QR's secret, a PKCE challenge), which could spell `at-` by chance.
+export const ACCESS_TOKEN_PREFIX = 'fake.access.';
+export const REFRESH_TOKEN_PREFIX = 'fake.refresh.';
 
 async function messageKey(rkByte) {
   const raw = new Uint8Array(32).fill(rkByte);
@@ -80,8 +85,8 @@ export async function startFakeSupabase() {
 
   const session = () => {
     state.generation += 1;
-    state.access = `at-${state.generation}`;
-    state.refresh = `rt-${state.generation}`;
+    state.access = `${ACCESS_TOKEN_PREFIX}${state.generation}`;
+    state.refresh = `${REFRESH_TOKEN_PREFIX}${state.generation}`;
     return { access_token: state.access, token_type: 'bearer', expires_in: 3600, refresh_token: state.refresh,
       user: { id: USER_ID, email: 'owner@example.com', user_metadata: { full_name: 'Demo Owner' } } };
   };

@@ -16,7 +16,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { signInDevice } from '../../scripts/aoraton-device-sign-in.mjs';
-import { ANON_KEY, AUTH_CODE, SITE_URL, acceptedRedirect, startFakeSupabase } from './aoraton_fake_supabase.mjs';
+import { ACCESS_TOKEN_PREFIX, ANON_KEY, AUTH_CODE, REFRESH_TOKEN_PREFIX, SITE_URL, acceptedRedirect,
+  startFakeSupabase } from './aoraton_fake_supabase.mjs';
 
 const exe = process.argv[2];
 assert.ok(exe && existsSync(exe), 'the device mode host is required');
@@ -173,9 +174,15 @@ try {
   }
 
   const printed = outputs.join('\n');
-  for (const secret of [AUTH_CODE, 'at-', 'rt-', ANON_KEY]) {
-    assert.ok(!printed.includes(secret), 'no code, token or key in the output');
-  }
+  const leaked = (text) => [AUTH_CODE, ACCESS_TOKEN_PREFIX, REFRESH_TOKEN_PREFIX, ANON_KEY]
+    .filter((secret) => text.includes(secret));
+  // The output holds random base64url text, the QR's secret and the PKCE
+  // challenge in the helper's link, which can spell a token's prefix by chance
+  // (CI failed so at 0cb39f2). Such text is no token.
+  assert.deepEqual(leaked('PHONE http://127.0.0.1:8788/aoraton/phone?s=Q9at-Wx7rt-K2mZp0LqY4b'), [],
+    'random base64url text is no token');
+  assert.deepEqual(leaked(`Bearer ${fake.state.access}`), [ACCESS_TOKEN_PREFIX], 'a real token is one');
+  assert.deepEqual(leaked(printed), [], 'no code, token or key in the output');
   console.log('aoraton device mode interop passed');
 } finally {
   await fake.close();

@@ -8,7 +8,8 @@ import { existsSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ALPHA, ANON_KEY, AUTH_CODE, INCO_ANSWER, INCO_UID, open, startFakeSupabase } from './aoraton_fake_supabase.mjs';
+import { ACCESS_TOKEN_PREFIX, ALPHA, ANON_KEY, AUTH_CODE, INCO_ANSWER, INCO_UID, REFRESH_TOKEN_PREFIX, open,
+  startFakeSupabase } from './aoraton_fake_supabase.mjs';
 
 const exe = process.argv[2];
 assert.ok(exe && existsSync(exe), 'smoke executable path is required');
@@ -78,7 +79,7 @@ try {
 
   assert.equal(fake.state.logouts, 1, 'sign-out told the server');
   assert.ok(!existsSync(store), 'sign-out erased the DPAPI store');
-  for (const secret of ['at-', 'rt-', AUTH_CODE, fake.passphrase, 'DEMO από το AURA', 'ερώτηση', INCO_ANSWER]) {
+  for (const secret of [ACCESS_TOKEN_PREFIX, REFRESH_TOKEN_PREFIX, AUTH_CODE, fake.passphrase, 'DEMO από το AURA', 'ερώτηση', INCO_ANSWER]) {
     assert.ok(!output.includes(secret), 'no token, code, passphrase or message text in the program output');
   }
   console.log(`aoraton account smoke passed (${fake.state.log.length} requests to the loopback fake)`);

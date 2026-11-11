@@ -12,6 +12,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Python with Pillow is required: python -m pip 
 
 $cmake = Join-Path $repo '.tools\cmake-4.4.4-windows-x86_64\bin\cmake.exe'
 $build = Join-Path $repo 'build\native'
+# A failing test prints its own output, so a CI log says what failed, not
+# only that it did.
+$env:CTEST_OUTPUT_ON_FAILURE = '1'
 & $cmake --build $build --target test
 if ($LASTEXITCODE -ne 0) { throw "Native tests failed with exit code $LASTEXITCODE" }
 
