@@ -65,7 +65,7 @@ The two pages need no PIN: the secret stands in for it.
 - They still answer only the local network, and only at the device's own address (the Host check).
 - The link compares secrets in constant time, and eight wrong ones end the phone sign-in. A malformed address reaches no link.
 - The secret ends with the sign-in, with File transfer, or with the PC's own sign-in, which replaces the phone's.
-- The pages never echo the code. They carry no script and send no referrer, so neither Google nor Supabase sees the secret in a `Referer` header. They are in Greek with English beneath.
+- The pages never echo the code. They carry no script and send no referrer, so neither Google nor Supabase sees the secret in a `Referer` header. They are in Greek with English beneath. Since 2026-11-11 they look like aoraton.com's relay page, with aoraton's mark and Aura's wordmark embedded in them: the transfer server's CSP allows `data:` images and nothing from elsewhere.
 
 Signed in from File transfer, by the phone or by the PC, the device goes back to where the sign-in began and says so. File transfer itself stays on, as before, until its ten minutes end or the owner stops it, because the PC helper may still send an invite.
 

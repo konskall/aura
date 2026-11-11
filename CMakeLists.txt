@@ -203,7 +203,9 @@ endif()
 
 if(BUILD_TESTING)
     add_executable(aura_file_transfer_tests tests/unit/file_transfer_test.cpp)
-    target_compile_definitions(aura_file_transfer_tests PRIVATE AURA_PHOTO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/photos")
+    target_compile_definitions(aura_file_transfer_tests PRIVATE
+        AURA_PHOTO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/photos"
+        AURA_WORDMARK_SVG="${CMAKE_CURRENT_SOURCE_DIR}/shared/assets/branding/source/Aura_Selas.svg")
     target_link_libraries(aura_file_transfer_tests PRIVATE aura_core)
     add_test(NAME aura_file_transfer_tests COMMAND aura_file_transfer_tests)
     if(WIN32)

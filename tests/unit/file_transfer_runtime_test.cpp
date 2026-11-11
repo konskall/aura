@@ -128,6 +128,9 @@ int main(int argc, char** argv) {
             expect(page.status == 200 && page.body == l10n::transfer_page() &&
                        page.headers.find("Cache-Control: no-store") != std::string::npos,
                    "public page is static and has no session credentials");
+            expect(page.headers.find("Content-Security-Policy: default-src 'none';") != std::string::npos &&
+                       page.headers.find(" img-src data:;") != std::string::npos,
+                   "the pages may show images embedded in them, and nothing from elsewhere");
             const auto login = request(port, "POST", "/api/session", "{\"pin\":\"" + state.pin + "\"}",
                                        "Content-Type: application/json\r\n");
             const auto json = parse_flat_json(login.body, 128);

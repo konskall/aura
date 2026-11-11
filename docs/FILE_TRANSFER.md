@@ -46,7 +46,9 @@ starts File transfer, and once the server is ready the QR holds
 phone on to Google's page. Google's page returns it to a page on aoraton.com (Supabase returns a
 phone to no local address), which hands the one-time code to `GET /aoraton/callback`. These two pages
 need no code: the QR's one-time secret stands in for it, and eight wrong secrets end the sign-in. They
-keep the private-peer and Host checks, run no script, send no referrer and never show the code.
+keep the private-peer and Host checks, run no script, send no referrer and never show the code. They
+look like aoraton.com's relay page: aoraton's mark and Aura's wordmark are embedded in them, and
+every transfer response's CSP allows `data:` images and nothing from elsewhere.
 
 After code login, **Αποθηκευμένα στη συσκευή / Saved on the device** lists photos
 or other files, 128 per page. Select the destination, refresh or use Next page.

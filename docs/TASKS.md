@@ -37,6 +37,7 @@
 - [x] Sign-in from the phone, without a PC (ADR 0010, 2026-11-07): the QR, the two pages, the project's values built in. Tested on the PC against a fake Supabase.
 - [x] The phone's return through aoraton.com (ADR 0010, 2026-11-07): Supabase refuses a local return address, so the static page `/aura-phone/` (incognitochat 53d50b9) hands the code to the device. No Supabase setting.
 - [x] Sign-in from the phone, live (2026-11-11): `run.bat device` and an iPhone, through aoraton.com. The `http://192.168.*.*/**` Redirect URL is no longer used and can go.
+- [x] The phone sign-in pages in aoraton's style (2026-11-11): aoraton's mark and Aura's wordmark embedded, the five steps distinct.
 - [ ] Run Aoraton on the board live (`docs/VERIFICATION.md`: NEEDS HARDWARE).
 - [x] Internet radio on the device (2026-11-06): the stream, continuous audio output and the station search, on the shared `radio_pump`. Hear it on the board: NEEDS HARDWARE.
 - [ ] Radio by voice on the device ("βάλε Σφαίρα"): its assistant does not yet handle local commands.

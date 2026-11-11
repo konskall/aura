@@ -209,9 +209,7 @@ esp_err_t Esp32FileTransfer::request(httpd_req_t* req) {
     httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
     httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
     httpd_resp_set_hdr(req, "Connection", "close");
-    httpd_resp_set_hdr(
-        req, "Content-Security-Policy",
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+    httpd_resp_set_hdr(req, "Content-Security-Policy", kTransferContentSecurityPolicy);
     return httpd_resp_send(req, result.body.data(), static_cast<ssize_t>(result.body.size()));
 }
 void Esp32FileTransfer::manage() {

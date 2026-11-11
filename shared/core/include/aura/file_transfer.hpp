@@ -11,6 +11,12 @@ namespace aura {
 class IAoratonLinkEndpoint;
 constexpr std::uint64_t kTransferLeaseMs = 600000;
 constexpr std::uint64_t kTransferFileLimit = 16U * 1024U * 1024U;
+// Every transfer response's Content-Security-Policy, the simulator's and the
+// ESP32's: the pages' own inline script and style, images embedded in them
+// (data: only, as the phone sign-in pages' marks) and nothing from elsewhere.
+inline constexpr char kTransferContentSecurityPolicy[] =
+    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; "
+    "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 enum class TransferState { Off, Starting, Ready, Receiving, Expired, Locked, Failed };
 enum class TransferError {
     None,

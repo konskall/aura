@@ -371,6 +371,47 @@ void aoraton_phone_tests() {
     for (std::size_t i = 0; i < pages.size(); ++i)
         for (std::size_t j = i + 1; j < pages.size(); ++j)
             expect(pages[i] != pages[j], "each step has its own page");
+
+    // The look (the owner's request, 2026-11-11), as aoraton.com's relay page:
+    // aoraton's mark and Aura's wordmark, both in the page itself (the device's
+    // CSP allows data: images and nothing from elsewhere), and the step the
+    // page is styled by.
+    const std::pair<PhoneSignInPage, std::string_view> steps[] = {
+        {PhoneSignInPage::Wait, "wait"}, {PhoneSignInPage::Google, "google"}, {PhoneSignInPage::Done, "done"},
+        {PhoneSignInPage::Cancelled, "cancelled"}, {PhoneSignInPage::Gone, "gone"}};
+    for (const auto& [kind, step] : steps) {
+        const auto html = l10n::phone_sign_in_page(kind, "https://demo-project.supabase.co/auth/v1/authorize");
+        expect(html.find("<html lang=\"el\" data-state=\"" + std::string(step) + "\">") != std::string::npos,
+               "each page names its step");
+        expect(html.find("<img class=\"mark\" src=\"data:image/webp;base64,UklGR") != std::string::npos &&
+                   html.find("alt=\"aoraton\"") != std::string::npos,
+               "aoraton's mark is in the page, as WebP");
+        expect(html.find("<svg class=\"aura\" viewBox=\"64 400 1136 420\" role=\"img\" aria-label=\"Aura\">") !=
+                   std::string::npos,
+               "Aura's wordmark is in the page");
+        expect(html.find("src=\"http") == std::string::npos && html.find("url(http") == std::string::npos &&
+                   html.find("<link") == std::string::npos && html.find("@import") == std::string::npos,
+               "nothing comes from elsewhere");
+    }
+    const auto joined = l10n::phone_sign_in_page(PhoneSignInPage::Done);
+    const auto mark = joined.find("base64,");
+    expect(mark != std::string::npos && joined.find('"', mark) - mark < 4096,
+           "the mark stays small: the firmware is on its size floor");
+    // Aura's wordmark is the brand's own, never recoloured: every path, colour
+    // stop, gradient and clip of its source is in the page, unaltered.
+    std::ifstream source_file(AURA_WORDMARK_SVG, std::ios::binary);
+    const std::string source{std::istreambuf_iterator<char>(source_file), {}};
+    std::size_t pieces = 0;
+    for (const std::string_view open : {" d=\"", "<stop", "<linearGradient", "<clipPath"}) {
+        for (auto at = source.find(open); at != std::string::npos; at = source.find(open, at + 1)) {
+            const auto end = source.find(open.front() == ' ' ? '"' : '>', at + open.size());
+            const auto piece = source.substr(at, end + 1 - at);
+            if (joined.find(piece) == std::string::npos) std::cerr << "not in the page: " << piece.substr(0, 60) << '\n';
+            expect(joined.find(piece) != std::string::npos, "Aura's wordmark is unaltered");
+            ++pieces;
+        }
+    }
+    expect(pieces == 38, "the wordmark's 12 paths, 17 stops, 5 gradients and 4 clips were compared");
 }
 
 int main() {

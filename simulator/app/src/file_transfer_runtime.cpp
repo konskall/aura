@@ -99,7 +99,8 @@ void respond(SOCKET socket, const TransferResponse& response) {
         "HTTP/1.1 " + std::to_string(response.status) + " Response\r\nContent-Type: " +
         std::string(response.html ? "text/html; charset=utf-8" : "application/json; charset=utf-8") +
         "\r\nContent-Length: " + std::to_string(body.size()) +
-        "\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'\r\n\r\n" +
+        "\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: " +
+        std::string(kTransferContentSecurityPolicy) + "\r\n\r\n" +
         body;
     std::size_t done = 0;
     while (done < message.size()) {
