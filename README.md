@@ -42,7 +42,7 @@ All names, rooms, messages, photos and data in the screenshots are fictional `DE
 - **Actions with confirmation.** The assistant can propose a timer, alarm, reminder, note, task, shopping item, calendar event or message. Nothing happens until you confirm it on the screen.
 - **Works offline for everyday commands.** Timers, alarms, notes, tasks, shopping, volume, mute, brightness, the time, the battery and opening apps are understood on the device itself, in Greek and English. A sentence that merely mentions these words is left to the assistant.
 - **Local answers.** "Who celebrates today?", "When does Γιώργος celebrate?" and "When is the next public holiday?" are answered from an offline Greek Orthodox calendar.
-- **Explicit web search.** "Ψάξε…" / "search for…" uses live search only when the provider has a real search tool (the Codex CLI); otherwise the assistant says it cannot search right now.
+- **Explicit web search.** "Ψάξε…" / "search for…" uses live search only when the provider has a real search tool: the Codex CLI, or since 2026-11-11 Groq's browser search (`run.bat groq` and the device). Otherwise the assistant says it cannot search right now.
 - **On the device, without a PC.** The firmware talks to Groq (speech recognition, and answers from `gpt-oss-120b`) and to Azure Speech (the voice) directly over HTTPS, with the same instructions as the bridge ([ADR 0009](docs/ADR/0009-device-direct-cloud-assistant.md)). Spoken questions and answers work there; confirming a proposed action is not wired on the device yet, so it declines actions.
 
 ### Apps

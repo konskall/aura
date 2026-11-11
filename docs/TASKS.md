@@ -27,6 +27,7 @@
 - [x] Updates are hosted on GitHub Releases (2026-11-11, the owner's choice; `releases/README.md`): the device's default source, redirects followed, `update-signing.mjs release`.
 - [ ] When the board is here: generate the owner's update signing key and put its public key in `sdkconfig.defaults`; then run the first update from a GitHub release on the board.
 - [x] Icons stored RLE-compressed (2026-11-11): 1.33 MB of flash back. Measure the drawing cost on the board.
+- [x] Web search through Groq's browser tool (2026-11-11, ADR 0006): PC bridge and device. Search answers still come with Markdown at times.
 
 - [x] Install/activate ESP-IDF 5.5.5 and compile the firmware; resolve only evidence-backed BSP/API drift (2026-10-24: clean build; see VERIFICATION).
 - [ ] Flash the board and validate display, touch, audio, Wi‑Fi, IMU, BLE and microSD on hardware.

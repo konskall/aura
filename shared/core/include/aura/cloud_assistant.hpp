@@ -28,7 +28,9 @@ class AssistantStreamMailbox;
 // the device for those services.
 
 // Groq's OpenAI-style server-sent events: each "data:" line carries a delta,
-// "data: [DONE]" ends the answer (bridge: consumeGroqSse).
+// "data: [DONE]" ends the answer (bridge: consumeGroqSse). The browser
+// search's source markers, 【1†L4-L5】, are dropped on the way (bridge:
+// createCitationFilter).
 class OpenAiStreamDecoder {
 public:
     static constexpr std::size_t kMaxAnswerBytes = 12000;
@@ -43,9 +45,11 @@ public:
 
 private:
     bool line(std::string_view line);
+    bool publish(const std::string& text);
     bool fail(const char* code);
     AssistantStreamMailbox* mailbox_{};
     std::string pending_;
+    std::string held_;  // a possible source marker's start, held until it ends or proves not to be one
     std::string answer_;
     std::string text_;
     std::string error_;

@@ -2,7 +2,8 @@
 // The device builds the same prompt as the PC bridge: for each turn, the
 // bridge's validateTurn + buildInstructions (bridge/src/turn-prompt.mjs) and the
 // device's build_turn_instructions (shared/core/src/turn_prompt.cpp) must agree
-// byte for byte. Groq has no search tool, so a web-search turn is told so.
+// byte for byte. Groq searches with its browser tool (groq-runner.mjs), so a
+// web-search turn gets the search instructions on both.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -28,10 +29,7 @@ try {
   for (const [index, turn] of turns.entries()) {
     const checked = validateTurn(turn);
     assert.ok(checked.ok, `turn ${index} is valid for the bridge`);
-    // The bridge's Groq runner has no search tool (server.mjs).
-    const value = checked.value.webSearch ? { ...checked.value, webSearch: false, searchUnavailable: true } :
-      checked.value;
-    const expected = buildInstructions(value);
+    const expected = buildInstructions(checked.value);
     const flat = { ...turn };
     delete flat.history;
     for (const [position, item] of (turn.history ?? []).entries()) {

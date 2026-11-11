@@ -17,7 +17,7 @@ platform drivers → adapters → services → bounded state snapshots → LVGL 
 - `shared/localization`: compiled UTF-8 resources. Greek is the default and English remains available.
 - `simulator/app`: SDL2 display/input, Windows audio/radio, opt-in Windows ANCS, event-log adapter, provider workers, WinHTTP weather/fuel and persistence adapters, screenshot capture and host metrics.
 - `simulator/controls`: loopback development panel that injects versioned events without pretending to be product UI.
-- `bridge`: loopback-only Node service that mediates non-interactive Codex CLI calls, enables Codex web search only for typed explicit-search turns, can opt into Groq through a process-environment secret for development, offers a bounded optional neural-TTS subprocess, and serves a strictly validated local cache of the official EU fuel bulletin.
+- `bridge`: loopback-only Node service that mediates non-interactive Codex CLI calls, enables web search (Codex `--search`, Groq's `browser_search`) only for typed explicit-search turns, can opt into Groq through a process-environment secret for development, offers a bounded optional neural-TTS subprocess, and serves a strictly validated local cache of the official EU fuel bulletin.
 - `firmware`: ESP-IDF composition root and board/audio adapters built on the official managed Waveshare BSP.
 
 More detailed diagrams and platform boundaries are in [architecture/SYSTEM_OVERVIEW.md](architecture/SYSTEM_OVERVIEW.md) and [architecture/PLATFORM_ABSTRACTION.md](architecture/PLATFORM_ABSTRACTION.md).

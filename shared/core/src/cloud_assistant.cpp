@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <memory>
 #include <random>
+#include <utility>
 
 #include "aura/assistant_stream.hpp"
 #include "aura/json_reader.hpp"
@@ -156,6 +157,64 @@ std::string drop_whisper_credits(std::string text) {
     }
 }
 
+// Groq's browser search cites its pages inline, as 【1†L4-L5】: the bracket,
+// digits, a dagger, at most 24 characters that are neither brackets nor space,
+// the closing bracket (bridge: CITATION in groq-runner.mjs).
+constexpr std::string_view kCiteOpen = "\xE3\x80\x90";   // 【
+constexpr std::string_view kCiteClose = "\xE3\x80\x91";  // 】
+constexpr std::string_view kDagger = "\xE2\x80\xA0";     // †
+
+// For `text` starting with 【: the marker's length, 0 when the text ends
+// before it is settled, npos when it is not a marker. A delta is whole UTF-8,
+// so a marker splits only between characters.
+std::size_t citation_length(std::string_view text) {
+    std::size_t at = kCiteOpen.size();
+    while (at < text.size() && text[at] >= '0' && text[at] <= '9') ++at;
+    if (at == text.size()) return 0;
+    if (at == kCiteOpen.size() || text.substr(at, kDagger.size()) != kDagger) return std::string_view::npos;
+    at += kDagger.size();
+    for (std::size_t characters = 0; at < text.size(); ++characters) {
+        if (text.substr(at, kCiteClose.size()) == kCiteClose) return at + kCiteClose.size();
+        const char ch = text[at];
+        if (characters == 24 || text.substr(at, kCiteOpen.size()) == kCiteOpen || ch == ' ' || ch == '\t' ||
+            ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v') {
+            return std::string_view::npos;
+        }
+        at += utf8_length(static_cast<unsigned char>(ch));
+    }
+    return 0;
+}
+
+// The text to show and speak from `held` and `text`, without source markers; a
+// possible marker's start stays in `held`.
+std::string drop_citations(std::string& held, std::string_view text) {
+    std::string rest = std::move(held);
+    held.clear();
+    rest.append(text.data(), text.size());
+    std::string out;
+    std::size_t index = 0;
+    for (;;) {
+        const auto at = rest.find(kCiteOpen, index);
+        if (at == std::string::npos) {
+            out.append(rest, index, std::string::npos);
+            break;
+        }
+        out.append(rest, index, at - index);
+        const auto length = citation_length(std::string_view(rest).substr(at));
+        if (length == 0) {
+            held = rest.substr(at);
+            break;
+        }
+        if (length == std::string_view::npos) {
+            out.append(kCiteOpen);
+            index = at + kCiteOpen.size();
+        } else {
+            index = at + length;
+        }
+    }
+    return out;
+}
+
 std::string xml_escape(std::string_view text) {
     std::string out;
     out.reserve(text.size() + 16);
@@ -205,13 +264,18 @@ AssistantReply ask_groq(IHttpsClient& https, const std::string& key, const TurnR
     const std::string instructions = build_turn_instructions(request);
     if (instructions.empty()) return {false, {}, "INVALID_REQUEST"};
     if (instructions.size() > kTurnMaxInstructionsBytes) return {false, {}, "PROMPT_TOO_LARGE"};
-    // The PC bridge's Groq runner: one user message, streamed, temperature 0.2.
+    // The PC bridge's Groq runner: one user message, streamed, temperature 0.2;
+    // a web search runs on Groq's servers with gpt-oss's browser tool, at the
+    // low reasoning effort Groq advises with it.
     HttpsRequest http;
     http.url = kGroqChatUrl;
     http.headers = {{"Authorization", "Bearer " + key}, {"Content-Type", "application/json"}};
     http.body = std::string("{\"model\":\"") + CloudAssistantProvider::kModel +
                 "\",\"messages\":[{\"role\":\"user\",\"content\":\"" + json_escape(instructions) +
-                "\"}],\"stream\":true,\"temperature\":0.2,\"max_completion_tokens\":1200}";
+                "\"}],\"stream\":true,\"temperature\":0.2,\"max_completion_tokens\":1200" +
+                (request.web_search ? ",\"tools\":[{\"type\":\"browser_search\"}],\"tool_choice\":\"required\","
+                                      "\"reasoning_effort\":\"low\"}"
+                                    : "}");
     http.timeout_ms = 45000;
     OpenAiStreamDecoder decoder(request.stream.get());
     const auto response = https.post(http, [&decoder](std::string_view chunk) { return decoder.push(chunk); });
@@ -393,6 +457,7 @@ bool OpenAiStreamDecoder::line(std::string_view raw) {
     if (trimmed.empty() || trimmed.rfind("data:", 0) != 0) return true;
     const std::string data = trim_ascii(std::string_view(trimmed).substr(5));
     if (data == "[DONE]") {
+        if (!publish(std::exchange(held_, {}))) return false;
         if (answer_.empty()) return fail("INVALID_RESPONSE");
         text_ = sanitize(answer_, true);
         done_ = true;
@@ -410,9 +475,14 @@ bool OpenAiStreamDecoder::line(std::string_view raw) {
     if (!content || content->type() != JsonType::String) return true;
     const std::string clean = sanitize(content->as_string(), false);
     if (clean.empty()) return true;
-    answer_ += clean;
+    return publish(drop_citations(held_, clean));
+}
+
+bool OpenAiStreamDecoder::publish(const std::string& text) {
+    if (text.empty()) return true;
+    answer_ += text;
     if (answer_.size() > kMaxAnswerBytes) return fail("RESPONSE_TOO_LARGE");
-    if (mailbox_) mailbox_->publish_delta(clean);
+    if (mailbox_) mailbox_->publish_delta(text);
     return true;
 }
 
@@ -425,6 +495,7 @@ bool OpenAiStreamDecoder::finish() {
         if (!line(tail)) return false;
         if (done_) return true;
     }
+    if (!publish(std::exchange(held_, {}))) return false;
     if (answer_.empty()) return fail("INVALID_RESPONSE");
     text_ = sanitize(answer_, true);
     done_ = true;

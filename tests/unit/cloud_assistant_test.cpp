@@ -107,8 +107,10 @@ void prompt_tests() {
     expect(text.size() > question.size() && text.compare(text.size() - question.size(), question.size(), question) == 0,
            "the question last, without control characters or surrounding space");
     chat.web_search = true;
-    expect(contains(aura::build_turn_instructions(chat), "but you cannot search the web right now"),
-           "Groq has no search tool, so the model says so");
+    const auto searching = aura::build_turn_instructions(chat);
+    expect(contains(searching, "Use the live web-search tool for this question.") &&
+               !contains(searching, "cannot search the web"),
+           "Groq searches with its browser tool, so the model is told to search");
 }
 
 void stream_tests() {
@@ -134,6 +136,20 @@ void stream_tests() {
     for (int index = 0; index < 13 && endless.push(big); ++index) {
     }
     expect(endless.error_code() == "RESPONSE_TOO_LARGE", "an answer over 12000 bytes is cut off as an error");
+
+    // Groq's browser search cites its pages inline, 【1†L4-L5】, and a marker
+    // can arrive split across deltas. Brackets that are not such a marker stay.
+    auto cited_mailbox = std::make_shared<aura::AssistantStreamMailbox>();
+    aura::OpenAiStreamDecoder cited(cited_mailbox.get());
+    cited.push("data: {\"choices\":[{\"delta\":{\"content\":\"Δύο【1†L4\"}}]}\n");
+    cited.push("data: {\"choices\":[{\"delta\":{\"reasoning\":\"r\",\"executed_tools\":[{\"type\":\"search\"}]}}]}\n");
+    cited.push("data: {\"choices\":[{\"delta\":{\"content\":\"0-L45】 εστιατόρια【2†L6-L11】【\"}}]}\n");
+    cited.push("data: {\"choices\":[{\"delta\":{\"content\":\"3†L1-L2】. Γωνία【Α】.\"}}]}\n");
+    expect(cited.push("data: [DONE]\n") && cited.text() == "Δύο εστιατόρια. Γωνία【Α】.",
+           "the search's source markers are dropped from the answer");
+    aura::AssistantStreamSnapshot cited_snapshot;
+    expect(cited_mailbox->take_after(0, cited_snapshot) && cited_snapshot.text == "Δύο εστιατόρια. Γωνία【Α】.",
+           "and never reach the screen");
 }
 
 void provider_tests() {
@@ -160,6 +176,14 @@ void provider_tests() {
     expect(contains(sent.body, "\"role\":\"user\"") && contains(sent.body, "Τι ώρα είναι;"),
            "the instructions go as one user message");
     expect(!contains(sent.body, kKeys.groq_api_key), "the key is never in the body");
+    expect(!contains(sent.body, "browser_search") && !contains(sent.body, "reasoning_effort"),
+           "a turn without a search sends no tool");
+    request.web_search = true;
+    expect(wait(provider.start_turn(request)).ok, "a web-search turn is answered");
+    expect(contains(https.requests.back().body, "\"tools\":[{\"type\":\"browser_search\"}],\"tool_choice\":\"required\","
+                                                "\"reasoning_effort\":\"low\""),
+           "a web-search turn asks Groq to search with its browser tool");
+    request.web_search = false;
 
     const struct {
         int status;

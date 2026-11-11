@@ -11,6 +11,49 @@ function sanitizeStreamDelta(value) {
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
 
+// Groq's browser search cites its pages inline, as 【1†L4-L5】; such markers
+// never reach the screen or the voice. A marker can arrive split across
+// deltas, so a possible start is held until it ends or proves not to be one.
+// The device drops the same markers (OpenAiStreamDecoder).
+const CITATION = /^【\d+†[^【】\s]{0,24}】/;
+const CITATION_START = /^【(\d+(†[^【】\s]{0,24})?)?$/;
+
+export function createCitationFilter() {
+  let held = '';
+  return {
+    push(text) {
+      let out = '';
+      let rest = held + text;
+      held = '';
+      while (rest) {
+        const at = rest.indexOf('【');
+        if (at === -1) {
+          out += rest;
+          break;
+        }
+        out += rest.slice(0, at);
+        rest = rest.slice(at);
+        const marker = rest.match(CITATION);
+        if (marker) {
+          rest = rest.slice(marker[0].length);
+        } else if (CITATION_START.test(rest)) {
+          held = rest;
+          break;
+        } else {
+          out += '【';
+          rest = rest.slice(1);
+        }
+      }
+      return out;
+    },
+    flush() {
+      const rest = held;
+      held = '';
+      return rest;
+    },
+  };
+}
+
 function failureForStatus(status) {
   if (status === 401 || status === 403) return 'PROVIDER_AUTH_FAILED';
   if (status === 429) return 'RATE_LIMIT';
@@ -24,11 +67,19 @@ export async function consumeGroqSse(body, onDelta) {
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let pending = '';
   let answer = '';
+  const citations = createCitationFilter();
+  const publish = (text) => {
+    if (!text) return null;
+    answer += text;
+    if (Buffer.byteLength(answer, 'utf8') > MAX_OUTPUT_BYTES) return 'too-large';
+    onDelta?.(text);
+    return null;
+  };
   const consumeLine = (line) => {
     const trimmed = line.trim();
     if (!trimmed || !trimmed.startsWith('data:')) return null;
     const data = trimmed.slice(5).trim();
-    if (data === '[DONE]') return 'done';
+    if (data === '[DONE]') return publish(citations.flush()) ?? 'done';
     let event;
     try { event = JSON.parse(data); } catch { return 'invalid'; }
     if (event?.error) return 'provider-error';
@@ -36,10 +87,7 @@ export async function consumeGroqSse(body, onDelta) {
     if (typeof rawDelta !== 'string' || rawDelta.length === 0) return null;
     const delta = sanitizeStreamDelta(rawDelta);
     if (delta.length === 0) return null;
-    answer += delta;
-    if (Buffer.byteLength(answer, 'utf8') > MAX_OUTPUT_BYTES) return 'too-large';
-    onDelta?.(delta);
-    return null;
+    return publish(citations.push(delta));
   };
   try {
     for (;;) {
@@ -58,7 +106,7 @@ export async function consumeGroqSse(body, onDelta) {
       }
     }
     pending += decoder.decode();
-    const tail = consumeLine(pending);
+    const tail = consumeLine(pending) ?? publish(citations.flush());
     if (tail === 'too-large') return { ok: false, code: 'RESPONSE_TOO_LARGE' };
     if (tail === 'invalid') return { ok: false, code: 'INVALID_RESPONSE' };
     return answer ? { ok: true, text: sanitizeDisplayText(answer) } : { ok: false, code: 'INVALID_RESPONSE' };
@@ -78,7 +126,7 @@ export function createGroqRunner(options = {}) {
   const model = /^[A-Za-z0-9._/-]{1,100}$/.test(configuredModel) ? configuredModel : DEFAULT_MODEL;
   const timeoutMs = Math.min(Math.max(options.timeoutMs ?? 45000, 1000), 120000);
 
-  async function runTurnStream({ instructions, signal, onDelta }) {
+  async function runTurnStream({ instructions, signal, onDelta, webSearch = false }) {
     if (!apiKey) return { ok: false, code: 'PROVIDER_NOT_CONFIGURED' };
     if (typeof instructions !== 'string' || Buffer.byteLength(instructions, 'utf8') === 0) {
       return { ok: false, code: 'INVALID_REQUEST' };
@@ -100,6 +148,10 @@ export function createGroqRunner(options = {}) {
           stream: true,
           temperature: 0.2,
           max_completion_tokens: 1200,
+          // A web search runs on Groq's servers with gpt-oss's browser tool;
+          // Groq advises low reasoning effort with it.
+          ...(webSearch ? { tools: [{ type: 'browser_search' }], tool_choice: 'required', reasoning_effort: 'low' } :
+            {}),
         }),
         signal: controller.signal,
       });
@@ -116,9 +168,9 @@ export function createGroqRunner(options = {}) {
   }
 
   return {
-    supportsWebSearch: false,
+    supportsWebSearch: true,
     runTurnStream,
-    runTurn: ({ instructions, signal }) => runTurnStream({ instructions, signal }),
+    runTurn: ({ instructions, signal, webSearch }) => runTurnStream({ instructions, signal, webSearch }),
     async health() { return { provider: 'groq', configured: Boolean(apiKey), model }; },
   };
 }
