@@ -110,6 +110,52 @@ std::string trim_ascii(std::string_view text) {
     return std::string(text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1));
 }
 
+// Subtitle credits whisper writes for silence or noise, learned from subtitled
+// videos. ASCII letters in lower case, Greek as whisper writes it; the PC
+// bridge drops the same ones (bridge/src/speech.mjs).
+constexpr std::string_view kWhisperCredits[] = {
+    "Υπότιτλοι authorwave",
+    "Υπότιτλοι από την κοινότητα amara.org",
+    "Ευχαριστώ για την παρακολούθηση",
+    "Ευχαριστούμε για την παρακολούθηση",
+    "thanks for watching",
+    "thank you for watching",
+    "subtitles by the amara.org community",
+};
+
+// The credits at the end of a transcript, one after another: nobody said them.
+std::string drop_whisper_credits(std::string text) {
+    for (;;) {
+        std::string_view trimmed = text;
+        for (;;) {
+            if (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '.' || trimmed.back() == '!')) {
+                trimmed.remove_suffix(1);
+            } else if (trimmed.size() >= 3 && trimmed.substr(trimmed.size() - 3) == "\xE2\x80\xA6") {
+                trimmed.remove_suffix(3);  // …
+            } else {
+                break;
+            }
+        }
+        std::string folded(trimmed);
+        for (auto& ch : folded) {
+            if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+        }
+        bool dropped = false;
+        for (const std::string_view credit : kWhisperCredits) {
+            if (folded.size() < credit.size() ||
+                folded.compare(folded.size() - credit.size(), credit.size(), credit) != 0) {
+                continue;
+            }
+            const std::size_t start = folded.size() - credit.size();
+            if (start != 0 && std::string_view(" .!?,;:").find(folded[start - 1]) == std::string_view::npos) continue;
+            text = std::string(trimmed.substr(0, start));
+            dropped = true;
+            break;
+        }
+        if (!dropped) return trim_ascii(text);
+    }
+}
+
 std::string xml_escape(std::string_view text) {
     std::string out;
     out.reserve(text.size() + 16);
@@ -311,7 +357,7 @@ std::string clean_transcript(std::string_view text) {
     for (auto& ch : untagged) {
         if (static_cast<unsigned char>(ch) < 0x20 || ch == 0x7F) ch = ' ';
     }
-    std::string cleaned = collapse_space(untagged);
+    std::string cleaned = drop_whisper_credits(collapse_space(untagged));
     std::size_t characters = 0;
     for (std::size_t index = 0; index < cleaned.size(); index += utf8_length(static_cast<unsigned char>(cleaned[index]))) {
         if (characters++ == kMaxTranscriptCharacters) {

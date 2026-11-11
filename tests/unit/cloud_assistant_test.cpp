@@ -218,6 +218,20 @@ void speech_tests() {
            "the fields the PC bridge sends");
     https.response = {200, "{\"text\":\"  \"}", {}};
     expect(wait(speech.transcribe(wav, "el")).error_code == "NO_SPEECH", "silence is no question");
+    // Whisper writes a subtitle credit for silence or noise; at the end of a
+    // transcript nobody said it.
+    https.response = {200, "{\"text\":\" Υπότιτλοι AUTHORWAVE\"}", {}};
+    expect(wait(speech.transcribe(wav, "el")).error_code == "NO_SPEECH",
+           "a subtitle credit whisper invents for silence is no question");
+    https.response = {200, "{\"text\":\"Τι ώρα είναι; Υπότιτλοι authorwave.\"}", {}};
+    const auto credited = wait(speech.transcribe(wav, "el"));
+    expect(credited.ok && credited.text == "Τι ώρα είναι;", "a credit after a question is dropped");
+    expect(aura::clean_transcript("Ευχαριστώ για την παρακολούθηση!").empty() &&
+               aura::clean_transcript("Thanks for watching! Subtitles by the Amara.org community").empty(),
+           "the other credits whisper invents, Greek and English");
+    expect(aura::clean_transcript("Πες Ευχαριστώ για την παρακολούθηση στη Μαρία") ==
+               "Πες Ευχαριστώ για την παρακολούθηση στη Μαρία",
+           "said inside a sentence, the same words stay");
     https.response = {401, {}, {}};
     expect(wait(speech.transcribe(wav, "el")).error_code == "PROVIDER_AUTH_FAILED", "a refused key");
     https.response = {500, {}, {}};

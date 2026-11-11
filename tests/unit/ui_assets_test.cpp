@@ -13,6 +13,7 @@
 #include "aura/photo_strings.hpp"
 #include "aura/transfer_strings.hpp"
 #include "aura_brand_assets.hpp"
+#include "src/image/lv_image_decoder_private.h"  // lv_image_decoder_dsc_t, to decode the compressed icons
 
 #include <algorithm>
 #include <array>
@@ -271,6 +272,40 @@ void check_appearance_icons() {
            "icons follow the active appearance");
     ui::set_active_appearance(Appearance::Halo);
     expect(ui::icon_asset(ui::IconRole::Palette) != nullptr, "Settings > Appearance has its palette icon");
+}
+
+// The icons are stored compressed with LVGL's RLE. Uncompressed, the four
+// families were 1.6 MB of flash (101 images of 64 x 64 bytes each). Each one
+// still decodes to a 64 px A8 image; the pointer screenshots check its pixels.
+void ensure_lvgl();
+void check_icon_compression() {
+    namespace ui = aura::ui;
+    ensure_lvgl();
+    std::vector<const lv_image_dsc_t*> icons;
+    for (const auto appearance : aura::kAppearances) {
+        for (std::size_t index = 0; index < ui::icon_role_count(); ++index) {
+            const auto* icon = ui::icon_asset(static_cast<ui::IconRole>(index), appearance);
+            if (icon && std::find(icons.begin(), icons.end(), icon) == icons.end()) icons.push_back(icon);
+        }
+    }
+    std::size_t stored = 0;
+    bool compressed = true;
+    bool decodes = true;
+    for (const auto* icon : icons) {
+        stored += icon->data_size;
+        compressed = compressed && (icon->header.flags & LV_IMAGE_FLAGS_COMPRESSED) != 0;
+        lv_image_decoder_dsc_t decoder{};
+        if (lv_image_decoder_open(&decoder, icon, nullptr) != LV_RESULT_OK) {
+            decodes = false;
+            continue;
+        }
+        decodes = decodes && decoder.decoded != nullptr && decoder.decoded->header.w == 64 &&
+                  decoder.decoded->header.h == 64 && decoder.decoded->header.cf == LV_COLOR_FORMAT_A8;        lv_image_decoder_close(&decoder);
+    }
+    expect(icons.size() >= 300U, "the four families' icons are all counted");
+    expect(compressed, "every icon is stored compressed");
+    expect(decodes, "every compressed icon decodes to a 64 px A8 image");
+    expect(stored < 384U * 1024U, "the icons of all four appearances take under 384 KB of flash");
 }
 
 // Palettes, fonts and metrics of the four appearances (Settings > Appearance).
@@ -1130,7 +1165,7 @@ int main() {
         expect(icon != nullptr, "every icon role resolves");
         expect(icon->header.cf == LV_COLOR_FORMAT_A8, "icons use tintable A8 assets");
         expect(icon->header.w == 64 && icon->header.h == 64, "icons share a 64px source grid");
-        expect(icon->data != nullptr && icon->data_size >= 64U * 64U, "icon bitmap is present");
+        expect(icon->data != nullptr && icon->data_size > 12U, "icon bitmap is present");
         expect(aura::ui::icon_role_name(role)[0] != '\0', "icon role has a manifest name");
     }
 
@@ -1214,6 +1249,7 @@ int main() {
     check_appearance_registry();
     check_appearance_fonts();
     check_appearance_icons();
+    check_icon_compression();
     check_component_kit();
     check_presences();
     check_pearl_presence();

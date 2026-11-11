@@ -257,3 +257,23 @@ test('optional Groq STT uploads one bounded WAV with no secret in the URL', asyn
   assert.equal(calls[0].options.body.get('model'), 'whisper-large-v3-turbo');
   assert.equal(calls[0].options.body.get('language'), 'el');
 });
+
+test('a subtitle credit whisper invents for silence is no speech', async () => {
+  // Whisper learned the credits of subtitled videos and writes one for silence
+  // or noise. At the end of a transcript, nobody said it.
+  assert.equal(cleanTranscript('Υπότιτλοι AUTHORWAVE'), '');
+  assert.equal(cleanTranscript(' Υπότιτλοι authorwave. '), '');
+  assert.equal(cleanTranscript('Τι ώρα είναι; Υπότιτλοι AUTHORWAVE'), 'Τι ώρα είναι;');
+  assert.equal(cleanTranscript('Ευχαριστώ για την παρακολούθηση!'), '');
+  assert.equal(cleanTranscript('Thanks for watching! Subtitles by the Amara.org community'), '');
+  // Said inside a sentence, the same words stay.
+  assert.equal(cleanTranscript('Πες Ευχαριστώ για την παρακολούθηση στη Μαρία'),
+    'Πες Ευχαριστώ για την παρακολούθηση στη Μαρία');
+  const engine = createSpeechEngines({
+    sttProvider: 'groq', groqApiKey: 'test-only-key',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ text: ' Υπότιτλοι AUTHORWAVE' }) }),
+    spawnImpl: () => { throw new Error('not used'); },
+    exists: () => false,
+  });
+  assert.deepEqual(await engine.transcribe({ wav: wav({ samples: 8000 }), lang: 'el' }), { ok: false, code: 'NO_SPEECH' });
+});

@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { a8ImageSource } from './lvgl-a8-image.mjs';
 
 const root = process.cwd();
 const require = createRequire(path.join(root, '.tools', 'icon-build', 'package.json'));
@@ -163,11 +164,7 @@ for (const [family, config] of Object.entries(families)) {
     const alpha = [];
     for (let index = 0; index < png.data.length; index += 4) alpha.push(png.data[index + 3]);
     const id = `aura_icon_${config.symbol}_${cIdentifier(name)}`;
-    const rows = [];
-    for (let index = 0; index < alpha.length; index += 16) {
-      rows.push(`    ${alpha.slice(index, index + 16).map((value) => `0x${value.toString(16).padStart(2, '0').toUpperCase()}`).join(', ')},`);
-    }
-    arrays.push(`static const uint8_t ${id}_map[] = {\n${rows.join('\n')}\n};\n\nstatic const lv_image_dsc_t ${id} = {\n    .header = {\n        .magic = LV_IMAGE_HEADER_MAGIC,\n        .cf = LV_COLOR_FORMAT_A8,\n        .flags = 0,\n        .w = ${size},\n        .h = ${size},\n        .stride = ${size},\n        .reserved_2 = 0,\n    },\n    .data_size = sizeof(${id}_map),\n    .data = ${id}_map,\n    .reserved = nullptr,\n    .reserved_2 = nullptr,\n};`);
+    arrays.push(a8ImageSource({ id, alpha, size, exported: false }));
   }
   const cases = Object.entries(chosen)
     .map(([role, { name }]) => `        case aura::ui::IconRole::${role}: return &aura_icon_${config.symbol}_${cIdentifier(name)};`)

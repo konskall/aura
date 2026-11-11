@@ -9,6 +9,12 @@ namespace aura {
 
 enum class UpdateState { Idle, Checking, UpToDate, Available, Downloading, Verifying, ReadyToRestart, Failed };
 
+// Where a device looks for updates unless its NVS names another source: the
+// manifest attached to the newest GitHub release of this repository
+// (scripts/update-signing.mjs release prepares one).
+inline constexpr char kUpdateManifestUrl[] =
+    "https://github.com/konskall/aura/releases/latest/download/aura-manifest.json";
+
 struct UpdateManifest {
     std::string version;
     std::string url;

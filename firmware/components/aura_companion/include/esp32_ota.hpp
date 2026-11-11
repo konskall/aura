@@ -22,8 +22,9 @@ struct OtaEvent {
     std::string error_code;
 };
 
-// Over-the-air updates: an HTTPS manifest (NVS "aura_ota"/"manifest_url",
-// empty by default) that must carry the owner's signature for the build's key,
+// Over-the-air updates: an HTTPS manifest (the newest GitHub release's,
+// kUpdateManifestUrl, unless NVS "aura_ota"/"manifest_url" names another
+// source; redirects followed) that must carry the owner's signature for the build's key,
 // then a streamed download into the inactive OTA slot with a SHA-256 check
 // against the signed manifest before the boot partition changes. Rollback is
 // on: a new image that does not confirm itself after boot

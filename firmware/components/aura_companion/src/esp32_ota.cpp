@@ -22,25 +22,39 @@ constexpr const char* kTag = "aura-ota";
 constexpr std::size_t kManifestLimit = 2048;
 constexpr std::size_t kMaximumEvents = 24;
 
+// GitHub Releases answers with redirects (the newest release, then its tag,
+// then the file store), so a redirect is followed, at most five times, until
+// the 200 that carries the body. As in esp_https_ota: the redirect's body is
+// read away, the client takes the new address and opens again.
 esp_http_client_handle_t open_https(const std::string& url) {
     esp_http_client_config_t config{};
     config.url = url.c_str();
     config.crt_bundle_attach = esp_crt_bundle_attach;
     config.timeout_ms = 15000;
     config.keep_alive_enable = true;
+    // A release file's redirect carries a long signed address.
+    config.buffer_size = 4096;
+    config.buffer_size_tx = 2048;
     auto client = esp_http_client_init(&config);
     if (!client) return nullptr;
-    if (esp_http_client_open(client, 0) != ESP_OK || esp_http_client_fetch_headers(client) < 0 ||
-        esp_http_client_get_status_code(client) != 200) {
-        esp_http_client_cleanup(client);
-        return nullptr;
+    for (int hop = 0; hop <= 5; ++hop) {
+        if (esp_http_client_open(client, 0) != ESP_OK || esp_http_client_fetch_headers(client) < 0) break;
+        const int status = esp_http_client_get_status_code(client);
+        if (status == 200) return client;
+        const bool redirect = status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+        if (!redirect || esp_http_client_flush_response(client, nullptr) != ESP_OK ||
+            esp_http_client_set_redirection(client) != ESP_OK) {
+            break;
+        }
     }
-    return client;
+    esp_http_client_cleanup(client);
+    return nullptr;
 }
 
 }  // namespace
 
 bool Esp32Ota::initialize() {
+    manifest_url_ = kUpdateManifestUrl;  // the newest GitHub release, unless NVS names another source
     nvs_handle_t handle = 0;
     if (nvs_open("aura_ota", NVS_READONLY, &handle) == ESP_OK) {
         char url[257]{};

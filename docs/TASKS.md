@@ -24,7 +24,9 @@
 - [ ] Build the AURA Link Android app and the device-side GATT server (`docs/phone/ANDROID_COMPANION.md`).
 - [ ] Train and license a Greek wake-word model for «Αύρα» (ESP-SR WakeNet, openWakeWord or microWakeWord); measure false accepts/rejects and battery cost before enabling the existing capability.
 - [x] Signed updates in code (2026-11-05): the manifest carries the owner's ECDSA P-256 signature (`scripts/update-signing.mjs`); production adds Secure Boot V2.
-- [ ] Generate the owner's update signing key, put its public key in `sdkconfig.defaults`, and decide where updates are hosted.
+- [x] Updates are hosted on GitHub Releases (2026-11-11, the owner's choice; `releases/README.md`): the device's default source, redirects followed, `update-signing.mjs release`.
+- [ ] When the board is here: generate the owner's update signing key and put its public key in `sdkconfig.defaults`; then run the first update from a GitHub release on the board.
+- [x] Icons stored RLE-compressed (2026-11-11): 1.33 MB of flash back. Measure the drawing cost on the board.
 
 - [x] Install/activate ESP-IDF 5.5.5 and compile the firmware; resolve only evidence-backed BSP/API drift (2026-10-24: clean build; see VERIFICATION).
 - [ ] Flash the board and validate display, touch, audio, Wi‑Fi, IMU, BLE and microSD on hardware.

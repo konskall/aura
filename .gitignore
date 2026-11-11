@@ -32,3 +32,6 @@ __pycache__/
 artifacts/
 # Local aoraton.com settings (scripts/setup-aoraton.ps1)
 config/*.local.json
+
+# OTA releases prepared by scripts/update-signing.mjs release: uploaded to GitHub Releases, never committed
+/releases/v*/

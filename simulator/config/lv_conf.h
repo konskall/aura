@@ -16,6 +16,9 @@
 #define LV_USE_DRAW_SW 1
 #define LV_DRAW_SW_COMPLEX 1
 #define LV_USE_SNAPSHOT 1
+/* The icons are stored RLE-compressed (tools/icons/lvgl-a8-image.mjs). */
+#define LV_USE_RLE 1
+#define LV_BIN_DECODER_RAM_LOAD 1 /* LVGL decodes a compressed image only this way */
 #define LV_USE_SYSMON 1
 #define LV_USE_PERF_MONITOR 0
 #define LV_USE_MEM_MONITOR 0

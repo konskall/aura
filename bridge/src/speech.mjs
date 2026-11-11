@@ -147,14 +147,40 @@ export function inspectWav(buffer) {
   return { ok: false, code: 'INVALID_AUDIO' };
 }
 
+// Subtitle credits whisper writes for silence or noise, learned from subtitled
+// videos. ASCII letters in lower case, Greek as whisper writes it; the device
+// drops the same ones (shared/core/src/cloud_assistant.cpp).
+const WHISPER_CREDITS = [
+  'Υπότιτλοι authorwave',
+  'Υπότιτλοι από την κοινότητα amara.org',
+  'Ευχαριστώ για την παρακολούθηση',
+  'Ευχαριστούμε για την παρακολούθηση',
+  'thanks for watching',
+  'thank you for watching',
+  'subtitles by the amara.org community',
+];
+
+// The credits at the end of a transcript, one after another: nobody said them.
+function dropWhisperCredits(text) {
+  let result = text;
+  for (;;) {
+    const trimmed = result.replace(/[ .!…]+$/u, '');
+    const folded = trimmed.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+    const credit = WHISPER_CREDITS.find((phrase) => folded.endsWith(phrase)
+      && (folded.length === phrase.length || ' .!?,;:'.includes(folded[folded.length - phrase.length - 1])));
+    if (!credit) return result;
+    result = trimmed.slice(0, trimmed.length - credit.length);
+  }
+}
+
 // whisper prints the transcript, sometimes with markers for silence or music.
 export function cleanTranscript(stdout) {
-  return String(stdout)
+  const spaced = String(stdout)
     .replace(/\[[^\]]{0,40}\]|\([^)]{0,40}\)|\*[^*]{0,40}\*/g, ' ')
     .replace(/[\u0000-\u001F\u007F]/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 600);
+    .trim();
+  return dropWhisperCredits(spaced).trim().slice(0, 600);
 }
 
 function killTree(child) {

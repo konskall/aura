@@ -5,10 +5,11 @@
 // changed manifest or another key's signature does not.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { keygen, signManifest } from '../../scripts/update-signing.mjs';
+import { imageVersion, keygen, prepareRelease, RELEASE_MANIFEST_URL, signManifest }
+  from '../../scripts/update-signing.mjs';
 
 const exe = process.argv[2];
 assert.ok(exe && existsSync(exe), 'verifier executable path is required');
@@ -40,6 +41,35 @@ try {
   assert.ok(signature);
   assert.equal(check(unsigned, publicKey), 'MANIFEST_UNSIGNED', 'an unsigned manifest is refused');
   assert.equal(check(manifest, ''), 'UPDATE_KEY_MISSING', 'a build without a key installs nothing');
+
+  // A release for GitHub Releases. The image must carry the version it is
+  // released as, or a device would install it and then offer it again.
+  const espImage = (version) => {
+    const bytes = Buffer.alloc(0x20 + 48 + 64);
+    bytes[0] = 0xe9;
+    bytes.writeUInt32LE(0xabcd5432, 0x20);
+    bytes.write(version, 0x30, 'latin1');
+    return bytes;
+  };
+  const releaseImage = join(directory, 'aura_firmware.bin');
+  writeFileSync(releaseImage, espImage('13.1.0'));
+  assert.equal(imageVersion(readFileSync(releaseImage)), '13.1.0', 'the version an ESP-IDF image carries');
+  const releases = join(directory, 'releases');
+  const prepared = prepareRelease({ version: '13.1.0', key, image: releaseImage, outRoot: releases, notes: 'Test' });
+  assert.equal(prepared.manifest.url, 'https://github.com/konskall/aura/releases/download/v13.1.0/aura_firmware.bin',
+    'the image is the release\'s own file');
+  assert.deepEqual(readdirSync(join(releases, 'v13.1.0')).sort(), ['aura-manifest.json', 'aura_firmware.bin'],
+    'the two files the release carries');
+  assert.equal(check(JSON.parse(readFileSync(join(releases, 'v13.1.0', 'aura-manifest.json'), 'utf8')), publicKey),
+    'OK', 'the device accepts the release manifest');
+  assert.throws(() => prepareRelease({ version: '13.1.0', key, image: releaseImage, outRoot: releases }), /exists/,
+    'a release folder is never replaced');
+  assert.throws(() => prepareRelease({ version: '13.2.0', key, image: releaseImage, outRoot: releases }), /13\.1\.0/,
+    'an image that carries another version is refused');
+  // A device with no source of its own looks at the newest release.
+  assert.equal(RELEASE_MANIFEST_URL, 'https://github.com/konskall/aura/releases/latest/download/aura-manifest.json');
+  const header = readFileSync(new URL('../../shared/core/include/aura/ota_update.hpp', import.meta.url), 'utf8');
+  assert.ok(header.includes(`"${RELEASE_MANIFEST_URL}"`), 'the firmware looks where releases are published');
   console.log('update signing interop: PASS');
 } finally {
   rmSync(directory, { recursive: true, force: true });
