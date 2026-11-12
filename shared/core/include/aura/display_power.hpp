@@ -55,6 +55,10 @@ struct DisplaySettings {
     std::uint32_t timeout_ms{30000};
     std::uint32_t dim_ms{5000};
     Appearance appearance{Appearance::Halo};
+    // The status bar's battery shows its percentage beside the icon.
+    bool battery_percent{true};
+    // Times read 14:05; false: 2:05 μ.μ. (2:05 PM).
+    bool clock_24h{true};
 };
 
 std::string serialize_display_settings(const DisplaySettings& settings);

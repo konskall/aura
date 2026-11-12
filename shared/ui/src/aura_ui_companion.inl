@@ -114,12 +114,11 @@
         const auto when = from_minute_index(minute);
         char text[64];
         const std::int64_t days = clock.clock_valid ? minute / 1440 - clock.now_minute / 1440 : -1;
+        const auto time = time_text(when.hour, when.minute);
         if (days == 0 || days == 1) {
-            std::snprintf(text, sizeof(text), c().day_time_format, days == 0 ? c().today : c().tomorrow, when.hour,
-                          when.minute);
+            std::snprintf(text, sizeof(text), c().day_time_format, days == 0 ? c().today : c().tomorrow, time.c_str());
         } else {
-            std::snprintf(text, sizeof(text), "%d %s %02d:%02d", when.day, v().month_names[when.month - 1], when.hour,
-                          when.minute);
+            std::snprintf(text, sizeof(text), "%d %s %s", when.day, v().month_names[when.month - 1], time.c_str());
         }
         return text;
     }
@@ -128,8 +127,8 @@
         if (minute <= 0) return {};
         const auto when = from_minute_index(minute);
         char text[64];
-        std::snprintf(text, sizeof(text), "%d %s · %02d:%02d", when.day, v().month_names[when.month - 1], when.hour,
-                      when.minute);
+        std::snprintf(text, sizeof(text), "%d %s · %s", when.day, v().month_names[when.month - 1],
+                      time_text(when.hour, when.minute).c_str());
         return text;
     }
 
@@ -586,7 +585,8 @@
         if (self->accept_action() && self->callbacks.on_phone_forget) self->callbacks.on_phone_forget();
     }
 
-    // value: 0 always-on, 1 raise, 2 flip, 3 timeout, 4 brightness
+    // value: 0 always-on, 1 raise, 2 flip, 3 timeout, 4 brightness, 5 24-hour
+    // time, 6 the battery's percentage
     static void display_setting_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (!self->accept_action() || !self->callbacks.on_display_settings) return;
@@ -598,10 +598,13 @@
             case 3:
                 settings.timeout_ms = settings.timeout_ms <= 15000 ? 30000 : (settings.timeout_ms <= 30000 ? 60000 : 15000);
                 break;
-            default:
+            case 4:
                 settings.active_brightness_percent = settings.active_brightness_percent >= 100 ? 25 :
                     ((settings.active_brightness_percent / 25) + 1) * 25;
                 break;
+            case 5: settings.clock_24h = !settings.clock_24h; break;
+            case 6: settings.battery_percent = !settings.battery_percent; break;
+            default: return;
         }
         self->callbacks.on_display_settings(settings);
     }
@@ -1209,7 +1212,7 @@
                         action.label.empty() ? c().action_question : action.label};
             }
             case AssistantActionType::Alarm: {
-                std::snprintf(text, sizeof(text), c().action_alarm_format, action.hour, action.minute);
+                std::snprintf(text, sizeof(text), c().action_alarm_format, time_text(action.hour, action.minute).c_str());
                 std::string detail = action.daily ? c().every_day : c().once;
                 if (!action.label.empty()) detail += " · " + action.label;
                 return {ui::IconRole::Reminder, ui::tokens::amber, text, detail};
@@ -1221,7 +1224,7 @@
                     std::snprintf(text, sizeof(text), c().action_in_minutes_format, action.in_minutes);
                 } else {
                     std::snprintf(text, sizeof(text), c().action_at_format, action.tomorrow ? c().tomorrow : c().today,
-                                  action.hour, action.minute);
+                                  time_text(action.hour, action.minute).c_str());
                 }
                 return {ui::IconRole::BellRing, ui::tokens::magenta, action.text, text};
             }
@@ -1233,8 +1236,8 @@
                 return {ui::IconRole::List, ui::tokens::amber, c().action_shopping_title, action.text};
             case AssistantActionType::CalendarEvent: {
                 const auto when = from_minute_index(action.start_minute);
-                std::snprintf(text, sizeof(text), "%02d/%02d · %02d:%02d", when.day, when.month,
-                              when.hour, when.minute);
+                std::snprintf(text, sizeof(text), "%02d/%02d · %s", when.day, when.month,
+                              time_text(when.hour, when.minute).c_str());
                 return {ui::IconRole::Calendar, ui::tokens::blue, action.text, text};
             }
             case AssistantActionType::Volume:
@@ -1368,11 +1371,10 @@
             y += kRowPitch;
         }
         for (const auto& alarm : clock.alarms) {
-            char time[8];
-            std::snprintf(time, sizeof(time), "%02d:%02d", alarm.hour, alarm.minute);
+            const auto time = time_text(alarm.hour, alarm.minute);
             std::string detail = alarm.enabled ? (alarm.daily ? c().every_day : c().once) : c().alarm_off;
             if (!alarm.label.empty()) detail += " · " + alarm.label;
-            auto* row = list_row(list, y, time, detail.c_str(), ui::IconRole::Reminder,
+            auto* row = list_row(list, y, time.c_str(), detail.c_str(), ui::IconRole::Reminder,
                                  alarm.enabled ? ui::tokens::amber : ui::tokens::text_tertiary, kRowHeight, 220);
             tappable(row, clock_item_event,
                      (static_cast<std::uintptr_t>(ClockAlertKind::Alarm) << 24U) | (alarm.id & 0xFFFFFFU));
@@ -1521,10 +1523,10 @@
         std::snprintf(text, sizeof(text), c().in_hours_format, 3);
         choices.push_back({now + 180, text});
         if (now - day < 20 * 60 - 30) {
-            std::snprintf(text, sizeof(text), c().tonight_format, 20, 0);
+            std::snprintf(text, sizeof(text), c().tonight_format, time_text(20, 0).c_str());
             choices.push_back({day + 20 * 60, text});
         }
-        std::snprintf(text, sizeof(text), c().tomorrow_format, 9, 0);
+        std::snprintf(text, sizeof(text), c().tomorrow_format, time_text(9, 0).c_str());
         choices.push_back({day + 1440 + 9 * 60, text});
         auto* list = make_list();
         int y = 0;
@@ -1580,11 +1582,13 @@
                 state_text(200, c().clock_empty, nullptr);
                 return;
             }
-            char time[8];
-            std::snprintf(time, sizeof(time), "%02d:%02d", alarm->hour, alarm->minute);
-            label(content, time, 0, 112, ui::tokens::display_width, ui::font_display(),
-                  alarm->enabled ? ui::tokens::text : ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
-            std::string detail = alarm->daily ? c().every_day : c().once;
+            // The large digits; on a 12-hour clock the half of the day leads the line below.
+            label(content, time_digits(alarm->hour, alarm->minute).c_str(), 0, 112, ui::tokens::display_width,
+                  ui::font_display(), alarm->enabled ? ui::tokens::text : ui::tokens::text_tertiary,
+                  LV_TEXT_ALIGN_CENTER);
+            std::string detail = display_power.settings.clock_24h ? std::string{} :
+                std::string(clock_period(alarm->hour, interface_language)) + " · ";
+            detail += alarm->daily ? c().every_day : c().once;
             if (!alarm->label.empty()) detail += " · " + alarm->label;
             line(content, detail.c_str(), kGutter, 196, kWidth, ui::font_body(), ui::tokens::text_secondary,
                  LV_TEXT_ALIGN_CENTER);
@@ -1619,15 +1623,14 @@
         lv_arc_set_angles(alert_ring, 0, 360);
         lv_obj_set_pos(alert_ring, 152, 40);
         state_symbol(64, 128, ui::IconRole::BellRing, ui::tokens::amber);
-        char time[8];
-        std::snprintf(time, sizeof(time), "%02d:%02d", alert.hour, alert.minute);
+        const auto time = time_text(alert.hour, alert.minute);
         std::string detail = alert.label;
         const char* title = c().reminder;
         if (alert.kind == ClockAlertKind::Timer) {
             title = c().alert_time_up;
             if (detail.empty()) detail = duration_words(alert.duration_s);
         } else if (alert.kind == ClockAlertKind::Alarm) {
-            title = time;
+            title = time.c_str();
             if (detail.empty()) detail = c().alarm;
         }
         state_text(236, title, detail.empty() ? nullptr : detail.c_str());
@@ -2043,20 +2046,19 @@
                     break;
                 }
                 case BriefingItemKind::Alarm:
-                    std::snprintf(title, sizeof(title), c().action_alarm_format, item.hour, item.minute);
+                    std::snprintf(title, sizeof(title), c().action_alarm_format, time_text(item.hour, item.minute).c_str());
                     lines.push_back({ui::IconRole::Reminder, ui::tokens::amber, title, item.text, UiView::Clock});
-                    std::snprintf(title, sizeof(title), "%02d:%02d", item.hour, item.minute);
-                    lines.back().time = title;
+                    // The narrow time column: the digits (the title has the whole time).
+                    lines.back().time = time_digits(item.hour, item.minute);
                     lines.back().bare_title = c().alarm;
                     break;
                 case BriefingItemKind::Reminders:
                     if (item.count == 1) std::snprintf(title, sizeof(title), "%s", c().briefing_reminders_one);
                     else std::snprintf(title, sizeof(title), c().briefing_reminders_format, item.count);
-                    std::snprintf(detail, sizeof(detail), c().briefing_next_format, item.hour, item.minute,
-                                  item.text.c_str());
+                    std::snprintf(detail, sizeof(detail), c().briefing_next_format,
+                                  time_text(item.hour, item.minute).c_str(), item.text.c_str());
                     lines.push_back({ui::IconRole::BellRing, ui::tokens::magenta, title, detail, UiView::Clock});
-                    std::snprintf(title, sizeof(title), "%02d:%02d", item.hour, item.minute);
-                    lines.back().time = title;
+                    lines.back().time = time_digits(item.hour, item.minute);
                     break;
                 case BriefingItemKind::Timers:
                     if (item.count == 1) std::snprintf(title, sizeof(title), "%s", c().briefing_timers_one);
@@ -2269,9 +2271,7 @@
         }
         const int clock_y = top + weather_height;
         if (status.clock_valid) {
-            char time[12];
-            std::snprintf(time, sizeof(time), "%02d:%02d", status.hour, status.minute);
-            label(content, time, graphite ? kGutter + dx : dx, clock_y + dy,
+            label(content, time_digits(status.hour, status.minute).c_str(), graphite ? kGutter + dx : dx, clock_y + dy,
                   graphite ? kWidth : ui::tokens::display_width, clock_font, kDim,
                   LV_TEXT_ALIGN_CENTER);
         }
@@ -2307,9 +2307,7 @@
         if (alarm) {
             auto* row = centered_row(y, 8);
             icon_view(row, ui::IconRole::Reminder, 24, kFaint);
-            char time[8];
-            std::snprintf(time, sizeof(time), "%02d:%02d", alarm->hour, alarm->minute);
-            ui::make_label(row, time, kFaint, text_font);
+            ui::make_label(row, time_text(alarm->hour, alarm->minute).c_str(), kFaint, text_font);
         }
     }
 
@@ -2422,7 +2420,12 @@
                        ui::IconRole::Brightness, ui::tokens::amber);
         add_chevron(row);
         tappable(row, display_setting_event, 4);
-        list_end(list, kRowPitch * 5);
+        // An example in the form in use: «π.χ. 14:05» or «π.χ. 2:05 μ.μ.».
+        char example[48];
+        std::snprintf(example, sizeof(example), c().clock_24h_example_format, time_text(14, 5).c_str());
+        setting_switch_row(list, kRowPitch * 5, c().clock_24h_title, example, ui::IconRole::Clock,
+                           ui::tokens::ice, settings.clock_24h, true, 5);
+        list_end(list, kRowPitch * 6);
     }
 
     void render_update() {

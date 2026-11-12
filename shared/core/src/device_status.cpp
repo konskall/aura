@@ -62,6 +62,19 @@ void DeviceStatusModel::set_power(int percent, bool charging, StatusOrigin origi
     ++snapshot_.sequence;
 }
 
+void DeviceStatusModel::set_battery_details(const BatteryDetails& details) noexcept {
+    if (snapshot_.battery == details) return;
+    snapshot_.battery = details;
+    ++snapshot_.sequence;
+}
+
+void DeviceStatusModel::set_storage(StorageStatus storage) noexcept {
+    storage.free_bytes = std::min(storage.free_bytes, storage.total_bytes);
+    if (snapshot_.storage == storage) return;
+    snapshot_.storage = storage;
+    ++snapshot_.sequence;
+}
+
 void DeviceStatusModel::set_power_unavailable() noexcept {
     if (!snapshot_.power_known && !snapshot_.charging && snapshot_.power_origin == StatusOrigin::Unavailable) return;
     snapshot_.power_known = false;

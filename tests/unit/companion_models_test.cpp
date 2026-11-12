@@ -79,6 +79,24 @@ void text_tests() {
 
 void clock_tests() {
     using namespace aura;
+    // A time as the owner chose to read it (2026-11-11).
+    expect(clock_text(14, 5, true, InterfaceLanguage::Greek) == "14:05" &&
+               clock_text(7, 30, true, InterfaceLanguage::English) == "07:30",
+           "24-hour times, as before");
+    expect(clock_text(14, 5, false, InterfaceLanguage::Greek) == "2:05 μ.μ." &&
+               clock_text(9, 0, false, InterfaceLanguage::Greek) == "9:00 π.μ." &&
+               clock_text(14, 5, false, InterfaceLanguage::English) == "2:05 PM",
+           "12-hour times say morning or afternoon");
+    expect(clock_text(0, 15, false, InterfaceLanguage::English) == "12:15 AM" &&
+               clock_text(12, 0, false, InterfaceLanguage::Greek) == "12:00 μ.μ.",
+           "midnight and noon are 12");
+    // The large clocks' fonts have digits only: the half of the day goes beside them.
+    expect(clock_digits(14, 5, true) == "14:05" && clock_digits(14, 5, false) == "2:05" &&
+               clock_digits(0, 15, false) == "12:15",
+           "a large clock's digits");
+    expect(std::string(clock_period(9, InterfaceLanguage::Greek)) == "π.μ." &&
+               std::string(clock_period(21, InterfaceLanguage::English)) == "PM",
+           "the half of the day");
     ClockServicesModel clock;
     std::uint32_t id = 0;
     expect(clock.start_timer(0, "x") == ClockResult::Invalid, "empty timer is rejected");

@@ -1,6 +1,6 @@
 # Hardware target and verified board profile
 
-Target: Waveshare ESP32-S3-Touch-AMOLED-2.16, battery-included option (nominal 3.7 V / 1000 mAh), with a FAT32 microSD card. The card (`/sdcard/aura`) holds photos, notes and voice notes, file transfers and the cache of Aoraton's encrypted attachments. Without one the device still runs: notes and alarms stay in memory and nothing is cached.
+Target: Waveshare ESP32-S3-Touch-AMOLED-2.16, battery-included option (nominal 3.7 V / 1000 mAh), with a FAT32 microSD card. The card (`/sdcard/aura`) holds photos, notes and voice notes, file transfers and the cache of Aoraton's encrypted attachments. Without one the device still runs: notes and alarms stay in memory and nothing is cached. Its free space is read a minute apart (`esp_vfs_fat_info`). `Διαμόρφωση κάρτας` runs `esp_vfs_fat_sdcard_format` and restarts; NVS (Wi-Fi, the keys, the Aoraton account) is kept.
 
 Verified from the current official Waveshare documentation on 2026-10-17:
 
@@ -10,7 +10,9 @@ Verified from the current official Waveshare documentation on 2026-10-17:
 - AXP2101 PMIC, QMI8658 IMU, PCF85063 RTC.
   - Drivers since 2026-11-05 (`firmware/components/aura_board/src/aura_board_chips.cpp`, register formats in `shared/core/src/board_chips.cpp`, both NOT VERIFIED ON HARDWARE):
     - **PCF85063 at 0x51.** It keeps UTC and sets the system clock at boot. Each SNTP sync writes it again.
-    - **AXP2101 at 0x34.** It is read every 5 s: battery percent, voltage, USB and charging.
+    - **AXP2101 at 0x34.** It is read every 5 s: battery percent (0xA4), USB and charging (0x00, 0x01), and the ADC block 0x34–0x3D.
+      - The block gives battery, USB and system voltage, and the die temperature: 22 + (7274 − raw) / 20 °C, as XPowersLib computes it. Bits 2–0 of 0x01 give the charger's stage.
+      - The chip measures no health or cycle count. Κατάσταση συσκευής shows the rated 1000 mAh instead.
   - The AXP2101 setup does what Waveshare's ESP-IDF example `01_AXP2101` does with its bundled XPowersLib:
     - ADC control 0x30: battery, VBUS and system voltage and the temperature on, TS-pin detection off ("necessary on the board");
     - battery detection 0x68 bit 0 on;

@@ -56,6 +56,34 @@ int main() {
            "clock values are bounded");
     expect(status.snapshot().battery_percent == 100 && status.snapshot().charging,
            "power values are bounded and retained");
+    // The battery's details (the owner's request, 2026-11-11): a change is news,
+    // the same reading again is not.
+    aura::BatteryDetails details;
+    details.known = true;
+    details.battery_mv = 3920;
+    details.stage = aura::ChargeStage::ConstantCurrent;
+    details.rated_mah = 1000;
+    details.origin = aura::StatusOrigin::Live;
+    const auto before_details = status.snapshot().sequence;
+    status.set_battery_details(details);
+    expect(status.snapshot().battery == details && status.snapshot().sequence == before_details + 1,
+           "the battery's details are kept");
+    status.set_battery_details(details);
+    expect(status.snapshot().sequence == before_details + 1, "the same details again change nothing");
+    // The microSD card's space (the owner's request, 2026-11-11).
+    aura::StorageStatus card;
+    card.known = true;
+    card.present = true;
+    card.total_bytes = 31'914'983'424ULL;
+    card.free_bytes = 30'000'000'000ULL;
+    card.origin = aura::StatusOrigin::Live;
+    const auto before_card = status.snapshot().sequence;
+    status.set_storage(card);
+    expect(status.snapshot().storage == card && status.snapshot().sequence == before_card + 1, "the card is kept");
+    card.free_bytes = 40'000'000'000ULL;
+    status.set_storage(card);
+    expect(status.snapshot().storage.free_bytes == status.snapshot().storage.total_bytes,
+           "free space is never more than the card");
     expect(status.snapshot().connection_known && !status.snapshot().online,
            "connection state is explicit");
     expect(status.snapshot().wifi_signal_level == 0 && status.snapshot().bluetooth_enabled,

@@ -80,7 +80,6 @@ struct Strings {
     const char* presence_idle;
     const char* presence_idle_hint;
     const char* privacy_idle;
-    const char* privacy_listening;
     const char* wake_reply;
     const char* listening_hint;
     const char* finish_listening;

@@ -143,6 +143,9 @@ public:
     // Erases alarms, reminders, notes, sound and display settings, the phone
     // link and their files, then restarts.
     void factory_reset();
+    // The card formatted: the companion's state as after a factory reset, and
+    // everything in the store folder erased (not in deterministic runs).
+    void format_card();
 
 private:
     std::unique_ptr<PhotoRuntime> photos_;

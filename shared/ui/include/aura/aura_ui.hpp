@@ -104,7 +104,8 @@ enum class UiView {
 
 // Power actions from Settings > System. PowerOn comes from a long press on the
 // switched-off screen.
-enum class SystemAction { Restart, PowerOff, PowerOn, FactoryReset };
+// FormatCard erases the microSD card (everything the device keeps there).
+enum class SystemAction { Restart, PowerOff, PowerOn, FactoryReset, FormatCard };
 
 // What this platform can do right now; the UI never offers the rest.
 struct CompanionCapabilities {

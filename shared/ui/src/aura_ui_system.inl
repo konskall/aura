@@ -38,6 +38,7 @@
         auto* self = self_of(event);
         if (!self->accept_action()) return;
         self->pending_system = static_cast<SystemAction>(user_value(event));
+        self->format_armed = false;
         self->navigate(UiView::SystemConfirm);
     }
 
@@ -45,6 +46,12 @@
         auto* self = self_of(event);
         if (!self->accept_action()) return;
         lv_indev_wait_release(lv_indev_active());
+        // A card format asks once more before it runs.
+        if (self->pending_system == SystemAction::FormatCard && !self->format_armed) {
+            self->format_armed = true;
+            self->render(UiView::SystemConfirm);
+            return;
+        }
         // The platform answers with boot() or power_off().
         if (self->callbacks.on_system_action) self->callbacks.on_system_action(self->pending_system);
     }
@@ -361,6 +368,13 @@
             role = ui::IconRole::Warning;
             accent = ui::tokens::coral;
             tone = ui::ButtonTone::Danger;
+        } else if (pending_system == SystemAction::FormatCard) {
+            question = format_armed ? c().storage_format_again : c().storage_format_question;
+            detail = c().storage_format_detail;
+            confirm = c().storage_format;
+            role = ui::IconRole::Storage;
+            accent = ui::tokens::coral;
+            tone = ui::ButtonTone::Danger;
         }
         system_orb(158, role, accent);
         auto* heading = label(content, question, kGutter, 238, kWidth, ui::font_headline(), ui::tokens::text,
@@ -409,7 +423,10 @@
         const char* detail = c().system_restarting_detail;
         ui::IconRole role = ui::IconRole::Sparkles;
         std::uint32_t accent = ui::tokens::ice;
-        if (pending_system == SystemAction::FactoryReset) {
+        if (pending_system == SystemAction::FormatCard) {
+            title = c().storage_formatting;
+            role = ui::IconRole::Storage;
+        } else if (pending_system == SystemAction::FactoryReset) {
             title = c().system_resetting;
             detail = c().system_resetting_detail;
             role = ui::IconRole::Success;

@@ -68,7 +68,7 @@ struct CompanionStrings {
     const char* web_search_unavailable;
     const char* action_question;
     const char* action_timer_format;  // duration text
-    const char* action_alarm_format;  // %02d:%02d
+    const char* action_alarm_format;  // the time (clock_text)
     const char* action_reminder_title;
     const char* action_in_minutes_format;  // %d
     const char* action_in_one_minute;
@@ -78,7 +78,7 @@ struct CompanionStrings {
     const char* aoraton_timeout_hint;  // the owner's copy; the detail is for developers
     const char* voice_note_header;     // a voice note's page title (fits the header)
     const char* decimal_separator;  // "," or "."
-    const char* action_at_format;  // day word, %02d:%02d
+    const char* action_at_format;  // day word, the time
     const char* action_note_title;
     const char* action_task_title;
     const char* action_shopping_title;
@@ -129,9 +129,9 @@ struct CompanionStrings {
     const char* in_minutes_format;  // %d
     const char* in_hour;
     const char* in_hours_format;  // %d
-    const char* tonight_format;  // %02d:%02d
-    const char* tomorrow_format;  // %02d:%02d
-    const char* day_time_format;  // day word, %02d:%02d
+    const char* tonight_format;  // the time
+    const char* tomorrow_format;  // the time
+    const char* day_time_format;  // day word, the time
     const char* clock_needs_time;
     const char* clock_full;
     const char* alert_time_up;
@@ -177,7 +177,7 @@ struct CompanionStrings {
     const char* organizer_tap_complete;
 
     // Deterministic offline assistant replies
-    const char* offline_time_format;       // %02d:%02d
+    const char* offline_time_format;       // the time
     const char* offline_battery_format;    // %d
     const char* offline_battery_charging;  // appended while charging
     const char* offline_status_unknown;
@@ -211,7 +211,7 @@ struct CompanionStrings {
     const char* briefing_weather_detail_format;  // city, max, min, rain
     const char* briefing_reminders_one;
     const char* briefing_reminders_format;  // %d
-    const char* briefing_next_format;  // %02d:%02d, text
+    const char* briefing_next_format;  // the time, text
     const char* briefing_timers_one;
     const char* briefing_timers_format;  // %d
     const char* briefing_messages_one;
@@ -241,6 +241,39 @@ struct CompanionStrings {
 
     // Display and voice settings
     const char* display_title;
+    const char* clock_24h_title;
+    const char* clock_24h_example_format;  // the time (clock_text)
+    const char* battery_percent_title;
+    const char* battery_percent_detail;
+    const char* battery_details_title;
+    const char* battery_voltage;
+    const char* usb_voltage;
+    const char* system_voltage;
+    const char* chip_temperature;
+    const char* charge_stage_title;
+    const char* charge_trickle;
+    const char* charge_precharge;
+    const char* charge_fast;
+    const char* charge_topping;
+    const char* charge_done;
+    const char* charge_stopped;
+    const char* battery_rated_title;
+    const char* battery_rated_format;
+    const char* battery_health_note;
+    const char* volts_format;
+    const char* celsius_format;
+    const char* storage_title;
+    const char* storage_free_format;
+    const char* storage_missing;
+    const char* storage_format;
+    const char* storage_format_question;
+    const char* storage_format_detail;
+    const char* storage_format_again;
+    const char* storage_formatting;
+    const char* storage_formatted;
+    const char* storage_format_failed;
+    const char* size_gb_format;
+    const char* size_mb_format;
     // Settings > Appearance: the screen title and the four looks
     const char* appearance_title;
     const char* appearance_halo;
@@ -250,7 +283,7 @@ struct CompanionStrings {
     // Signature layouts: the quoted question, a timer's end time (hour, minute)
     // and the day's range (minimum, maximum).
     const char* answer_quote_format;
-    const char* timer_ends_format;
+    const char* timer_ends_format;  // the time
     const char* weather_range_format;
     // Γραφίτης: Home's tile that starts listening, and «now» on Today's timeline.
     const char* graphite_ask;

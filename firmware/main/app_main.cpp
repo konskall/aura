@@ -567,6 +567,7 @@ extern "C" void app_main(void) {
     std::uint64_t presence_frames = 0;
     std::uint32_t clock_written_syncs = 0;
     std::uint32_t power_ms = 5000;
+    std::uint32_t storage_ms = 50000;  // the first look 10 s after boot
     bool at_full_speed = full_speed != nullptr;
     TickType_t previous = xTaskGetTickCount();
     std::uint32_t unapplied_ms = 0;
@@ -686,6 +687,17 @@ extern "C" void app_main(void) {
             }
             status_ms += elapsed_ms;
             power_ms += elapsed_ms;
+            storage_ms += elapsed_ms;
+            // The microSD card's space (Κατάσταση συσκευής): a minute apart, since
+            // a large FAT32 card can take a moment to count its free space.
+            if (storage_ms >= 60000) {
+                storage_ms = 0;
+                aura::StorageStatus card;
+                card.known = true;
+                card.origin = aura::StatusOrigin::Live;
+                card.present = companion.card_mounted() && companion.card_space(card.total_bytes, card.free_bytes);
+                device_status.set_storage(card);
+            }
             // The battery, every five seconds (the OTA rule and the status bar use it).
             if (board_power_ready && power_ms >= 5000) {
                 power_ms = 0;
@@ -696,6 +708,20 @@ extern "C" void app_main(void) {
                 } else {
                     device_status.set_power_unavailable();
                 }
+                // What else the power manager measures (Κατάσταση συσκευής).
+                aura::BatteryDetails details;
+                if (reading && reading->battery_present) {
+                    details.known = true;
+                    details.battery_mv = reading->battery_mv;
+                    details.usb_mv = reading->external_power ? reading->vbus_mv : 0;
+                    details.system_mv = reading->system_mv;
+                    details.chip_temperature_known = true;
+                    details.chip_celsius = reading->chip_celsius;
+                    details.stage = reading->external_power ? reading->stage : aura::ChargeStage::Stopped;
+                    details.rated_mah = aura_board::battery_rated_mah;
+                    details.origin = aura::StatusOrigin::Live;
+                }
+                device_status.set_battery_details(details);
             }
             // A new network time goes to the board clock, in UTC.
             if (board_clock_ready && network.time_sync_count() != clock_written_syncs) {

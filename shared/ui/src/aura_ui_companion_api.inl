@@ -136,8 +136,15 @@ void AuraUi::apply_display(const DisplaySnapshot& snapshot) {
         snapshot.settings.flip_to_mute != previous.settings.flip_to_mute ||
         snapshot.settings.active_brightness_percent != previous.settings.active_brightness_percent ||
         snapshot.settings.timeout_ms != previous.settings.timeout_ms;
+    // Times and the battery's percentage show on many screens: the one in view
+    // and the status bar follow a new choice at once.
+    const bool reading_changed = snapshot.settings.clock_24h != previous.settings.clock_24h ||
+        snapshot.settings.battery_percent != previous.settings.battery_percent;
     if (self.current_view == UiView::AlwaysOn) {
         self.render(self.aod_return_view, true);
+    } else if (reading_changed) {
+        self.render(self.current_view);
+        self.update_status();
     } else if (settings_changed &&
                (self.current_view == UiView::DisplaySettings || self.current_view == UiView::Settings)) {
         self.render(self.current_view);

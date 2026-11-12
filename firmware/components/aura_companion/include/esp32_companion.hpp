@@ -78,6 +78,11 @@ public:
     // Small text files on the microSD card (the radio's favourites).
     std::string load_text(const char* name) const { return store_.read(name); }
     bool save_text(const char* name, const std::string& data) const { return store_.write(name, data); }
+    // The microSD card for Κατάσταση συσκευής.
+    bool card_mounted() const noexcept { return store_.mounted(); }
+    bool card_space(std::uint64_t& total_bytes, std::uint64_t& free_bytes) const {
+        return store_.space(total_bytes, free_bytes);
+    }
     // Where the transfer session's POST /api/keys puts the assistant's keys.
     void set_cloud_key_sink(ICloudKeySink* sink) { transfer_.set_key_sink(sink); }
     // The PC-assisted aoraton.com sign-in over the same session (ADR 0010).

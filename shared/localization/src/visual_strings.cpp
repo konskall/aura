@@ -6,7 +6,7 @@ const VisualStrings& visual_el_gr() noexcept {
     static const VisualStrings strings{
         "Πες κάτι…", "Ακούω…",
         "DEMO · η φωνητική είσοδος δεν είναι ενεργή", "Σκέφτομαι…",
-        "Επεξεργασία αιτήματος", "Σου απαντώ…", "Η κίνηση ακολουθεί τον πραγματικό ήχο",
+        "Σου απαντώ…", "Η κίνηση ακολουθεί τον πραγματικό ήχο",
         "Γρήγορες ενέργειες", "Συνομιλία", "Αναζήτηση", "Πλοήγηση", "Εφαρμογές",
         "Ειδοποιήσεις", "Νέο μήνυμα", "aoraton.com · DEMO", "Συνάντηση",
         "Σε 15 λεπτά · DEMO", "Καιρός", "22°C · Ηλιόλουστα · DEMO",
@@ -71,7 +71,7 @@ const VisualStrings& visual_el_gr() noexcept {
 const VisualStrings& visual_en_us() noexcept {
     static const VisualStrings strings{
         "Say something…", "Listening…",
-        "DEMO · voice input is not active", "Thinking…", "Processing request",
+        "DEMO · voice input is not active", "Thinking…",
         "Answering…", "Motion follows real audio", "Quick actions", "Conversation", "Search",
         "Navigation", "Applications", "Notifications", "New message", "aoraton.com · DEMO",
         "Meeting", "In 15 minutes · DEMO", "Weather", "22°C · Sunny · DEMO", "Online · DEMO",

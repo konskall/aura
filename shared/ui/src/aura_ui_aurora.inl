@@ -92,15 +92,14 @@
                         weather_open_event);
         }
         if (alarm) {
-            char time[8];
-            std::snprintf(time, sizeof(time), "%02d:%02d", alarm->hour, alarm->minute);
+            const auto time = time_text(alarm->hour, alarm->minute);
             const char* day = nullptr;
             if (clock.clock_valid) {
                 const auto now = static_cast<int>(((clock.now_minute % 1440) + 1440) % 1440);
                 day = alarm->hour * 60 + alarm->minute > now ? c().today : c().tomorrow;
             }
-            aurora_tile(kGutter + first_width + 16, first_width, ui::IconRole::Reminder, ui::tokens::amber, time, day,
-                        open_clock_event);
+            aurora_tile(kGutter + first_width + 16, first_width, ui::IconRole::Reminder, ui::tokens::amber,
+                        time.c_str(), day, open_clock_event);
         }
         motion.enter(MotionMode::Idle);
     }

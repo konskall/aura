@@ -21,7 +21,7 @@ constexpr std::uint8_t kClockStop = 0x20;    // Control_1 bit 5
 // AXP2101 registers (XPowersLib names in brackets).
 constexpr std::uint8_t kPowerStatus = 0x00;          // [STATUS1], then [STATUS2]
 constexpr std::uint8_t kPowerAdcControl = 0x30;      // [ADC_CHANNEL_CTRL]
-constexpr std::uint8_t kPowerBatteryVoltage = 0x34;  // [ADC_DATA_RELUST0/1]
+constexpr std::uint8_t kPowerAdcData = 0x34;  // [ADC_DATA_RELUST0-9]: battery, TS, USB, system, die
 constexpr std::uint8_t kPowerDetection = 0x68;       // [BAT_DET_CTRL]
 constexpr std::uint8_t kPowerPercent = 0xA4;         // [BAT_PERCENT_DATA]
 
@@ -101,18 +101,24 @@ bool Axp2101Power::start() {
 
 std::optional<PowerReading> Axp2101Power::read() {
     std::uint8_t status[2]{};
-    std::uint8_t voltage[2]{};
+    std::uint8_t adc[10]{};
     std::uint8_t percent = 0;
     if (device_ == nullptr || !read_registers(device_, kPowerStatus, status, sizeof(status)) ||
-        !read_registers(device_, kPowerBatteryVoltage, voltage, sizeof(voltage)) ||
+        !read_registers(device_, kPowerAdcData, adc, sizeof(adc)) ||
         !read_registers(device_, kPowerPercent, &percent, 1)) {
         return std::nullopt;
     }
     Axp2101Registers registers;
     registers.status1 = status[0];
     registers.status2 = status[1];
-    registers.battery_mv_high = voltage[0];
-    registers.battery_mv_low = voltage[1];
+    registers.battery_mv_high = adc[0];
+    registers.battery_mv_low = adc[1];
+    registers.vbus_mv_high = adc[4];
+    registers.vbus_mv_low = adc[5];
+    registers.system_mv_high = adc[6];
+    registers.system_mv_low = adc[7];
+    registers.die_temp_high = adc[8];
+    registers.die_temp_low = adc[9];
     registers.battery_percent = percent;
     return axp2101_decode(registers);
 }

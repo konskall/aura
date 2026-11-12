@@ -3,6 +3,7 @@
 #include "bsp/esp-bsp.h"
 #include "esp_codec_dev.h"
 #include "esp_log.h"
+#include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -180,6 +181,25 @@ void Esp32CompanionStore::remove_note_audio(const std::string& file) const {
         std::remove(path.c_str());
         std::remove((path + ".tmp").c_str());
     }
+}
+
+bool Esp32CompanionStore::space(std::uint64_t& total_bytes, std::uint64_t& free_bytes) const {
+    total_bytes = 0;
+    free_bytes = 0;
+    if (!mounted_) return false;
+    std::uint64_t total = 0;
+    std::uint64_t free = 0;
+    if (esp_vfs_fat_info(BSP_SD_MOUNT_POINT, &total, &free) != ESP_OK) return false;
+    total_bytes = total;
+    free_bytes = free;
+    return true;
+}
+
+bool Esp32CompanionStore::format() const {
+    if (!mounted_ || bsp_sdcard == nullptr) return false;
+    const auto formatted = esp_vfs_fat_sdcard_format(BSP_SD_MOUNT_POINT, bsp_sdcard);
+    if (formatted != ESP_OK) ESP_LOGE(kTag, "microSD format failed: %s", esp_err_to_name(formatted));
+    return formatted == ESP_OK;
 }
 
 void Esp32CompanionStore::factory_reset() const {

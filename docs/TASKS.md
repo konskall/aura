@@ -45,6 +45,8 @@
 - [x] Internet radio on the device (2026-11-06): the stream, continuous audio output and the station search, on the shared `radio_pump`. Hear it on the board: NEEDS HARDWARE.
 - [x] Radio by voice on the device ("βάλε Σφαίρα", 2026-11-11): `radio_request`, which the simulator shares. Hear it on the board.
 - [ ] The device's other local commands (the time, the battery, opening an app, timers) still go to the assistant.
+- [x] Κατάσταση συσκευής (2026-11-12): the battery's details from the AXP2101, the status bar's percentage switch, the card's space and its format, which asks twice. Also 24-hour or 12-hour time, and no caption that repeats its title.
+- [ ] On the board: the AXP2101 readings, the card's format, and how long a large card's first space count takes.
 - [ ] Decide on pairing a device without a PC: it needs changes to the aoraton.com server, which this repository only reads.
 - [x] Decide the firmware app partition (2026-11-06, the owner): two 7 MB app slots and 1.8 MB `storage` (everything the owner keeps lives on the microSD card); `aura_firmware_config_tests` checks both tables.
 - [ ] Decide licensing and production authorization before any live Aoraton connectivity.

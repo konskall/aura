@@ -221,6 +221,8 @@ struct AuraUi::Impl {
     SoundSettings sound{};
     lv_obj_t* sound_volume_label{};
     SystemAction pending_system{SystemAction::Restart};
+    // A card format asks twice: the second confirmation arms it.
+    bool format_armed{false};
     bool powered_off{false};
     std::uint32_t boot_remaining_ms{0};
     lv_obj_t* boot_spinner{};
@@ -1670,14 +1672,19 @@ struct AuraUi::Impl {
                           LV_TEXT_ALIGN_CENTER);
     }
 
+    // A time of day as the owner reads it (Οθόνη → 24ωρη ώρα), and the digits
+    // alone for the large clocks, whose fonts have digits only.
+    std::string time_text(int hour, int minute) const {
+        return clock_text(hour, minute, display_power.settings.clock_24h, interface_language);
+    }
+    std::string time_digits(int hour, int minute) const {
+        return clock_digits(hour, minute, display_power.settings.clock_24h);
+    }
+
     // ---- Screens -----------------------------------------------------------
 
     void update_home_text() {
-        if (home_clock && status.clock_valid) {
-            char clock[12];
-            std::snprintf(clock, sizeof(clock), "%02d:%02d", status.hour, status.minute);
-            set_text_if_changed(home_clock, clock);
-        }
+        if (home_clock && status.clock_valid) set_text_if_changed(home_clock, time_digits(status.hour, status.minute).c_str());
         if (!home_date) return;
         const bool date_valid = status.date_valid && status.month >= 1 && status.month <= 12 &&
                                 status.weekday >= 0 && status.weekday <= 6;
@@ -1794,7 +1801,8 @@ struct AuraUi::Impl {
 
     void render_listening() {
         create_presence(ui::MercuryState::Listening, ui::tokens::ice);
-        stage_title(v().listening_title, input_simulated ? v().synthetic_input : t().privacy_listening,
+        // The title says it listens; only synthetic input needs a caption.
+        stage_title(v().listening_title, input_simulated ? v().synthetic_input : nullptr,
                     ui::tokens::amber);
         pill(content, t().finish_listening, ui::ButtonTone::Primary, kGutter, kActionY, kHalfWidth,
              end_listening_event);
@@ -1810,7 +1818,7 @@ struct AuraUi::Impl {
             stage_title(c().transcribing_title, c().transcribing_detail, ui::tokens::text_secondary);
         } else {
             stage_title(v().thinking_title,
-                        snapshot.user_text.empty() ? v().thinking_subtitle : snapshot.user_text.c_str(),
+                        snapshot.user_text.empty() ? nullptr : snapshot.user_text.c_str(),
                         ui::tokens::text_secondary);
         }
         pill(content, t().cancel, ui::ButtonTone::Danger, 120, kActionY, 240, cancel_event);
@@ -2626,9 +2634,13 @@ struct AuraUi::Impl {
 
     std::string message_time(const std::string& value) const {
         const auto time = message_time_label(value, callbacks.on_local_time);
-        if (!time.utc) return time.clock;
-        char utc[24];
-        std::snprintf(utc, sizeof(utc), c().aoraton_time_utc_format, time.clock.c_str());
+        // "HH:MM", as the owner reads times.
+        const auto clock = time.clock.size() == 5 ?
+            time_text((time.clock[0] - '0') * 10 + (time.clock[1] - '0'), (time.clock[3] - '0') * 10 + (time.clock[4] - '0')) :
+            time.clock;
+        if (!time.utc) return clock;
+        char utc[32];
+        std::snprintf(utc, sizeof(utc), c().aoraton_time_utc_format, clock.c_str());
         return utc;
     }
 
@@ -3658,6 +3670,12 @@ struct AuraUi::Impl {
             lv_obj_set_pos(bolt, 52, 37);
         }
         y += 136;
+        // The status bar's percentage beside the battery icon (the owner's choice).
+        setting_switch_row(list, y, c().battery_percent_title, c().battery_percent_detail, ui::IconRole::Battery,
+                           ui::tokens::mint, display_power.settings.battery_percent, true, 6);
+        y += kRowPitch;
+        y = render_battery_details(list, y);
+        y = render_storage(list, y);
 
         const char* connection = !status.connection_known ? v().status_unknown :
                                  status.online ? t().connected : t().disconnected;
@@ -3688,6 +3706,95 @@ struct AuraUi::Impl {
         pill(list, audio.muted ? t().unmute : t().mute, ui::ButtonTone::Secondary, kGutter, y, kWidth,
              audio_mute_event);
         list_end(list, y + kButtonHeight, 20);
+    }
+
+    // What the power manager measures besides the percentage; DEMO in the
+    // simulator. Health and cycles it does not measure, and the screen says so.
+    int render_battery_details(lv_obj_t* list, int y) {
+        const auto& battery = status.battery;
+        if (!battery.known) return y;
+        std::string caption = c().battery_details_title;
+        if (battery.origin == StatusOrigin::Simulated) caption += std::string(" · ") + t().demo;
+        line(list, caption.c_str(), kGutter + 4, y, kWidth - 8, ui::font_caption(), ui::tokens::text_secondary);
+        y += 36;
+        const auto volts = [&](int millivolts) {
+            char text[24];
+            std::snprintf(text, sizeof(text), c().volts_format, millivolts / 1000, (millivolts % 1000) / 10);
+            return std::string(text);
+        };
+        const auto row = [&](const char* title, const std::string& value, ui::IconRole role, std::uint32_t color) {
+            list_row(list, y, title, value.c_str(), role, color, 72);
+            y += 82;
+        };
+        const char* stage = c().charge_stopped;
+        switch (battery.stage) {
+            case ChargeStage::Trickle: stage = c().charge_trickle; break;
+            case ChargeStage::Precharge: stage = c().charge_precharge; break;
+            case ChargeStage::ConstantCurrent: stage = c().charge_fast; break;
+            case ChargeStage::ConstantVoltage: stage = c().charge_topping; break;
+            case ChargeStage::Done: stage = c().charge_done; break;
+            case ChargeStage::Stopped: stage = c().charge_stopped; break;
+            case ChargeStage::Unknown: stage = v().status_unknown; break;
+        }
+        row(c().charge_stage_title, stage, ui::IconRole::Charging, ui::tokens::mint);
+        row(c().battery_voltage, volts(battery.battery_mv), ui::IconRole::Battery, ui::tokens::mint);
+        if (battery.usb_mv > 0) row(c().usb_voltage, volts(battery.usb_mv), ui::IconRole::Power, ui::tokens::ice);
+        row(c().system_voltage, volts(battery.system_mv), ui::IconRole::Cpu, ui::tokens::blue);
+        if (battery.chip_temperature_known) {
+            char celsius[16];
+            std::snprintf(celsius, sizeof(celsius), c().celsius_format, battery.chip_celsius);
+            row(c().chip_temperature, celsius, ui::IconRole::Thermometer, ui::tokens::amber);
+        }
+        if (battery.rated_mah > 0) {
+            char rated[48];
+            std::snprintf(rated, sizeof(rated), c().battery_rated_format, battery.rated_mah);
+            row(c().battery_rated_title, rated, ui::IconRole::Battery, ui::tokens::text_secondary);
+        }
+        auto* note = line(list, c().battery_health_note, kGutter + 4, y, kWidth - 8, ui::font_caption(),
+                          ui::tokens::text_tertiary);
+        lv_obj_update_layout(note);
+        y += lv_obj_get_height(note) + 16;
+        return y;
+    }
+
+    // "14,6 GB", "850 MB": decimal units, as cards are sold.
+    std::string storage_size_text(std::uint64_t bytes) const {
+        char text[32];
+        if (bytes >= 1000000000ULL) {
+            const auto tenths = (bytes + 50000000ULL) / 100000000ULL;
+            std::snprintf(text, sizeof(text), c().size_gb_format, static_cast<int>(tenths / 10U),
+                          static_cast<int>(tenths % 10U));
+        } else {
+            std::snprintf(text, sizeof(text), c().size_mb_format,
+                          static_cast<int>((bytes + 500000ULL) / 1000000ULL));
+        }
+        return text;
+    }
+
+    // The microSD card: its space and, with a card in, the format.
+    int render_storage(lv_obj_t* list, int y) {
+        const auto& card = status.storage;
+        if (!card.known) return y;
+        std::string caption = c().storage_title;
+        if (card.origin == StatusOrigin::Simulated) caption += std::string(" · ") + t().demo;
+        line(list, caption.c_str(), kGutter + 4, y, kWidth - 8, ui::font_caption(), ui::tokens::text_secondary);
+        y += 36;
+        std::string space = c().storage_missing;
+        if (card.present) {
+            char text[96];
+            std::snprintf(text, sizeof(text), c().storage_free_format, storage_size_text(card.free_bytes).c_str(),
+                          storage_size_text(card.total_bytes).c_str());
+            space = text;
+        }
+        list_row(list, y, c().storage_title, space.c_str(), ui::IconRole::Storage,
+                 card.present ? ui::tokens::blue : ui::tokens::text_tertiary, 72);
+        y += 82;
+        if (card.present) {
+            auto* format = list_row(list, y, c().storage_format, nullptr, ui::IconRole::Delete, ui::tokens::coral, 72);
+            tappable(format, system_action_event, static_cast<std::uintptr_t>(SystemAction::FormatCard));
+            y += 82;
+        }
+        return y + 8;
     }
 
     void update_host_metrics_label() {
@@ -4104,10 +4211,8 @@ struct AuraUi::Impl {
         // once-per-second status poll does not redraw the chrome on the device.
         update_home_text();
         const bool home = current_view == UiView::Home;
-        char clock[12];
-        if (status.clock_valid) std::snprintf(clock, sizeof(clock), "%02d:%02d", status.hour, status.minute);
-        else std::snprintf(clock, sizeof(clock), "%s", v().status_unknown);
-        set_text_if_changed(status_time, clock);
+        set_text_if_changed(status_time,
+                            status.clock_valid ? time_text(status.hour, status.minute).c_str() : v().status_unknown);
 
         char battery[16];
         if (status.power_known) std::snprintf(battery, sizeof(battery), "%d%%", status.battery_percent);
@@ -4131,7 +4236,8 @@ struct AuraUi::Impl {
         lv_obj_set_hidden(status_muted, !audio.muted);
         lv_obj_set_hidden(status_charging, !(status.power_known && status.charging));
         const bool show_battery = home || low;
-        lv_obj_set_hidden(status_battery, !show_battery);
+        // Without the percentage (Κατάσταση συσκευής) the icon stays alone.
+        lv_obj_set_hidden(status_battery, !show_battery || !display_power.settings.battery_percent);
         lv_obj_set_hidden(status_battery_glyph, !show_battery || !status.power_known);
         if (status.power_known) {
             lv_obj_set_width(status_battery_fill, std::max(4, status.battery_percent * 32 / 100));
@@ -4369,6 +4475,7 @@ void AuraUi::apply_aoraton(const AoratonSnapshot& snapshot) {
 void AuraUi::apply_status(const DeviceStatusSnapshot& snapshot) {
     if (snapshot.sequence == impl_->status.sequence) return;
     const bool status_screen_change = snapshot.power_known != impl_->status.power_known ||
+        snapshot.battery != impl_->status.battery ||
         snapshot.battery_percent != impl_->status.battery_percent ||
         snapshot.charging != impl_->status.charging ||
         snapshot.power_origin != impl_->status.power_origin ||

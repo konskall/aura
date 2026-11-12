@@ -3,6 +3,8 @@
 namespace aura_board {
 
 inline constexpr const char* profile_name = "waveshare-esp32-s3-touch-amoled-2.16-r1";
+// The battery-included option's rating (docs/HARDWARE.md): 3.7 V, 1000 mAh.
+inline constexpr int battery_rated_mah = 1000;
 
 struct Pins {
     static constexpr int lcd_sio0 = 4;

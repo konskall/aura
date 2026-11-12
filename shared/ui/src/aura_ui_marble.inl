@@ -237,7 +237,7 @@
         const auto seconds = static_cast<std::int64_t>((timer.remaining_ms + 999U) / 1000U);
         const auto end = from_minute_index(clock.now_minute + (seconds + 30) / 60);
         char text[48];
-        std::snprintf(text, sizeof(text), c().timer_ends_format, end.hour, end.minute);
+        std::snprintf(text, sizeof(text), c().timer_ends_format, time_text(end.hour, end.minute).c_str());
         return text;
     }
 
@@ -410,10 +410,8 @@
         }
         if (alarm) {
             marble_rule(content, kGutter + first_width + 8, 416, 1, 40);
-            char time[8];
-            std::snprintf(time, sizeof(time), "%02d:%02d", alarm->hour, alarm->minute);
-            marble_complication(kGutter + first_width + 16, first_width, ui::IconRole::Reminder, time, nullptr,
-                                open_clock_event);
+            marble_complication(kGutter + first_width + 16, first_width, ui::IconRole::Reminder,
+                                time_text(alarm->hour, alarm->minute).c_str(), nullptr, open_clock_event);
         }
         auto* apps = nav_round_button(content, 392, 404, ui::tokens::CHIP_HEIGHT, ui::IconRole::Apps,
                                       ui::tokens::text, UiView::Launcher, true);

@@ -1,9 +1,32 @@
 #include "aura/clock_services.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <sstream>
 
 namespace aura {
+
+std::string clock_digits(int hour, int minute, bool clock_24h) {
+    hour = std::clamp(hour, 0, 23);
+    minute = std::clamp(minute, 0, 59);
+    char text[8];
+    if (clock_24h) std::snprintf(text, sizeof(text), "%02d:%02d", hour, minute);
+    else std::snprintf(text, sizeof(text), "%d:%02d", hour % 12 == 0 ? 12 : hour % 12, minute);
+    return text;
+}
+
+const char* clock_period(int hour, InterfaceLanguage language) noexcept {
+    const bool afternoon = hour >= 12;
+    if (language == InterfaceLanguage::English) return afternoon ? "PM" : "AM";
+    return afternoon ? "μ.μ." : "π.μ.";
+}
+
+std::string clock_text(int hour, int minute, bool clock_24h, InterfaceLanguage language) {
+    auto text = clock_digits(hour, minute, clock_24h);
+    if (!clock_24h) text = text + " " + clock_period(std::clamp(hour, 0, 23), language);
+    return text;
+}
+
 namespace {
 
 constexpr std::int64_t kMinutesPerDay = 24 * 60;

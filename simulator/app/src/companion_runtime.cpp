@@ -519,7 +519,9 @@ bool CompanionRuntime::handle_offline_command(const std::string& prompt) {
             if (!clock_.snapshot().clock_valid) finish_local_reply(strings.offline_status_unknown);
             else {
                 const auto now = from_minute_index(clock_.snapshot().now_minute);
-                std::snprintf(formatted, sizeof(formatted), strings.offline_time_format, now.hour, now.minute);
+                std::snprintf(formatted, sizeof(formatted), strings.offline_time_format,
+                              clock_text(now.hour, now.minute, display_.snapshot().settings.clock_24h,
+                                         language_).c_str());
                 finish_local_reply(formatted);
             }
             return true;
@@ -1245,6 +1247,16 @@ void CompanionRuntime::soft_restart() {
     bump_extras();
     ctx_.controller->dispatch({EventType::Reset});
     set_powered_off(false);
+}
+
+void CompanionRuntime::format_card() {
+    factory_reset();
+    if (ctx_.deterministic) return;
+    std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator(ctx_.store_dir, error)) {
+        std::error_code removed;
+        std::filesystem::remove_all(entry.path(), removed);
+    }
 }
 
 void CompanionRuntime::factory_reset() {

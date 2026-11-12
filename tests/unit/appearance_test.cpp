@@ -49,5 +49,16 @@ int main() {
     const auto unknown = parse_display_settings("aura-display 1\nalways_on=0\nappearance=neon\ntimeout_ms=60000\n");
     expect(unknown.appearance == Appearance::Halo, "an unknown stored appearance falls back to Halo");
     expect(!unknown.always_on && unknown.timeout_ms == 60000, "an unknown appearance keeps the other keys");
+
+    // The battery's percentage and the clock's form (the owner's request, 2026-11-11).
+    DisplaySettings shown;
+    expect(shown.battery_percent && shown.clock_24h, "the percentage shows and the clock is 24-hour by default");
+    expect(old.battery_percent && old.clock_24h, "a file from an older build keeps both defaults");
+    shown.battery_percent = false;
+    shown.clock_24h = false;
+    const auto chosen = parse_display_settings(serialize_display_settings(shown));
+    expect(!chosen.battery_percent && !chosen.clock_24h, "both choices are stored");
+    const auto mangled = parse_display_settings("aura-display 1\nbattery_percent=2\nclock_24h=yes\n");
+    expect(mangled.battery_percent && mangled.clock_24h, "an unreadable value keeps the default");
     return 0;
 }

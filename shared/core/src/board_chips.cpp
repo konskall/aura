@@ -66,6 +66,14 @@ PowerReading axp2101_decode(const Axp2101Registers& registers) noexcept {
     reading.charging = ((registers.status2 >> 5) & 0x03) == 0x01;
     if (reading.battery_present && registers.battery_percent <= 100) reading.percent = registers.battery_percent;
     reading.battery_mv = ((registers.battery_mv_high & 0x1F) << 8) | registers.battery_mv_low;
+    reading.vbus_mv = ((registers.vbus_mv_high & 0x3F) << 8) | registers.vbus_mv_low;
+    reading.system_mv = ((registers.system_mv_high & 0x3F) << 8) | registers.system_mv_low;
+    // XPowersLib: 22 + (7274 - raw) / 20 °C, here in tenths and then rounded.
+    const int raw = ((registers.die_temp_high & 0x3F) << 8) | registers.die_temp_low;
+    const int tenths = 220 + (7274 - raw) / 2;
+    reading.chip_celsius = (tenths + (tenths >= 0 ? 5 : -5)) / 10;
+    const int stage = registers.status2 & 0x07;
+    reading.stage = stage <= 5 ? static_cast<ChargeStage>(stage) : ChargeStage::Unknown;
     return reading;
 }
 

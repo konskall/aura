@@ -46,6 +46,10 @@ public:
     void remove_note_audio(const std::string& file) const;
     std::string note_audio_path(const std::string& file) const;
     void factory_reset() const;
+    // The card's size and free space; false without a card.
+    bool space(std::uint64_t& total_bytes, std::uint64_t& free_bytes) const;
+    // Formats the whole card (FAT). The caller restarts the device after it.
+    bool format() const;
 
 private:
     bool mounted_{false};

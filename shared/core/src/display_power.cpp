@@ -39,6 +39,8 @@ std::string serialize_display_settings(const DisplaySettings& settings) {
     text += "timeout_ms=" + std::to_string(std::clamp<std::uint32_t>(settings.timeout_ms, 5000, 300000)) + "\n";
     text += "dim_ms=" + std::to_string(std::clamp<std::uint32_t>(settings.dim_ms, 1000, 60000)) + "\n";
     text += std::string("appearance=") + appearance_id(settings.appearance) + "\n";
+    text += std::string("battery_percent=") + (settings.battery_percent ? "1\n" : "0\n");
+    text += std::string("clock_24h=") + (settings.clock_24h ? "1\n" : "0\n");
     return text;
 }
 
@@ -56,12 +58,15 @@ DisplaySettings parse_display_settings(const std::string& data) {
             settings.appearance = appearance_from_id(value);
             continue;
         }
-        if (key == "always_on" || key == "raise_to_wake" || key == "flip_to_mute") {
+        if (key == "always_on" || key == "raise_to_wake" || key == "flip_to_mute" || key == "battery_percent" ||
+            key == "clock_24h") {
             if (value != "0" && value != "1") continue;
             const bool enabled = value == "1";
             if (key == "always_on") settings.always_on = enabled;
             else if (key == "raise_to_wake") settings.raise_to_wake = enabled;
-            else settings.flip_to_mute = enabled;
+            else if (key == "flip_to_mute") settings.flip_to_mute = enabled;
+            else if (key == "battery_percent") settings.battery_percent = enabled;
+            else settings.clock_24h = enabled;
             continue;
         }
         std::uint32_t parsed = 0;

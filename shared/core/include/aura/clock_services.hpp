@@ -1,5 +1,6 @@
 #pragma once
 
+#include "aura/language.hpp"
 #include "aura/text_util.hpp"
 
 #include <cstdint>
@@ -8,6 +9,14 @@
 #include <vector>
 
 namespace aura {
+
+// A time of day for the screen as the owner chose to read it: "14:05", or
+// with a 12-hour clock "2:05 μ.μ." ("2:05 PM").
+std::string clock_text(int hour, int minute, bool clock_24h, InterfaceLanguage language);
+// The digits alone ("14:05", "2:05"), for the large clocks' digit-only fonts,
+// and the half of the day that goes beside them ("π.μ.", "PM").
+std::string clock_digits(int hour, int minute, bool clock_24h);
+const char* clock_period(int hour, InterfaceLanguage language) noexcept;
 
 enum class ClockAlertKind { Timer, Alarm, Reminder };
 

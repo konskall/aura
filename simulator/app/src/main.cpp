@@ -1459,11 +1459,45 @@ int main(int argc, char** argv) {
     };
     // Settings > System. The simulator restarts in place: the window stays,
     // the state a real restart would lose is dropped, and the boot screen shows.
+    // The simulator's card is its store folder: the drive's space in a real
+    // run, fixed DEMO numbers in captures and tests.
+    auto simulate_storage = [&device_status, &companion_store_dir, deterministic_run] {
+        aura::StorageStatus card;
+        card.known = true;
+        card.present = true;
+        card.origin = aura::StatusOrigin::Simulated;
+        card.total_bytes = 31914983424ULL;
+        card.free_bytes = 28400000000ULL;
+        std::error_code error;
+        if (!deterministic_run) {
+            const auto space = std::filesystem::space(companion_store_dir, error);
+            if (!error) {
+                card.total_bytes = space.capacity;
+                card.free_bytes = space.available;
+            }
+        }
+        device_status.set_storage(card);
+    };
     ui_callbacks.on_system_action = [&](aura::SystemAction action) {
         ++interaction_counts.system_action;
         if (action == aura::SystemAction::PowerOff) {
             companion.set_powered_off(true);
             ui.power_off();
+            return;
+        }
+        if (action == aura::SystemAction::FormatCard) {
+            // As on the device: everything the card holds goes (the stores,
+            // photos, transfers, radio and the apps' order); Wi-Fi, keys and
+            // the account stay. Captures and tests never touch the files.
+            stop_radio();
+            radio_model = aura::RadioModel{};
+            launcher_layout_model.reset();
+            apply_radio();
+            apply_launcher_layout();
+            ui.reset_preferences();
+            companion.format_card();
+            simulate_storage();
+            ui.boot();
             return;
         }
         if (action == aura::SystemAction::FactoryReset) {
@@ -1551,7 +1585,24 @@ int main(int argc, char** argv) {
         companion.set_clock(local);
         companion.apply();
     }
-    device_status.set_power(78, false, aura::StatusOrigin::Simulated);
+    // The simulator's battery: DEMO details as a charging or discharging
+    // battery would show them (Κατάσταση συσκευής).
+    auto simulate_battery = [&device_status](int percent, bool charging) {
+        device_status.set_power(percent, charging, aura::StatusOrigin::Simulated);
+        aura::BatteryDetails details;
+        details.known = true;
+        details.battery_mv = charging ? 4010 : 3870;
+        details.usb_mv = charging ? 5020 : 0;
+        details.system_mv = charging ? 4980 : 3850;
+        details.chip_temperature_known = true;
+        details.chip_celsius = charging ? 36 : 31;
+        details.stage = charging ? aura::ChargeStage::ConstantCurrent : aura::ChargeStage::Stopped;
+        details.rated_mah = 1000;
+        details.origin = aura::StatusOrigin::Simulated;
+        device_status.set_battery_details(details);
+    };
+    simulate_battery(78, false);
+    simulate_storage();
     device_status.set_connection(true, aura::StatusOrigin::Simulated, 3);
     device_status.set_bluetooth(false, aura::StatusOrigin::Simulated);
     // Captures and tests start with one labelled sample notification; a normal
@@ -1614,7 +1665,7 @@ int main(int argc, char** argv) {
         device_status.set_clock(18, 24, aura::StatusOrigin::Simulated);
         device_status.set_date(2026, 10, 22, 4, aura::StatusOrigin::Simulated);
         if (capture_scenario == "brand-home") device_status.set_clock_unavailable();
-        device_status.set_power(92, false, aura::StatusOrigin::Simulated);
+        simulate_battery(92, false);
         // Evidence never shows this desktop's saved city or cached forecast;
         // Home captures use labelled DEMO weather instead.
         weather_model.clear_location();
@@ -1642,7 +1693,7 @@ int main(int argc, char** argv) {
             ui.set_developer_mode(developer);
             device_status.set_connection(wifi, aura::StatusOrigin::Simulated, wifi ? 3 : 0);
             device_status.set_bluetooth(bluetooth, aura::StatusOrigin::Simulated);
-            device_status.set_power(battery_percent, charging, aura::StatusOrigin::Simulated);
+            simulate_battery(battery_percent, charging);
             ui.apply_status(device_status.snapshot());
             ui.show(aura::UiView::Home);
         }
@@ -1654,7 +1705,7 @@ int main(int argc, char** argv) {
         }
         else if (capture_scenario == "low-battery") {
             controller.dispatch({aura::EventType::BatteryChanged, {}, 12});
-            device_status.set_power(12, false, aura::StatusOrigin::Simulated);
+            simulate_battery(12, false);
             ui.apply_status(device_status.snapshot());
             apply();
             ui.show(aura::UiView::Home);
@@ -1977,7 +2028,7 @@ int main(int argc, char** argv) {
             companion.capture("calendar");
         } else if (capture_scenario == "battery") {
             controller.dispatch({aura::EventType::ChargingChanged, {}, 1});
-            device_status.set_power(92, true, aura::StatusOrigin::Simulated);
+            simulate_battery(92, true);
             ui.apply_status(device_status.snapshot());
             apply();
             ui.show(aura::UiView::Battery);
@@ -3702,7 +3753,8 @@ int main(int argc, char** argv) {
 
         reset_to(aura::UiView::Battery);
         const bool status_muted_before = audio.diagnostics().muted;
-        scroll_view_to(220);
+        // The last button on the screen: scrolled to the end.
+        scroll_view_to(4000);
         tap(240, 420);
         record("status.mute", "button-center", audio.diagnostics().muted != status_muted_before,
                audio.diagnostics().muted ? "muted" : "unmuted");
@@ -3747,6 +3799,18 @@ int main(int argc, char** argv) {
             while (clock_model.snapshot().alert) clock_model.dismiss_alert();
             pump(2);
         };
+
+        // A state is said once: no caption repeats the title above it (the
+        // owner's request, 2026-11-11). Live microphone input, as on the device.
+        // The simulator's loop feeds synthetic input; this sets live input
+        // last, with no pump after it.
+        reset_to(aura::UiView::Home);
+        tap(240, 260);
+        ui.set_input_amplitude(0.0F, false);
+        record("listening.caption", "said-once",
+               controller.snapshot().state == aura::AssistantState::Listening && !shows_text("Ακρόαση") &&
+                   !shows_text("Listening"),
+               view_text());
 
         reset_to(aura::UiView::Launcher);
         tap(96, 188);
@@ -4328,6 +4392,87 @@ int main(int argc, char** argv) {
         record("display.always_on_row", "row-center",
                companion.display().snapshot().settings.always_on != always_on_before, view_text());
 
+        // The clock's form and the battery's percentage (the owner's request,
+        // 2026-11-11): each switch row, tapped where its title is, then back.
+        auto tap_label = [&](const char* text) {
+            lv_obj_update_layout(ui.root());
+            auto* found = find_text(ui.root(), text);
+            if (!found) return false;
+            // Below the fold on a long screen: scrolled into view first.
+            lv_obj_scroll_to_view_recursive(found, LV_ANIM_OFF);
+            lv_obj_update_layout(ui.root());
+            lv_area_t area;
+            lv_obj_get_coords(found, &area);
+            tap((area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2);
+            return true;
+        };
+        const auto& text_now = ui.language() == aura::InterfaceLanguage::English ? aura::l10n::companion_en_us() :
+                                                                                   aura::l10n::companion_el_gr();
+        const auto& status_now = device_status.snapshot();
+        reset_to(aura::UiView::DisplaySettings);
+        scroll_view_to(600);
+        const bool clock_row = tap_label(text_now.clock_24h_title);
+        const auto twelve_hour = aura::clock_text(status_now.hour, status_now.minute, false, ui.language());
+        const bool twelve_shown = !companion.display().snapshot().settings.clock_24h &&
+                                  find_text(ui.root(), twelve_hour.c_str()) != nullptr;
+        scroll_view_to(600);
+        tap_label(text_now.clock_24h_title);
+        record("display.clock_24h", "switch-and-back",
+               clock_row && twelve_shown && companion.display().snapshot().settings.clock_24h,
+               twelve_hour);
+        reset_to(aura::UiView::Battery);
+        const bool percent_row = tap_label(text_now.battery_percent_title);
+        reset_to(aura::UiView::Home);
+        char percent_text[8];
+        std::snprintf(percent_text, sizeof(percent_text), "%d%%", status_now.battery_percent);
+        auto* percent_label = find_text(ui.root(), percent_text);
+        const bool percent_hidden = !companion.display().snapshot().settings.battery_percent && percent_label &&
+                                    lv_obj_is_hidden(percent_label);
+        reset_to(aura::UiView::Battery);
+        tap_label(text_now.battery_percent_title);
+        reset_to(aura::UiView::Home);
+        percent_label = find_text(ui.root(), percent_text);
+        record("status.battery_percent", "switch-and-back",
+               percent_row && percent_hidden && companion.display().snapshot().settings.battery_percent &&
+                   percent_label && !lv_obj_is_hidden(percent_label),
+               percent_text);
+        // The battery's details (the owner's request, 2026-11-11): what the
+        // power manager measures; DEMO values in the simulator.
+        reset_to(aura::UiView::Battery);
+        const auto battery_now = device_status.snapshot().battery;
+        char volts_text[24];
+        std::snprintf(volts_text, sizeof(volts_text), text_now.volts_format, battery_now.battery_mv / 1000,
+                      (battery_now.battery_mv % 1000) / 10);
+        char celsius_text[16];
+        std::snprintf(celsius_text, sizeof(celsius_text), text_now.celsius_format, battery_now.chip_celsius);
+        char rated_text[48];
+        std::snprintf(rated_text, sizeof(rated_text), text_now.battery_rated_format, battery_now.rated_mah);
+        record("status.battery_details", "shown",
+               battery_now.known && find_text(ui.root(), volts_text) && find_text(ui.root(), celsius_text) &&
+                   find_text(ui.root(), rated_text) && find_text(ui.root(), text_now.battery_health_note),
+               volts_text);
+        // The microSD card (the owner's request, 2026-11-11): its space, and a
+        // format behind two confirmations. Tests never touch the files.
+        reset_to(aura::UiView::Battery);
+        const auto card_now = device_status.snapshot().storage;
+        const bool storage_shown = card_now.known && card_now.present &&
+                                find_text(ui.root(), text_now.storage_title) != nullptr;
+        const int format_before = interaction_counts.system_action;
+        const bool format_row = tap_label(text_now.storage_format);
+        const bool first_ask = ui.view() == aura::UiView::SystemConfirm &&
+                               find_text(ui.root(), text_now.storage_format_question) != nullptr;
+        tap(352, 420);  // the confirmation's right-hand button, as for the restart
+        const bool second_ask = find_text(ui.root(), text_now.storage_format_again) != nullptr &&
+                                interaction_counts.system_action == format_before;
+        tap(352, 420);
+        record("status.card_format", "two-confirmations",
+               storage_shown && format_row && first_ask && second_ask &&
+                   interaction_counts.system_action == format_before + 1,
+               std::to_string(storage_shown) + std::to_string(format_row) + std::to_string(first_ask) +
+                   std::to_string(second_ask));
+        // A format restarts, as on the device.
+        wait_for_home();
+
         companion.ota().reset();
         reset_to(aura::UiView::Update);
         tap(240, 420);
@@ -4870,7 +5015,8 @@ int main(int argc, char** argv) {
                     const auto& clock_now = clock_model.snapshot();
                     const auto end = aura::from_minute_index(clock_now.now_minute + (600 + 30) / 60);
                     char ends[48];
-                    std::snprintf(ends, sizeof(ends), extra.timer_ends_format, end.hour, end.minute);
+                    std::snprintf(ends, sizeof(ends), extra.timer_ends_format,
+                                  aura::clock_text(end.hour, end.minute, true, language).c_str());
                     const bool end_shown = !clock_now.clock_valid || find_text(view_content(), ends) != nullptr;
                     const bool label_shown = find_text(view_content(), "Ζυμαρικά") != nullptr;
                     auto* arc = find_type(view_content(), &lv_arc_class);
@@ -5576,7 +5722,8 @@ int main(int argc, char** argv) {
                         const auto& clock_now = clock_model.snapshot();
                         const auto end = aura::from_minute_index(clock_now.now_minute + (600 + 30) / 60);
                         char ends[48];
-                        std::snprintf(ends, sizeof(ends), extra.timer_ends_format, end.hour, end.minute);
+                        std::snprintf(ends, sizeof(ends), extra.timer_ends_format,
+                                  aura::clock_text(end.hour, end.minute, true, language).c_str());
                         const bool end_shown = !clock_now.clock_valid || find_text(view_content(), ends) != nullptr;
                         auto* arc = find_type(view_content(), &lv_arc_class);
                         const bool amber = arc && lv_color_to_u32(lv_obj_get_style_arc_color(arc, LV_PART_INDICATOR)) %
@@ -6862,7 +7009,7 @@ int main(int argc, char** argv) {
             else if (event.type == "battery") {
                 const int percent = integer(event.payload);
                 controller.dispatch({aura::EventType::BatteryChanged, {}, percent});
-                device_status.set_power(percent, device_status.snapshot().charging, aura::StatusOrigin::Simulated);
+                simulate_battery(percent, device_status.snapshot().charging);
             }
             else if (event.type == "battery_unknown") {
                 device_status.set_power_unavailable();
@@ -6870,7 +7017,7 @@ int main(int argc, char** argv) {
             else if (event.type == "charging") {
                 const bool charging = integer(event.payload) != 0;
                 controller.dispatch({aura::EventType::ChargingChanged, {}, charging ? 1 : 0});
-                device_status.set_power(device_status.snapshot().battery_percent, charging, aura::StatusOrigin::Simulated);
+                simulate_battery(device_status.snapshot().battery_percent, charging);
             }
             else if (event.type == "provider") {
                 select_provider(event.payload == "codex" || event.payload == "groq");

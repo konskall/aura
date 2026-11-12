@@ -7,7 +7,6 @@ struct VisualStrings {
     const char* listening_title;
     const char* listening_privacy_demo;
     const char* thinking_title;
-    const char* thinking_subtitle;
     const char* speaking_title;
     const char* speaking_subtitle;
     const char* quick_actions;

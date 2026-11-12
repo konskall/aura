@@ -34,8 +34,7 @@
                     live.status = countdown_text(timer->remaining_ms);
                     live.active = true;
                 } else if (const auto alarm = next_alarm(clock)) {
-                    std::snprintf(text, sizeof(text), "%02d:%02d", alarm->hour, alarm->minute);
-                    live.status = text;
+                    live.status = time_text(alarm->hour, alarm->minute);
                     live.active = true;
                 }
                 break;
@@ -160,17 +159,20 @@
                                              countdown.c_str(), nullptr, open_clock_event);
         } else {
             const auto alarm = next_alarm(clock);
-            char time[8] = "—";
+            std::string time = "—";
             const char* day = nullptr;
             if (alarm) {
-                std::snprintf(time, sizeof(time), "%02d:%02d", alarm->hour, alarm->minute);
-                if (clock.clock_valid) {
+                // The tile's digits; on a 12-hour clock its corner says the half of the day.
+                time = time_digits(alarm->hour, alarm->minute);
+                if (!display_power.settings.clock_24h) {
+                    day = clock_period(alarm->hour, interface_language);
+                } else if (clock.clock_valid) {
                     const auto now = static_cast<int>(((clock.now_minute % 1440) + 1440) % 1440);
                     day = alarm->hour * 60 + alarm->minute > now ? c().today : c().tomorrow;
                 }
             }
             graphite_tile(kRight, kTop, ui::IconRole::Reminder, alarm ? ui::tokens::amber : ui::tokens::text_tertiary,
-                          c().alarm, time, day, open_clock_event);
+                          c().alarm, time.c_str(), day, open_clock_event);
         }
         // Messages: the unread count opens the rooms.
         const auto unread = static_cast<int>(aoraton.notifications.size());

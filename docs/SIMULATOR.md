@@ -130,6 +130,9 @@ The apps grid now holds Ρολόι, Σημειώσεις and Σήμερα. Alarm
 - Fuel prices refresh on their own: `dev-simulator.ps1` renews the ignored EU bulletin cache in the background when it is missing or more than a week old, and the simulator asks the bridge again every 6 hours (every 15 minutes while prices are missing or stale).
 - The apps grid can be rearranged: tap the pencil in `Εφαρμογές`, tap an app, then tap the place it should move to (the others shift). Tap ✓, Back or swipe away to finish. The order is saved at once in the ignored `simulator/runtime/companion/app-layout.txt` (device: `app-layout.txt` on the microSD card) and factory reset restores the default order: Συνομιλία, Σημειώσεις, Μηνύματα, Σήμερα, Καιρός, Ειδοποιήσεις, Ρολόι, Ραδιόφωνο, Φωτογραφίες, Οργάνωση, Ρυθμίσεις.
 - `Ρυθμίσεις → Κατάσταση συσκευής` reports the trusted local assistant, recognition and voice provider names after their health checks. It never displays credentials.
+  - It also shows the battery's details (DEMO values) and the "card": the simulator's store folder (`simulator/runtime/companion`), with the PC drive's free space.
+  - `Διαμόρφωση κάρτας` asks twice. Then it really erases that folder (notes, photos, files, radio, the apps' order and the settings kept there), as a format erases the device's card. Captures and tests never touch it.
+- `Ρυθμίσεις → Οθόνη → 24ωρη ώρα` switches every time of day to 2:05 μ.μ. (2:05 PM). The large clocks keep their digits only, because their fonts have no letters.
 - Home `Aoraton`: open fictional local `DEMO` rooms, conversation, compose and confirmation screens.
 - Home `Εργαλεία`: open the compact launcher for Assistant, Aoraton, Audio and Notifications; Settings remains available from the gear control.
 - The `DEV` marker is off in normal runs; only the status-matrix captures show it.

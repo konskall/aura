@@ -780,6 +780,12 @@ void Esp32Companion::run_deferred_system_action() {
     microphone_.stop();
     audio_.stop();
 
+    if (action == SystemAction::FormatCard) {
+        // Everything on the card goes; NVS (Wi-Fi, keys, the account) stays.
+        // The restart loads the empty stores.
+        if (!store_.format()) ESP_LOGE(kTag, "the card was not formatted");
+        esp_restart();
+    }
     if (action == SystemAction::FactoryReset) {
         store_.factory_reset();
         const auto erased = nvs_flash_erase();
