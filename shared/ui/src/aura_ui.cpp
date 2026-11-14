@@ -3817,7 +3817,7 @@ struct AuraUi::Impl {
                           storage_size_text(card.total_bytes).c_str());
             space = text;
         }
-        list_row(list, y, c().storage_title, space.c_str(), ui::IconRole::Storage,
+        list_row(list, y, card.present ? c().storage_free_title : c().storage_title, space.c_str(), ui::IconRole::Storage,
                  card.present ? ui::tokens::blue : ui::tokens::text_tertiary, 72);
         y += 82;
         if (card.present) {

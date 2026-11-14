@@ -263,7 +263,8 @@ struct CompanionStrings {
     const char* volts_format;
     const char* celsius_format;
     const char* storage_title;
-    const char* storage_free_format;
+    const char* storage_free_title;   // the row under the card's caption
+    const char* storage_free_format;  // free %s of total %s
     const char* storage_missing;
     const char* storage_format;
     const char* storage_format_question;

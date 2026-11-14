@@ -251,7 +251,8 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.volts_format = "%d,%02d V";
         s.celsius_format = "%d °C";
         s.storage_title = "Κάρτα SD";
-        s.storage_free_format = "%s ελεύθερα από %s";
+        s.storage_free_title = "Ελεύθερος χώρος";
+        s.storage_free_format = "%s από %s";
         s.storage_missing = "Δεν υπάρχει κάρτα";
         s.storage_format = "Διαμόρφωση κάρτας";
         s.storage_format_question = "Διαμόρφωση κάρτας;";
@@ -721,7 +722,8 @@ const CompanionStrings& companion_en_us() noexcept {
         s.volts_format = "%d.%02d V";
         s.celsius_format = "%d °C";
         s.storage_title = "SD card";
-        s.storage_free_format = "%s free of %s";
+        s.storage_free_title = "Free space";
+        s.storage_free_format = "%s of %s";
         s.storage_missing = "No card";
         s.storage_format = "Format card";
         s.storage_format_question = "Format the card?";

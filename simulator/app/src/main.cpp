@@ -4471,7 +4471,9 @@ int main(int argc, char** argv) {
         reset_to(aura::UiView::Battery);
         const auto card_now = device_status.snapshot().storage;
         const bool storage_shown = card_now.known && card_now.present &&
-                                find_text(ui.root(), text_now.storage_title) != nullptr;
+                                // The row names the space, not the card again, and its
+                                // detail fits whole (2026-11-14): «28,4 GB από 31,9 GB».
+                                find_text(ui.root(), text_now.storage_free_title) != nullptr;
         const int format_before = interaction_counts.system_action;
         const bool format_row = tap_label(text_now.storage_format);
         const bool first_ask = ui.view() == aura::UiView::SystemConfirm &&

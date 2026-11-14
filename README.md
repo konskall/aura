@@ -2,7 +2,9 @@
 
 **A Greek-first AI companion for a 480 × 480 AMOLED ESP32-S3 device.** One shared C++17 core and LVGL interface run in two places: a native Windows simulator you can use today, and ESP-IDF firmware for the Waveshare ESP32-S3-Touch-AMOLED-2.16 board.
 
-> **Status (November 2026).** The simulator is feature-complete for the v13 "Companion" release, with photos, local file transfer, realtime messages, a glass header in every look and Halo's Σύναψη drawn 1:1 from its approved design. It passes the full automated suite. The firmware compiles cleanly with ESP-IDF 5.5.5 and now has its own assistant (Groq and Azure), encrypted storage, signed updates and power management, but it **has not been flashed**: nothing that depends on the physical board is claimed to work yet. See [docs/VERIFICATION.md](docs/VERIFICATION.md) for every result.
+> **Status: version 1.0.0 (November 2026), ready for its first flash.** The simulator is feature-complete, with photos, local file transfer, realtime messages, a glass header in every look and Halo's Σύναψη drawn 1:1 from its approved design. It passes the full automated suite. The firmware compiles cleanly with ESP-IDF 5.5.5 and does on the device what the simulator does: its own assistant (Groq and Azure) with actions that ask first, messages and notes by voice, continuous conversation and barge-in, encrypted storage, signed updates and power management. It **has not run on the board yet**: nothing that depends on the physical board is claimed to work until the checks in [docs/FIRST_FLASH.md](docs/FIRST_FLASH.md) pass. See [docs/VERIFICATION.md](docs/VERIFICATION.md) for every result.
+
+![Version 1.0.0: Settings in four groups (Συνδέσεις, Οθόνη και ήχος, Βοηθός, Συσκευή), Οθόνη with 24-hour time and reduced motion, Κατάσταση συσκευής with the battery's details and the microSD card's free space, Μάρμαρο's pearl centred while listening, a timer the assistant proposes and waits to have confirmed, and Σύστημα showing AURA 1.0.0](docs/images/aura-v1-screens.png)
 
 ![AURA production screens: home, listening, thinking, speaking, answers, apps, settings, sound, messages, Wi-Fi and system](docs/images/aura-production-screens.png)
 
@@ -10,11 +12,11 @@
 
 ![Newer screens: photos, the always-on clock over a photo, file transfer with its QR code, credits, the appearance setting, Aoraton sign-in, the Aoraton account, and a conversation with a photo and the voice-message button](docs/images/aura-newer-screens.png)
 
-All names, rooms, messages, photos and data in the screenshots are fictional `DEMO` content. After a full test run, `python scripts/compose-readme-images.py` refreshes these three pictures.
+All names, rooms, messages, photos and data in the screenshots are fictional `DEMO` content. After a full test run, `python scripts/compose-readme-images.py` refreshes these four pictures.
 
 ## Σύντομα στα ελληνικά
 
-Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, φωτογραφίες από την κάρτα microSD, μεταφορά αρχείων από το κινητό ή τον υπολογιστή μέσα από το τοπικό Wi-Fi, μηνύματα Aoraton με κρυπτογράφηση που φτάνουν αμέσως και ειδοποιήσεις από το iPhone. Έχει τέσσερις εμφανίσεις (Άλως, Μάρμαρο, Σέλας, Γραφίτης) που επιλέγεις από τις Ρυθμίσεις → Εμφάνιση. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Στη συσκευή ο βοηθός μιλά απευθείας με το Groq και το Azure, με κλειδιά που στέλνεις μία φορά από τον υπολογιστή και φυλάσσονται κρυπτογραφημένα. Ο προσομοιωτής δουλεύει σήμερα· το firmware χτίζεται, αλλά δεν έχει δοκιμαστεί ακόμα σε πραγματική πλακέτα.
+Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, φωτογραφίες από την κάρτα microSD, μεταφορά αρχείων από το κινητό ή τον υπολογιστή μέσα από το τοπικό Wi-Fi, μηνύματα Aoraton με κρυπτογράφηση που φτάνουν αμέσως και ειδοποιήσεις από το iPhone. Έχει τέσσερις εμφανίσεις (Άλως, Μάρμαρο, Σέλας, Γραφίτης) που επιλέγεις από τις Ρυθμίσεις → Εμφάνιση. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Στη συσκευή ο βοηθός μιλά απευθείας με το Groq και το Azure, με κλειδιά που στέλνεις μία φορά από τον υπολογιστή και φυλάσσονται κρυπτογραφημένα. Οι Ρυθμίσεις χωρίζονται σε τέσσερις ομάδες: Συνδέσεις, Οθόνη και ήχος, Βοηθός, Συσκευή. Η έκδοση 1.0.0 είναι η πρώτη για την πλακέτα: ο προσομοιωτής δουλεύει σήμερα, και το firmware κάνει ό,τι κι εκείνος (ενέργειες με επιβεβαίωση, μηνύματα και σημειώσεις με φωνή, συνεχής συζήτηση), αλλά δεν έχει δοκιμαστεί ακόμα σε πραγματική πλακέτα. Τα βήματα για το πρώτο flash είναι στο [docs/FIRST_FLASH.md](docs/FIRST_FLASH.md).
 
 ## Contents
 
@@ -43,7 +45,7 @@ All names, rooms, messages, photos and data in the screenshots are fictional `DE
 - **Works offline for everyday commands.** Timers, alarms, notes, tasks, shopping, volume, mute, brightness, the time, the battery and opening apps are understood on the device itself, in Greek and English. A sentence that merely mentions these words is left to the assistant.
 - **Local answers.** "Who celebrates today?", "When does Γιώργος celebrate?" and "When is the next public holiday?" are answered from an offline Greek Orthodox calendar.
 - **Explicit web search.** "Ψάξε…" / "search for…" uses live search only when the provider has a real search tool: the Codex CLI, or since 2026-11-11 Groq's browser search (`run.bat groq` and the device). Otherwise the assistant says it cannot search right now.
-- **On the device, without a PC.** The firmware talks to Groq (speech recognition, and answers from `gpt-oss-120b`) and to Azure Speech (the voice) directly over HTTPS, with the same instructions as the bridge ([ADR 0009](docs/ADR/0009-device-direct-cloud-assistant.md)). Spoken questions and answers work there; confirming a proposed action is not wired on the device yet, so it declines actions.
+- **On the device, without a PC.** The firmware talks to Groq (speech recognition, and answers from `gpt-oss-120b`) and to Azure Speech (the voice) directly over HTTPS, with the same instructions as the bridge ([ADR 0009](docs/ADR/0009-device-direct-cloud-assistant.md)). Since 1.0.0 it does there what the simulator does: a proposed action asks first and runs on confirmation (the same executor), a message by voice opens Aoraton's confirmation for the room named, voice notes are transcribed, and after a spoken answer it listens again or stops when spoken over. Without the microSD card it still listens and answers.
 
 ### Apps
 
@@ -61,7 +63,7 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 | Photos | JPG and PNG photos from the microSD card: gallery, full screen, swipes, a slideshow, deletion with confirmation, and an optional dimmed photo behind the always-on clock |
 | Notifications | AURA and phone notifications in one place |
 | Organizer | Agenda, tasks and shopping list |
-| Settings | Wi-Fi, language, appearance, AI provider, reduced motion, sound, display, voice, weather, file transfer and system |
+| Settings | Four groups: Συνδέσεις (Wi-Fi, phone, file transfer), Οθόνη και ήχος (display with 24-hour time and reduced motion, appearance, sound and voice), Βοηθός (AI provider, weather) and Συσκευή (language, device status, system) |
 
 ### Device
 
@@ -71,7 +73,7 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 - **Settings in four groups.** Συνδέσεις (Wi-Fi, phone, File transfer), Οθόνη και ήχος (Οθόνη with Λιγότερη κίνηση, Εμφάνιση, Ήχος), Βοηθός (the assistant, weather) and Συσκευή (language, status, system). On the device the assistant's row names who answers and who speaks (Groq · φωνή Azure).
 - **Device status.** Settings → Κατάσταση συσκευής shows the battery: percentage, charging stage, battery, USB and system voltage, the power chip's temperature and the rated 1000 mAh. The chip measures no health or cycles. It also shows the microSD card's free space, with a format that asks twice, and a switch for the status bar's battery percentage. Settings → Οθόνη switches between 24-hour time and 12-hour time (2:05 μ.μ.).
 - **Local file transfer.** Settings → Μεταφορά αρχείων shows a QR code and a six-digit code. From a phone or PC on the same Wi-Fi you send photos (prepared for the 480 × 480 screen in the browser) or other files, and you can list or delete them. Access lasts ten minutes and ends when you stop it. See [docs/FILE_TRANSFER.md](docs/FILE_TRANSFER.md).
-- **System.** Signed updates (OTA with rollback), diagnostics, credits, restart, power off, and a factory reset that erases settings and data but keeps your photos and files.
+- **System.** The version (AURA 1.0.0), signed updates (OTA with rollback), diagnostics, credits, restart, power off, and a factory reset that erases settings and data but keeps your photos and files.
 - **Phone link.** Notifications and calls from a paired iPhone over Bluetooth LE (ANCS). In the simulator this uses the PC's Bluetooth adapter and is experimental.
 
 ### Appearances
@@ -84,6 +86,8 @@ Settings → Εμφάνιση offers four looks. A look sets the colours, typefa
 | Μάρμαρο (Marble) | Quiet luxury: ivory and champagne on black, hairlines | Noto Serif Display, Commissioner | Phosphor Light | Μαργαριτάρι, a pearl |
 | Σέλας (Aurora) | Living light: glass surfaces and soft light fields | Manrope | Solar Bold Duotone | Σέλας, three ribbons of light |
 | Γραφίτης (Graphite) | A precision instrument: live tiles and gauges | Roboto Flex | Material Symbols Rounded | Αστερισμός, a sphere of points |
+
+On the voice screens each presence sits in the middle of the space between the caption and the buttons. Μάρμαρο's pearl, low under the numerals on Home, rises there when it listens, so its ring never touches the buttons.
 
 ![The four appearances, left to right Άλως, Μάρμαρο, Σέλας and Γραφίτης: Home above, listening below](docs/images/aura-appearances.png)
 
