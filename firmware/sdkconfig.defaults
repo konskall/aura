@@ -10,6 +10,15 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_COMPILER_CXX_EXCEPTIONS=n
 CONFIG_COMPILER_CXX_RTTI=n
 CONFIG_FREERTOS_HZ=1000
+# app_main runs the UI loop: screens are built there (LVGL objects, layout,
+# formatted text) and the assistant's answers are parsed there. The default
+# 3.5 KiB is far too little for that; the metrics line reports what is left
+# (2026-11-14, before the first flash).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
+# A crash on the board leaves its backtrace in the coredump partition, read
+# later with `idf.py coredump-info` even without a monitor attached.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_LV_USE_QRCODE=y

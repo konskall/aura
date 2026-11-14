@@ -65,10 +65,13 @@ public:
     // The owner stopped the voice: no follow-up.
     void stop_speaking() noexcept { reply_playing_ = false; }
 
-    // The talk target was pressed: the assistant listens (the host starts its microphone).
-    void begin_listening();
+    // The talk target was pressed (or, `automatic`, a follow-up or a barge-in
+    // started): the assistant listens (the host starts its microphone).
+    void begin_listening(bool automatic = false);
     // The recorder's WAV, once the speaker stopped or the target was released.
-    void finish_listening(std::vector<std::uint8_t> wav);
+    // Without speech nothing is sent: a tap says it heard nothing, an
+    // automatic listen just ends.
+    void finish_listening(std::vector<std::uint8_t> wav, bool heard = true);
     // A question that is already text.
     void ask(std::string question);
     // Drops whatever is in progress: the request, the transcript and the voice.
@@ -106,6 +109,7 @@ private:
     std::string empty_answer_;
     ConversationMemory memory_;
     bool listening_{false};
+    bool automatic_listen_{false};
     std::string question_;
     std::future<TranscriptResult> transcript_;
     std::future<AssistantReply> reply_;

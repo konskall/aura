@@ -38,7 +38,7 @@ void VoiceAssistantTurn::set_answer_copy(std::string action_question, std::strin
     empty_answer_ = std::move(empty_answer);
 }
 
-void VoiceAssistantTurn::begin_listening() {
+void VoiceAssistantTurn::begin_listening(bool automatic) {
     // A new question interrupts the previous one, and the voice still speaking it.
     cancel();
     const auto state = audio_.diagnostics().state;
@@ -47,12 +47,22 @@ void VoiceAssistantTurn::begin_listening() {
     controller_.dispatch({EventType::WakeDetected, {}, 0});
     controller_.dispatch({EventType::BeginRecording, {}, 0});
     listening_ = controller_.snapshot().state == AssistantState::Listening;
+    automatic_listen_ = automatic;
 }
 
-void VoiceAssistantTurn::finish_listening(std::vector<std::uint8_t> wav) {
+void VoiceAssistantTurn::finish_listening(std::vector<std::uint8_t> wav, bool heard) {
     if (!listening_) return;
     listening_ = false;
     if (controller_.snapshot().state != AssistantState::Listening) return;  // cancelled meanwhile
+    if (!heard) {
+        if (automatic_listen_) {
+            controller_.dispatch({EventType::ListeningExpired, {}, 0});
+        } else {
+            controller_.dispatch({EventType::EndRecording, {}, 0});
+            controller_.dispatch({EventType::Fail, "NO_SPEECH", 0});
+        }
+        return;
+    }
     controller_.dispatch({EventType::EndRecording, {}, 0});
     transcript_ = speech_.transcribe(std::move(wav), interface_language_code(language_));
 }

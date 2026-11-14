@@ -274,6 +274,7 @@ void Esp32Companion::end_question() {
     samples_.clear();
     microphone_.drain(samples_);
     if (!samples_.empty()) recorder_.append(samples_.data(), samples_.size());
+    const bool heard = recorder_.speech_detected();
     auto wav = recorder_.finish_wav();
     voice_.state = VoiceCaptureState::Idle;
     voice_.level = 0.0F;
@@ -282,7 +283,7 @@ void Esp32Companion::end_question() {
         voice_.error_code = "MICROPHONE_STOP_TIMEOUT";
         return;
     }
-    if (question_sink_) question_sink_(std::move(wav));
+    if (question_sink_) question_sink_(std::move(wav), heard);
 }
 
 void Esp32Companion::cancel_question() {

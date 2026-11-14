@@ -76,7 +76,8 @@ std::string Esp32Ota::running_version() const {
 bool Esp32Ota::request_check() {
     bool expected = false;
     if (!configured() || !busy_.compare_exchange_strong(expected, true)) return false;
-    if (xTaskCreate(&Esp32Ota::check_task, "aura_ota_check", 6144, this, 3, nullptr) != pdPASS) {
+    // A TLS handshake and an ECDSA check: as much stack as the weather worker.
+    if (xTaskCreate(&Esp32Ota::check_task, "aura_ota_check", 8192, this, 3, nullptr) != pdPASS) {
         busy_ = false;
         return false;
     }

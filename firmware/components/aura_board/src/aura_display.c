@@ -49,6 +49,9 @@ lv_display_t* aura_board_display_start(int draw_rows) {
         ESP_LOGE(TAG, "invalid draw rows %d", draw_rows);
         return NULL;
     }
+    // The LVGL task runs the touch callbacks, which build whole screens: 16 KiB
+    // instead of the adapter's 8 KiB (internal RAM, measured on the first boot).
+    cfg.lv_adapter_cfg.task_stack_size = 16 * 1024;
     if (esp_lv_adapter_init(&cfg.lv_adapter_cfg) != ESP_OK) return NULL;
 
     const bsp_display_config_t panel_cfg = {

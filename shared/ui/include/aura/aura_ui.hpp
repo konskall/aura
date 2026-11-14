@@ -326,6 +326,10 @@ public:
     void set_developer_mode(bool enabled);
     void set_capture_mode(bool enabled);
     void set_host_metrics(float loop_hz, float average_handler_ms, float maximum_handler_ms);
+    // The device's own measurements for Διαγνωστικά (frame, loop, memory,
+    // stack). Set, they replace the host numbers, the estimates and the
+    // sample files; empty brings the simulator's card back.
+    void set_device_metrics(std::string text);
     float motion_update_hz() const noexcept;
     std::uint64_t motion_update_count() const noexcept;
     float weather_motion_update_hz() const noexcept;

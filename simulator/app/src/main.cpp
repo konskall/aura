@@ -2357,7 +2357,11 @@ int main(int argc, char** argv) {
         auto long_press = [&](int x, int y) {
             push_motion(x, y);
             push_button(SDL_MOUSEBUTTONDOWN, x, y);
-            pump(70);
+            // Held by the clock, not by frames: LVGL's long press needs 400 ms and
+            // reads touch every 33 ms, and 70 frames of ~6 ms came too close to it
+            // (nav.home failed once at 2x, 2026-11-14).
+            const Uint32 pressed_at = SDL_GetTicks();
+            while (SDL_GetTicks() - pressed_at < 700U) pump(1);
             push_button(SDL_MOUSEBUTTONUP, x, y);
             pump(8);
         };
@@ -4466,6 +4470,49 @@ int main(int argc, char** argv) {
                battery_now.known && find_text(ui.root(), volts_text) && find_text(ui.root(), celsius_text) &&
                    find_text(ui.root(), rated_text) && find_text(ui.root(), text_now.battery_health_note),
                volts_text);
+        {
+            // On the device the first card holds the board's own measurements,
+            // never the simulator's host numbers, estimates or DEMO storage.
+            ui.set_device_metrics("frame 9.8 ms");
+            reset_to(aura::UiView::Diagnostics);
+            const bool measured =
+                find_text(ui.root(), "frame 9.8 ms") != nullptr &&
+                find_text(ui.root(), aura::l10n::companion_el_gr().diagnostics_device_title) != nullptr &&
+                find_text(ui.root(), aura::l10n::el_gr().device_estimates) == nullptr &&
+                find_text(ui.root(), aura::l10n::el_gr().storage_demo) == nullptr &&
+                find_text(ui.root(), aura::l10n::visual_el_gr().demo_wav) == nullptr;
+            ui.set_device_metrics({});
+            reset_to(aura::UiView::Diagnostics);
+            const bool host_again = find_text(ui.root(), aura::l10n::el_gr().device_estimates) != nullptr;
+            record("diagnostics.device_metrics", "measured", measured && host_again,
+                   std::to_string(measured) + std::to_string(host_again));
+        }
+        {
+            // A live account without rooms (the device after sign-in) says so;
+            // «local rooms without a real connection» is the DEMO service's.
+            auto live = aoraton.snapshot();
+            live.mock_mode = false;
+            live.runtime_mode = aura::AoratonRuntimeMode::Live;
+            live.pairing = aura::AoratonPairingState::Paired;
+            live.connection = aura::AoratonConnectionState::Connected;
+            live.rooms.clear();
+            live.sequence += 1000;
+            // reset_to applies the DEMO service's snapshot; the live one comes after.
+            reset_to(aura::UiView::AoratonRooms);
+            // No pump: the loop would apply the DEMO service's snapshot again.
+            ui.apply_aoraton(live);
+            ui.show(aura::UiView::AoratonRooms);
+            lv_obj_update_layout(ui.root());
+            const bool none_named = find_text(ui.root(), aura::l10n::companion_el_gr().aoraton_no_rooms) != nullptr;
+            const bool no_demo_hint = find_text(ui.root(), aura::l10n::el_gr().rooms_demo_hint) == nullptr;
+            const bool says_none = none_named && no_demo_hint;
+            // find_text wants the whole text: a row cut short with dots fails it.
+            const std::string rooms_seen = std::to_string(none_named) + std::to_string(no_demo_hint) + view_text();
+            auto back = aoraton.snapshot();
+            back.sequence = live.sequence + 1;
+            ui.apply_aoraton(back);
+            record("aoraton.live_no_rooms", "empty-account", says_none, rooms_seen);
+        }
         // The microSD card (the owner's request, 2026-11-11): its space, and a
         // format behind two confirmations. Tests never touch the files.
         reset_to(aura::UiView::Battery);

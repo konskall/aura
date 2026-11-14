@@ -42,6 +42,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <ctime>
 #include <memory>
 #include <sys/time.h>
@@ -66,7 +67,8 @@ void on_render_ready(lv_event_t*) {
     if (render_started_us > 0) metrics.frame.add(static_cast<std::uint32_t>(esp_timer_get_time() - render_started_us));
 }
 
-void report_metrics(const aura::AuraUi& ui, std::uint64_t& presence_frames, std::uint32_t window_ms) {
+void report_metrics(aura::AuraUi& ui, std::uint64_t& presence_frames, std::uint32_t window_ms,
+                    const aura::l10n::CompanionStrings& strings) {
     metrics.uptime_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
     const std::uint64_t frames = ui.mercury_frame_count();
     metrics.presence_fps = window_ms == 0 || frames < presence_frames ? 0.0 :
@@ -82,6 +84,18 @@ void report_metrics(const aura::AuraUi& ui, std::uint64_t& presence_frames, std:
     metrics.psram_min_free = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
     metrics.psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
     ESP_LOGI(kTag, "metrics %s", aura::format_runtime_metrics(metrics).c_str());
+    // The UI loop's stack: the least ever left free (CONFIG_ESP_MAIN_TASK_STACK_SIZE).
+    const auto stack_free = static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr));
+    ESP_LOGI(kTag, "stack main_min_free=%u", stack_free);
+    // The same numbers on Ρυθμίσεις → Σύστημα → Διαγνωστικά.
+    char text[256];
+    std::snprintf(text, sizeof(text), strings.diagnostics_device_format,
+                  static_cast<double>(metrics.frame.mean_us()) / 1000.0,
+                  static_cast<double>(metrics.frame.max_us()) / 1000.0,
+                  static_cast<double>(metrics.loop.mean_us()) / 1000.0, metrics.presence_fps,
+                  static_cast<unsigned>(metrics.internal_free / 1024U),
+                  static_cast<unsigned>(metrics.psram_free / 1024U), stack_free);
+    ui.set_device_metrics(text);
     metrics.frame.reset();
     metrics.loop.reset();
 }
@@ -303,13 +317,13 @@ extern "C" void app_main(void) {
 
     // Listening for a question: from the talk target, after a spoken answer
     // (continuous conversation) and when the owner speaks over one (barge-in).
-    static const auto start_listening = [] {
+    static const auto start_listening = [](bool automatic) {
         if (!assistant.turn) {
             controller.dispatch({aura::EventType::ProviderUnavailable, "PROVIDER_NOT_CONFIGURED", 0});
             return;
         }
         companion.set_barge_monitor(false);
-        assistant.turn->begin_listening();
+        assistant.turn->begin_listening(automatic);
         if (!companion.begin_question()) {
             assistant.turn->cancel();
             controller.dispatch({aura::EventType::Fail, "MICROPHONE_UNAVAILABLE", 0});
@@ -466,7 +480,7 @@ extern "C" void app_main(void) {
         }
         // The assistant's spoken question: the companion records it with the
         // microphone it shares with notes; the turn transcribes, asks and speaks.
-        callbacks.on_ask = start_listening;
+        callbacks.on_ask = [] { start_listening(false); };
         callbacks.on_end_listening = [] { companion.end_question(); };
         // A proposed action (a timer, an alarm, a note...) runs only once the
         // owner confirms it, as in the simulator.
@@ -491,13 +505,15 @@ extern "C" void app_main(void) {
             controller.dispatch({aura::EventType::Retry, {}, 0});
             if (assistant.turn && !prompt.empty()) assistant.turn->ask(prompt);
         };
-        companion.set_question_sink([](std::vector<std::uint8_t> wav) {
-            if (assistant.turn) assistant.turn->finish_listening(std::move(wav));
+        companion.set_question_sink([](std::vector<std::uint8_t> wav, bool heard) {
+            if (assistant.turn) assistant.turn->finish_listening(std::move(wav), heard);
         });
         ui.set_language(companion.language());
         ui.set_appearance(companion.appearance());
         ui.set_aoraton_sign_in_relay(true);
         ui.create(display, std::move(callbacks));
+        // Διαγνωστικά shows the board's measurements, never the simulator's.
+        ui.set_device_metrics(companion_strings(companion.language()).diagnostics_device_waiting);
         companion.apply(ui);
         ui.apply(controller.snapshot());
         ui.apply_status(device_status.snapshot());
@@ -546,7 +562,7 @@ extern "C" void app_main(void) {
                 ui.show_message(companion_strings(companion.language()).action_failed, true);
             }
         });
-        assistant.turn->set_listen_again(start_listening);
+        assistant.turn->set_listen_again([] { start_listening(true); });
         companion.set_speech_service(assistant.speech.get());
         // "Βάλε Σφαίρα", "σταμάτα το ραδιόφωνο": the radio does it, decided as
         // in the simulator (radio_request); the assistant is not asked.
@@ -694,12 +710,14 @@ extern "C" void app_main(void) {
                 assistant.turn->set_voice(aura::assistant_voice_id(companion.sound().assistant_voice));
                 assistant.turn->set_follow_up(companion.sound().continuous_conversation);
                 assistant.turn->poll();
-                // Barge-in: the microphone listens while the answer is spoken.
-                companion.set_barge_monitor(assistant.turn->speaking() && companion.sound().barge_in);
+                // Barge-in: the microphone listens while the answer is spoken (not
+                // while it is paused, so a paused answer does not keep it open).
+                companion.set_barge_monitor(assistant.turn->speaking() && companion.sound().barge_in &&
+                                            audio.diagnostics().state != aura::AudioState::Paused);
                 if (companion.take_barge_in()) {
                     assistant.turn->stop_speaking();
                     audio.stop();
-                    start_listening();
+                    start_listening(true);
                 }
             }
             aura::WeatherFetchResult weather_result;
@@ -828,7 +846,7 @@ extern "C" void app_main(void) {
             metrics_ms += elapsed_ms;
             const std::uint32_t report_every_ms = esp_timer_get_time() < 120LL * 1000 * 1000 ? 10000U : 60000U;
             if (metrics_ms >= report_every_ms) {
-                report_metrics(ui, presence_frames, metrics_ms);
+                report_metrics(ui, presence_frames, metrics_ms, companion_strings(companion.language()));
                 metrics_ms = 0;
             }
             bsp_display_unlock();

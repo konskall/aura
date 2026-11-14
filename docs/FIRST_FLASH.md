@@ -61,6 +61,13 @@ In this order, within a few seconds:
 - Then `metrics ...` every 10 s for two minutes: frame and loop times, the
   presence's frame rate, and free internal memory and PSRAM. Copy those lines
   into the report; they are the first real performance numbers.
+- With each, `stack main_min_free=N`: the least stack the UI loop ever had
+  left, of 12 KiB. Below about 2000 it needs more
+  (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` in `sdkconfig.defaults`).
+- The same numbers are on the device: Ρυθμίσεις → Σύστημα → Διαγνωστικά.
+
+If it crashes, the monitor prints the backtrace. Without a monitor, the crash
+is kept in the `coredump` partition: `idf.py -p COM5 coredump-info` reads it.
 
 The screen should show Home in the default look (Άλως). Settings → Σύστημα
 shows `AURA 1.0.0` under the software update row.

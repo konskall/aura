@@ -66,7 +66,10 @@ public:
     bool begin_question();
     void end_question();
     void cancel_question();
-    void set_question_sink(std::function<void(std::vector<std::uint8_t>)> sink) { question_sink_ = std::move(sink); }
+    // The WAV, and whether any speech was heard in it.
+    void set_question_sink(std::function<void(std::vector<std::uint8_t>, bool)> sink) {
+        question_sink_ = std::move(sink);
+    }
     // An aoraton voice message, dictated like a note (up to 30 s); its WAV
     // goes to the sink for the service's confirmation.
     bool begin_voice_message();
@@ -151,7 +154,7 @@ private:
     ImuGestureDetector imu_;
     VoiceRecorder recorder_;
     bool recording_question_{false};
-    std::function<void(std::vector<std::uint8_t>)> question_sink_;
+    std::function<void(std::vector<std::uint8_t>, bool)> question_sink_;
     bool recording_message_{false};
     std::function<void(std::vector<std::uint8_t>)> message_sink_;
     VoiceSnapshot voice_{};

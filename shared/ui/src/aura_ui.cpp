@@ -161,6 +161,9 @@ struct AuraUi::Impl {
     std::array<lv_obj_t*, kWeatherDailyCapacity> weather_day_cards{};
     lv_obj_t* weather_detail_label{};
     lv_obj_t* host_metrics_label{};
+    // The device's own Διαγνωστικά text; empty in the simulator.
+    std::string device_metrics;
+    bool on_device_metrics{false};
     lv_obj_t* wifi_password_area{};
     lv_obj_t* wifi_password_status{};
     lv_obj_t* unlock_area{};
@@ -2022,7 +2025,9 @@ struct AuraUi::Impl {
             y += kRowPitch;
         }
         if (count == 0) {
-            list_row(list, y, t().rooms, t().rooms_demo_hint, ui::IconRole::Inbox, ui::tokens::indigo);
+            // The DEMO service's rooms are local; a live account just has none yet.
+            list_row(list, y, t().rooms, aoraton.mock_mode ? t().rooms_demo_hint : c().aoraton_no_rooms, ui::IconRole::Inbox,
+                     ui::tokens::indigo);
             y += kRowPitch;
         }
         if (!aoraton.mock_mode && aoraton.pairing == AoratonPairingState::Paired) {
@@ -3830,6 +3835,11 @@ struct AuraUi::Impl {
 
     void update_host_metrics_label() {
         if (!host_metrics_label) return;
+        if (on_device_metrics) {
+            set_text_if_changed(host_metrics_label,
+                                device_metrics.empty() ? c().diagnostics_device_waiting : device_metrics.c_str());
+            return;
+        }
         char host_value[180];
         std::snprintf(host_value, sizeof(host_value), t().host_metrics_format,
                       host_loop_hz, host_handler_average_ms, host_handler_max_ms);
@@ -3862,19 +3872,26 @@ struct AuraUi::Impl {
             lv_obj_set_style_pad_row(card, 8, 0);
             return card;
         };
+        // The device shows what it measured; the simulator its host numbers,
+        // then the device's unmeasured estimates.
+        on_device_metrics = !device_metrics.empty();
         auto* host = column_card(ui::tokens::mint, true);
-        auto* host_title = ui::make_label(host, t().host_metrics, ui::tokens::mint, ui::font_headline());
+        auto* host_title = ui::make_label(host, on_device_metrics ? c().diagnostics_device_title : t().host_metrics,
+                                          ui::tokens::mint, ui::font_headline());
         lv_obj_set_width(host_title, lv_pct(100));
         host_metrics_label = ui::make_label(host, "", ui::tokens::text_secondary, ui::font_caption());
         lv_obj_set_width(host_metrics_label, lv_pct(100));
         update_host_metrics_label();
-        auto* device = column_card(ui::tokens::lilac, false);
-        auto* device_title = ui::make_label(device, t().device_estimates, ui::tokens::lilac, ui::font_headline());
-        lv_obj_set_width(device_title, lv_pct(100));
-        auto* device_text = ui::make_label(device, t().device_metrics_text, ui::tokens::text_secondary, ui::font_caption());
-        lv_obj_set_width(device_text, lv_pct(100));
-        auto* storage = ui::make_label(device, t().storage_demo, ui::tokens::text_tertiary, ui::font_caption());
-        lv_obj_set_width(storage, lv_pct(100));
+        if (!on_device_metrics) {
+            auto* device = column_card(ui::tokens::lilac, false);
+            auto* device_title = ui::make_label(device, t().device_estimates, ui::tokens::lilac, ui::font_headline());
+            lv_obj_set_width(device_title, lv_pct(100));
+            auto* device_text = ui::make_label(device, t().device_metrics_text, ui::tokens::text_secondary,
+                                               ui::font_caption());
+            lv_obj_set_width(device_text, lv_pct(100));
+            auto* storage = ui::make_label(device, t().storage_demo, ui::tokens::text_tertiary, ui::font_caption());
+            lv_obj_set_width(storage, lv_pct(100));
+        }
         // Speaker checks for development: a test tone and the bundled WAV.
         auto* speaker = column_card(ui::tokens::pink, false);
         auto* speaker_title = ui::make_label(speaker, t().audio_settings, ui::tokens::pink, ui::font_headline());
@@ -3885,9 +3902,15 @@ struct AuraUi::Impl {
         ui::reset(buttons);
         lv_obj_set_size(buttons, lv_pct(100), kButtonHeight);
         constexpr int kSpeakerButton = (kWidth - 40 - 12) / 2;
-        pill(buttons, v().audio_test, ui::ButtonTone::Secondary, 0, 0, kSpeakerButton, diagnostics_tone_event);
-        pill(buttons, v().demo_wav, ui::ButtonTone::Secondary, kSpeakerButton + 12, 0, kSpeakerButton,
-             diagnostics_wav_event);
+        // The sample WAV ships with the simulator only; the device tests its
+        // speaker with the tone, across the whole row.
+        if (on_device_metrics) {
+            pill(buttons, v().audio_test, ui::ButtonTone::Secondary, 0, 0, kWidth - 40, diagnostics_tone_event);
+        } else {
+            pill(buttons, v().audio_test, ui::ButtonTone::Secondary, 0, 0, kSpeakerButton, diagnostics_tone_event);
+            pill(buttons, v().demo_wav, ui::ButtonTone::Secondary, kSpeakerButton + 12, 0, kSpeakerButton,
+                 diagnostics_wav_event);
+        }
         update_audio_widgets();
     }
 
@@ -4674,6 +4697,11 @@ void AuraUi::set_developer_mode(bool enabled) {
 
 void AuraUi::set_capture_mode(bool enabled) {
     impl_->capture_mode = enabled;
+}
+
+void AuraUi::set_device_metrics(std::string text) {
+    impl_->device_metrics = std::move(text);
+    impl_->update_host_metrics_label();
 }
 
 void AuraUi::set_host_metrics(float loop_hz, float average_handler_ms, float maximum_handler_ms) {

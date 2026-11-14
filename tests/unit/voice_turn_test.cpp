@@ -166,6 +166,25 @@ int main() {
                answered.answer_text.find("ACTION") == std::string::npos,
            "without an action handler a proposed action is refused, and the answer says so");
 
+    // A recording with no speech is never sent: a tap says it heard nothing,
+    // an automatic listen (a follow-up, a barge-in) just ends.
+    controller.dispatch({aura::EventType::Reset});
+    const std::size_t transcribed_before = speech.transcribed_languages.size();
+    turn.begin_listening();
+    turn.finish_listening(aura::make_wav(std::vector<std::int16_t>(8000, 0), 16000), false);
+    settle(turn);
+    expect(speech.transcribed_languages.size() == transcribed_before &&
+               controller.snapshot().state == AssistantState::Error &&
+               controller.snapshot().error_code == "NO_SPEECH",
+           "a tap with no speech says so without asking the recognizer");
+    controller.dispatch({aura::EventType::Reset});
+    turn.begin_listening(true);
+    turn.finish_listening(aura::make_wav(std::vector<std::int16_t>(8000, 0), 16000), false);
+    settle(turn);
+    expect(speech.transcribed_languages.size() == transcribed_before &&
+               controller.snapshot().state == AssistantState::Idle,
+           "an automatic listen with no speech ends quietly");
+
     // Failures.
     controller.dispatch({aura::EventType::Reset});
     speech.transcript = {false, {}, "NO_SPEECH"};

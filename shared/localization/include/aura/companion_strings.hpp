@@ -284,6 +284,13 @@ struct CompanionStrings {
     const char* assistant_voice_format;  // %s answers, %s speaks
     const char* assistant_silent_format;  // %s answers, no voice
     const char* assistant_needs_keys;
+    // Διαγνωστικά on the device (2026-11-14).
+    const char* diagnostics_device_title;
+    const char* diagnostics_device_format;  // frame ms, max ms, loop ms, fps, internal KB, PSRAM KB, stack B
+    const char* diagnostics_device_waiting;
+    // Μηνύματα with a live account that has no rooms yet (under «Ασφαλή
+    // δωμάτια», short enough to fit whole).
+    const char* aoraton_no_rooms;
     // Settings > Appearance: the screen title and the four looks
     const char* appearance_title;
     const char* appearance_halo;

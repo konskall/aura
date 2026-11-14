@@ -270,6 +270,10 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.assistant_voice_format = "%s · φωνή %s";
         s.assistant_silent_format = "%s · χωρίς φωνή";
         s.assistant_needs_keys = "Χρειάζεται τα κλειδιά από το PC";
+        s.diagnostics_device_title = "Μετρήσεις συσκευής";
+        s.diagnostics_device_format = "Καρέ %.1f ms (μέγιστο %.1f) · βρόχος %.1f ms\nΠαρουσία %.1f καρέ/s\nΕλεύθερα: εσωτερική %u KB · PSRAM %u KB\nΣτοίβα UI: %u B ελεύθερα";
+        s.diagnostics_device_waiting = "Οι πρώτες μετρήσεις έρχονται σε 10 δευτερόλεπτα.";
+        s.aoraton_no_rooms = "Κανένα ακόμα";
         s.appearance_title = "Εμφάνιση";
         s.appearance_halo = "Άλως";
         s.appearance_marble = "Μάρμαρο";
@@ -741,6 +745,10 @@ const CompanionStrings& companion_en_us() noexcept {
         s.assistant_voice_format = "%s · voice %s";
         s.assistant_silent_format = "%s · no voice";
         s.assistant_needs_keys = "Needs the keys from the PC";
+        s.diagnostics_device_title = "Device measurements";
+        s.diagnostics_device_format = "Frame %.1f ms (max %.1f) · loop %.1f ms\nPresence %.1f fps\nFree: internal %u KB · PSRAM %u KB\nUI stack: %u B free";
+        s.diagnostics_device_waiting = "The first measurements arrive in 10 seconds.";
+        s.aoraton_no_rooms = "None yet";
         s.appearance_title = "Appearance";
         s.appearance_halo = "Halo";
         s.appearance_marble = "Marble";
