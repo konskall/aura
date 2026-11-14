@@ -191,7 +191,7 @@ private:
     NotesModel notes_;
     OrganizerModel organizer_;
     PhoneNotificationModel phone_;
-    OtaUpdateModel ota_{"13.0.0"};
+    OtaUpdateModel ota_{"1.0.0"};
     DisplayPowerModel display_;
     ImuGestureDetector imu_;
     ConversationMemory memory_;

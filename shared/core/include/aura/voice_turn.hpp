@@ -22,8 +22,10 @@ namespace aura {
 // services wait on their own worker. The host's recorder hands over the WAV;
 // this transcribes it, asks the provider with the device facts and the recent
 // conversation, shows the answer as it streams and speaks it. An action the
-// model proposes is refused for now (confirming one on the device comes
-// later), and the answer says that nothing was done.
+// model proposes goes to the host's action handler and waits for the owner's
+// confirmation; a message goes to the message handler, which opens Aoraton's
+// own confirmation. Without a handler it is refused and the answer says that
+// nothing was done. After a spoken answer it can listen again by itself.
 class VoiceAssistantTurn {
 public:
     using Clock = std::function<std::uint64_t()>;  // milliseconds, for the conversation memory
@@ -43,6 +45,25 @@ public:
     // A spoken question the host answers itself ("βάλε Σφαίρα": the radio).
     // True: the host has done it, the assistant is not asked and the turn ends.
     void set_local_request(std::function<bool(const std::string& question)> local) { local_ = std::move(local); }
+    // Keeps a proposed action for the confirmation screen; the controller then
+    // waits in ActionConfirmation until the owner confirms or declines it.
+    void set_action_handler(std::function<void(const AssistantAction&)> handler) {
+        action_handler_ = std::move(handler);
+    }
+    // A message by voice, after its answer is shown: the host finds the room
+    // and opens the send confirmation (or says it could not).
+    void set_message_handler(std::function<void(const AssistantAction&)> handler) {
+        message_handler_ = std::move(handler);
+    }
+    // Continuous conversation: once a spoken answer has been heard to its
+    // end, `listen_again` starts listening for a follow-up.
+    void set_follow_up(bool enabled) noexcept { follow_up_ = enabled; }
+    void set_listen_again(std::function<void()> listen) { listen_again_ = std::move(listen); }
+    // The spoken answer is playing (or about to): the host may listen for
+    // speech over it (barge-in).
+    bool speaking() const noexcept { return reply_playing_; }
+    // The owner stopped the voice: no follow-up.
+    void stop_speaking() noexcept { reply_playing_ = false; }
 
     // The talk target was pressed: the assistant listens (the host starts its microphone).
     void begin_listening();
@@ -71,6 +92,15 @@ private:
     bool spoken_{true};
     std::function<std::string(const std::string&)> context_;
     std::function<bool(const std::string&)> local_;
+    std::function<void(const AssistantAction&)> action_handler_;
+    std::function<void(const AssistantAction&)> message_handler_;
+    std::function<void()> listen_again_;
+    bool follow_up_{false};
+    // The spoken answer: handed to the audio service, heard sounding, and
+    // when (a voice that never starts is given up after a while).
+    bool reply_playing_{false};
+    bool reply_started_{false};
+    std::uint64_t reply_since_ms_{0};
     std::string action_question_;
     std::string action_refused_;
     std::string empty_answer_;

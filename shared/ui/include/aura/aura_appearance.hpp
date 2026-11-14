@@ -61,7 +61,10 @@ struct Metrics {
     bool outline_secondary;
     int platter_radius;
     int button_radius;
-    int hero_center_y;  // the presence centre on Home and in the assistant states
+    int hero_center_y;   // the presence centre on Home
+    // The presence centre on the voice screens (listening, thinking, speaking):
+    // the middle of the band between the state caption and the action row.
+    int stage_center_y;
 };
 
 const Palette& palette_for(Appearance appearance) noexcept;

@@ -8,7 +8,6 @@ struct VisualStrings {
     const char* listening_privacy_demo;
     const char* thinking_title;
     const char* speaking_title;
-    const char* speaking_subtitle;
     const char* quick_actions;
     const char* conversation;
     const char* search;

@@ -1,6 +1,13 @@
 // A spoken question to the device's own assistant, from the talk target to the
 // spoken answer: VoiceAssistantTurn drives the controller with fake services.
+#include "aura/aoraton.hpp"
+#include "aura/assistant_actions.hpp"
 #include "aura/assistant_state.hpp"
+#include "aura/clock_services.hpp"
+#include "aura/display_power.hpp"
+#include "aura/notes.hpp"
+#include "aura/organizer.hpp"
+#include "aura/sounds.hpp"
 #include "aura/voice_turn.hpp"
 
 #include <cstdint>
@@ -81,10 +88,19 @@ struct FakeAudio final : aura::IAudioService {
     bool pause() override { return true; }
     bool resume() override { return true; }
     void stop() override { ++stopped; }
-    void set_volume(float) override {}
-    void set_muted(bool) override {}
+    void set_volume(float value) override { volume = value; }
+    void set_muted(bool value) override { muted = value; }
     void tick(std::uint32_t) override {}
-    aura::AudioDiagnostics diagnostics() const override { return {}; }
+    aura::AudioDiagnostics diagnostics() const override {
+        aura::AudioDiagnostics result;
+        result.state = state;
+        result.volume = volume;
+        result.muted = muted;
+        return result;
+    }
+    float volume{0.5F};
+    bool muted{false};
+    aura::AudioState state{aura::AudioState::Ready};
 };
 
 // Runs poll() until nothing changes.
@@ -138,7 +154,7 @@ int main() {
                provider.requests[1].history[0].answer == "Είναι 10:00.",
            "a follow-up question remembers the last answer");
 
-    // A proposed action is refused for now: the screen says nothing was done.
+    // Without an action handler a proposed action is refused: the screen says nothing was done.
     controller.dispatch({aura::EventType::Reset});
     provider.reply = {true, "Βάζω χρονόμετρο.\nACTION: {\"type\":\"timer\",\"seconds\":600,\"label\":\"pasta\"}", {}};
     turn.ask("Βάλε χρονόμετρο δέκα λεπτά");
@@ -148,7 +164,7 @@ int main() {
                answered.answer_text.find("Βάζω χρονόμετρο.") != std::string::npos &&
                answered.answer_text.find("Δεν έγινε τίποτα.") != std::string::npos &&
                answered.answer_text.find("ACTION") == std::string::npos,
-           "an action is not done on the device yet, and the answer says so");
+           "without an action handler a proposed action is refused, and the answer says so");
 
     // Failures.
     controller.dispatch({aura::EventType::Reset});
@@ -217,6 +233,148 @@ int main() {
     settle(turn);
     expect(local.size() == 2 && provider.requests.size() == asked_before + 1,
            "anything else still goes to the assistant");
+
+    // On the device a proposed action waits for the owner's confirmation, as
+    // in the simulator: the answer asks, the host keeps the action.
+    std::vector<aura::AssistantAction> proposed;
+    turn.set_local_request({});
+    turn.set_action_handler([&proposed](const aura::AssistantAction& action) { proposed.push_back(action); });
+    controller.dispatch({aura::EventType::Reset});
+    provider.reply = {true, "Βάζω χρονόμετρο.\nACTION: {\"type\":\"timer\",\"seconds\":600,\"label\":\"pasta\"}", {}};
+    turn.ask("Βάλε χρονόμετρο δέκα λεπτά");
+    settle(turn);
+    expect(controller.snapshot().state == AssistantState::ActionConfirmation && proposed.size() == 1 &&
+               proposed[0].type == aura::AssistantActionType::Timer && proposed[0].seconds == 600 &&
+               controller.snapshot().answer_text.find("Δεν έγινε τίποτα.") == std::string::npos &&
+               controller.snapshot().answer_text.find("ACTION") == std::string::npos,
+           "a proposed action waits for the owner's confirmation");
+    controller.dispatch({aura::EventType::Reset});
+    provider.reply = {true, "Θα το στείλω.\nACTION: {\"type\":\"message\",\"room\":\"Family\",\"text\":\"Αργώ\"}", {}};
+    turn.ask("Στείλε στην οικογένεια ότι αργώ");
+    settle(turn);
+    expect(proposed.size() == 1 && controller.snapshot().state == AssistantState::Responding &&
+               controller.snapshot().answer_text.find("Δεν έγινε τίποτα.") != std::string::npos,
+           "without a message handler a message by voice is refused");
+
+    // With one, the message goes to the host (it opens Aoraton's own
+    // confirmation); the answer is shown first and asks nothing itself.
+    std::vector<aura::AssistantAction> messages;
+    turn.set_message_handler([&messages](const aura::AssistantAction& action) { messages.push_back(action); });
+    controller.dispatch({aura::EventType::Reset});
+    turn.ask("Στείλε στην οικογένεια ότι αργώ");
+    settle(turn);
+    expect(messages.size() == 1 && messages[0].room == "Family" && messages[0].text == "Αργώ" &&
+               proposed.size() == 1 && controller.snapshot().state == AssistantState::Responding &&
+               controller.snapshot().answer_text.find("Δεν έγινε τίποτα.") == std::string::npos,
+           "a message by voice goes to the host's message handler");
+
+    // The room the owner named, or the only one; never a guess.
+    std::vector<aura::AoratonRoom> rooms(2);
+    rooms[0].id = "r1";
+    rooms[0].display_name = "Οικογένεια";
+    rooms[1].id = "r2";
+    rooms[1].display_name = "Εργαστήριο";
+    const auto* family = aura::assistant_message_room(rooms, "οικογενεια");
+    expect(family && family->id == "r1", "a named room is found whatever its accents and case");
+    expect(aura::assistant_message_room(rooms, "") == nullptr &&
+               aura::assistant_message_room(rooms, "Γιαγιά") == nullptr,
+           "with several rooms an unnamed or unknown room is no room");
+    rooms.pop_back();
+    const auto* only = aura::assistant_message_room(rooms, "");
+    expect(only && only->id == "r1", "the only room needs no name");
+
+    // After a spoken answer the device listens again (continuous
+    // conversation), once the voice has finished.
+    int listened_again = 0;
+    turn.set_listen_again([&listened_again] { ++listened_again; });
+    turn.set_follow_up(true);
+    speech.tts = true;
+    controller.dispatch({aura::EventType::Reset});
+    provider.reply = {true, "Είναι 10:00.", {}};
+    const int played_before = audio.played;
+    turn.ask("Τι ώρα είναι;");
+    settle(turn);
+    expect(audio.played == played_before + 1 && turn.speaking(), "the spoken answer plays and the turn is speaking");
+    audio.state = aura::AudioState::Playing;
+    settle(turn);
+    expect(turn.speaking() && listened_again == 0, "it does not listen while the answer plays");
+    audio.state = aura::AudioState::Ready;
+    settle(turn);
+    expect(!turn.speaking() && listened_again == 1, "it listens again once the answer has been spoken");
+    settle(turn);
+    expect(listened_again == 1, "and only once");
+    // Not with the setting off, nor while an action waits for confirmation.
+    turn.set_follow_up(false);
+    controller.dispatch({aura::EventType::Reset});
+    turn.ask("Τι ώρα είναι;");
+    settle(turn);
+    audio.state = aura::AudioState::Playing;
+    settle(turn);
+    audio.state = aura::AudioState::Ready;
+    settle(turn);
+    expect(listened_again == 1, "continuous conversation off: no listening again");
+    turn.set_follow_up(true);
+    controller.dispatch({aura::EventType::Reset});
+    provider.reply = {true, "Βάζω χρονόμετρο.\nACTION: {\"type\":\"timer\",\"seconds\":60}", {}};
+    turn.ask("Χρονόμετρο ένα λεπτό");
+    settle(turn);
+    audio.state = aura::AudioState::Playing;
+    settle(turn);
+    audio.state = aura::AudioState::Ready;
+    settle(turn);
+    expect(listened_again == 1 && controller.snapshot().state == AssistantState::ActionConfirmation,
+           "an action waiting for confirmation is not talked over");
+    // A voice that never starts does not leave the turn speaking for ever.
+    controller.dispatch({aura::EventType::Reset});
+    provider.reply = {true, "Είναι 10:00.", {}};
+    turn.ask("Τι ώρα είναι;");
+    settle(turn);
+    turn.cancel();
+    expect(!turn.speaking(), "cancelling ends the spoken answer");
+
+    // A confirmed action is carried out by the shared executor.
+    aura::ClockServicesModel clock;
+    aura::NotesModel notes;
+    aura::OrganizerModel organizer;
+    aura::DisplayPowerModel display;
+    aura::SoundSettings sound;
+    FakeAudio speaker;
+    speaker.volume = 0.5F;
+    speaker.muted = true;
+    const auto targets = [&] {
+        return aura::AssistantActionTargets{clock, notes, organizer, display, speaker, sound, 600};
+    };
+    expect(aura::execute_assistant_action(proposed[0], targets()) && clock.snapshot().timers.size() == 1 &&
+               clock.snapshot().timers[0].duration_s == 600,
+           "a confirmed timer starts");
+    aura::AssistantAction action;
+    action.type = aura::AssistantActionType::Shopping;
+    action.text = "γάλα";
+    expect(aura::execute_assistant_action(action, targets()) && organizer.snapshot().shopping.size() == 1,
+           "a confirmed shopping item is added");
+    action = {};
+    action.type = aura::AssistantActionType::Note;
+    action.text = "κλειδιά στο συρτάρι";
+    expect(aura::execute_assistant_action(action, targets()) && notes.snapshot().notes.size() == 1,
+           "a confirmed note is kept");
+    action = {};
+    action.type = aura::AssistantActionType::Volume;
+    action.relative = true;
+    action.value = 20;
+    expect(aura::execute_assistant_action(action, targets()) && speaker.volume > 0.69F && speaker.volume < 0.71F &&
+               !speaker.muted && !sound.muted,
+           "louder steps up from the volume heard now and ends a mute");
+    action = {};
+    action.type = aura::AssistantActionType::Brightness;
+    action.value = 2;
+    expect(!aura::execute_assistant_action(action, targets()), "a brightness below 5% is refused");
+    action.value = 40;
+    expect(aura::execute_assistant_action(action, targets()) &&
+               display.snapshot().settings.active_brightness_percent == 40,
+           "a confirmed brightness is set");
+    action = {};
+    action.type = aura::AssistantActionType::Message;
+    expect(!aura::execute_assistant_action(action, targets()), "a message is not the executor's");
     std::cout << "voice_turn_test: PASS\n";
     return 0;
 }

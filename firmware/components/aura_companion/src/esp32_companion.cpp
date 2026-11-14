@@ -1,5 +1,6 @@
 #include "esp32_companion.hpp"
 
+#include "aura/assistant_actions.hpp"
 #include "aura/audio_service.hpp"
 #include "aura/text_util.hpp"
 #include "aura_board_profile.h"
@@ -95,9 +96,11 @@ void Esp32Companion::start() {
     capabilities_.phone_link = phone_link_.start();
     phone_.set_link(capabilities_.phone_link ? PhoneLinkState::NotPaired : PhoneLinkState::Unavailable,
                     PhonePlatform::Unknown, {});
-    capabilities_.microphone = storage_task_handle_ && microphone_.initialize();
-    // Recognition, spoken replies and the wake word wait for the AI gateway
-    // and a trained "Aura" model.
+    // Questions and voice messages are recorded in memory, so the assistant
+    // listens without a card; only voice notes need the card (begin_note).
+    capabilities_.microphone = microphone_.initialize();
+    // Recognition and spoken replies start with the cloud keys
+    // (set_speech_available); the wake word waits for a trained «Αύρα» model.
     capabilities_.speech_recognition = false;
     capabilities_.speech_output = false;
     capabilities_.wake_word = false;
@@ -246,11 +249,14 @@ void Esp32Companion::install(AuraUiCallbacks& callbacks, IAoratonService* aorato
 }
 
 bool Esp32Companion::begin_question() {
+    set_barge_monitor(false);
     if (recording_note_ || recording_question_ || voice_.state != VoiceCaptureState::Idle ||
         !capabilities_.speech_recognition || !microphone_.start()) {
         return false;
     }
     audio_.stop();
+    // A new question drops an action that was never confirmed.
+    decline_action();
     // A question ends by itself when the speaker stops (VoiceRecorder's turn mode).
     recorder_.start(VoiceRecorder::Mode::Turn);
     recording_question_ = true;
@@ -290,6 +296,7 @@ void Esp32Companion::cancel_question() {
 }
 
 bool Esp32Companion::begin_voice_message() {
+    set_barge_monitor(false);
     if (recording_note_ || recording_question_ || recording_message_ || voice_.state != VoiceCaptureState::Idle ||
         !capabilities_.microphone || !microphone_.start()) {
         return false;
@@ -339,11 +346,62 @@ void Esp32Companion::set_speech_available(bool recognition, bool output) {
     capabilities_.speech_recognition = listens;
     capabilities_.speech_output = output;
     capabilities_dirty_ = true;
+    // The device's own assistant (app_main): Groq hears and answers, Azure speaks.
+    extras_.assistant_provider = recognition ? "Groq" : "";
+    extras_.speech_recognition_provider = listens ? "Groq Whisper" : "";
+    extras_.speech_output_provider = output ? "Azure" : "";
+    ++extras_.sequence;
+    extras_dirty_ = true;
+}
+
+void Esp32Companion::set_barge_monitor(bool on) {
+    if (on == barge_monitoring_) return;
+    if (!on) {
+        barge_monitoring_ = false;
+        microphone_.stop();
+        samples_.clear();
+        return;
+    }
+    if (!capabilities_.microphone || recording_note_ || recording_question_ || recording_message_ ||
+        voice_.state != VoiceCaptureState::Idle || !microphone_.start()) {
+        return;
+    }
+    barge_gate_.reset();
+    samples_.clear();
+    barge_monitoring_ = true;
+}
+
+bool Esp32Companion::take_barge_in() noexcept {
+    const bool heard = barge_heard_;
+    barge_heard_ = false;
+    return heard;
+}
+
+void Esp32Companion::propose_action(const AssistantAction& action) {
+    extras_.pending_action = action;
+    ++extras_.sequence;
+    extras_dirty_ = true;
+}
+
+bool Esp32Companion::confirm_action() {
+    if (!extras_.pending_action) return false;
+    const auto action = *extras_.pending_action;
+    decline_action();
+    // The changed models are stored by poll(), as after a tap.
+    return execute_assistant_action(action, {clock_, notes_, organizer_, display_, audio_, sound_, now_minute()});
+}
+
+void Esp32Companion::decline_action() {
+    if (!extras_.pending_action) return;
+    extras_.pending_action.reset();
+    ++extras_.sequence;
+    extras_dirty_ = true;
 }
 
 void Esp32Companion::begin_note() {
+    set_barge_monitor(false);
     if (recording_note_ || recording_question_ || voice_.state != VoiceCaptureState::Idle ||
-        !capabilities_.microphone || !microphone_.start()) return;
+        !capabilities_.microphone || !storage_jobs_ || !microphone_.start()) return;
     audio_.stop();
     // A note is dictated: it may pause to think and may last half a minute.
     recorder_.start(VoiceRecorder::Mode::Dictation);
@@ -368,6 +426,7 @@ void Esp32Companion::finish_note() {
     microphone_.drain(samples_);
     if (!samples_.empty()) recorder_.append(samples_.data(), samples_.size());
     const auto elapsed = recorder_.elapsed_ms();
+    const bool heard = recorder_.speech_detected();
     auto wav = recorder_.finish_wav();
     recording_note_ = false;
     // The random part keeps the name unique when the clock is unknown or the
@@ -385,6 +444,7 @@ void Esp32Companion::finish_note() {
     job->audio = std::move(wav);
     job->duration_ms = elapsed;
     job->minute = now_minute();
+    job->transcribe = heard && speech_ && capabilities_.speech_recognition;
     if (!enqueue(job)) {
         voice_.error_code = "STORAGE_BUSY";
         voice_.state = VoiceCaptureState::Idle;
@@ -414,6 +474,19 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
     photos_.poll(elapsed_ms, photos_.snapshot().playing);
     const auto now = now_ms();
     poll_storage_results();
+    note_transcriptions_.poll(notes_);
+    // Speech over a spoken answer: the gate calibrates against the speaker's
+    // bleed first, then wants a sustained rise (no echo reference on the board).
+    if (barge_monitoring_) {
+        samples_.clear();
+        microphone_.drain(samples_);
+        const auto playing = audio_.diagnostics();
+        if (!samples_.empty() && playing.state == AudioState::Playing &&
+            barge_gate_.observe(samples_.data(), samples_.size(), playing.envelope)) {
+            set_barge_monitor(false);
+            barge_heard_ = true;
+        }
+    }
     clock_.tick(elapsed_ms);
 
     imu_samples_.clear();
@@ -551,7 +624,8 @@ void Esp32Companion::storage_task() {
                 break;
             case StoreJobKind::Voice:
                 job->success = store_.write_note_audio(job->name, job->audio);
-                job->audio.clear();
+                // A note to transcribe keeps its WAV for the UI thread.
+                if (!job->transcribe || !job->success) job->audio.clear();
                 break;
             case StoreJobKind::DeleteVoice:
                 store_.remove_note_audio(job->name);
@@ -617,9 +691,15 @@ void Esp32Companion::poll_storage_results() {
             case StoreJobKind::Voice: {
                 std::uint32_t id = 0;
                 if (job->success && notes_.add_voice(job->name, job->duration_ms, job->minute, &id) == NoteResult::Ok) {
-                    // No recognizer on the device yet: retain the audio and mark
-                    // only the optional transcript as unavailable.
-                    notes_.set_transcript_failed(id);
+                    // Its words come from the assistant's speech service (Groq),
+                    // beside any question; without keys the note stays audio only.
+                    if (job->transcribe && speech_ && !job->audio.empty()) {
+                        note_transcriptions_.start(
+                            id, speech_->transcribe(std::move(job->audio), interface_language_code(language_)),
+                            notes_);
+                    } else {
+                        notes_.set_transcript_failed(id);
+                    }
                     voice_.error_code.clear();
                 } else {
                     voice_.error_code = job->success ? "NOTES_FULL" : "NOTE_NOT_SAVED";
@@ -726,6 +806,10 @@ void Esp32Companion::apply(AuraUi& ui) {
     if (capabilities_dirty_) {
         capabilities_dirty_ = false;
         ui.set_capabilities(capabilities_);
+    }
+    if (extras_dirty_) {
+        extras_dirty_ = false;
+        ui.apply_assistant_extras(extras_);
     }
     ui.apply_display(display_.snapshot());
     ui.apply_photos(photos_.snapshot());

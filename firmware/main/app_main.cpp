@@ -1,4 +1,6 @@
+#include "aura/assistant_actions.hpp"
 #include "aura/assistant_companion.hpp"
+#include "aura/sounds.hpp"
 #include "aura/assistant_state.hpp"
 #include "aura/aoraton.hpp"
 #include "aura/aoraton_device_link.hpp"
@@ -299,6 +301,21 @@ extern "C" void app_main(void) {
 
     start_frame_worker();
 
+    // Listening for a question: from the talk target, after a spoken answer
+    // (continuous conversation) and when the owner speaks over one (barge-in).
+    static const auto start_listening = [] {
+        if (!assistant.turn) {
+            controller.dispatch({aura::EventType::ProviderUnavailable, "PROVIDER_NOT_CONFIGURED", 0});
+            return;
+        }
+        companion.set_barge_monitor(false);
+        assistant.turn->begin_listening();
+        if (!companion.begin_question()) {
+            assistant.turn->cancel();
+            controller.dispatch({aura::EventType::Fail, "MICROPHONE_UNAVAILABLE", 0});
+        }
+    };
+
     // LVGL callbacks run in the BSP's LVGL task while it holds the display lock;
     // the loop below touches the same models only under that lock as well.
     if (bsp_display_lock(0)) {
@@ -320,7 +337,11 @@ extern "C" void app_main(void) {
             if (audio.diagnostics().state == aura::AudioState::Paused) audio.resume();
             else audio.pause();
         };
-        callbacks.on_audio_stop = [] { audio.stop(); };
+        callbacks.on_audio_stop = [] {
+            // The owner stopped the voice: no follow-up listening after it.
+            if (assistant.turn) assistant.turn->stop_speaking();
+            audio.stop();
+        };
         callbacks.on_audio_muted = [](bool muted) { audio.set_muted(muted); };
         callbacks.on_audio_volume = [](float volume) { audio.set_volume(volume); };
         callbacks.on_aoraton_room = [](const std::string& room_id) { return aoraton.select_room(room_id); };
@@ -445,18 +466,20 @@ extern "C" void app_main(void) {
         }
         // The assistant's spoken question: the companion records it with the
         // microphone it shares with notes; the turn transcribes, asks and speaks.
-        callbacks.on_ask = [] {
-            if (!assistant.turn) {
-                controller.dispatch({aura::EventType::ProviderUnavailable, "PROVIDER_NOT_CONFIGURED", 0});
-                return;
-            }
-            assistant.turn->begin_listening();
-            if (!companion.begin_question()) {
-                assistant.turn->cancel();
-                controller.dispatch({aura::EventType::Fail, "MICROPHONE_UNAVAILABLE", 0});
-            }
-        };
+        callbacks.on_ask = start_listening;
         callbacks.on_end_listening = [] { companion.end_question(); };
+        // A proposed action (a timer, an alarm, a note...) runs only once the
+        // owner confirms it, as in the simulator.
+        callbacks.on_action_confirm = [] {
+            const bool done = companion.confirm_action();
+            controller.dispatch({aura::EventType::ConfirmAction, {}, 0});
+            const auto& strings = companion_strings(companion.language());
+            ui.show_message(done ? strings.action_done : strings.action_failed, !done);
+        };
+        callbacks.on_action_decline = [] {
+            companion.decline_action();
+            controller.dispatch({aura::EventType::DeclineAction, {}, 0});
+        };
         callbacks.on_cancel = [] {
             companion.cancel_question();
             if (assistant.turn) assistant.turn->cancel();
@@ -491,6 +514,7 @@ extern "C" void app_main(void) {
 
     // Starts, or restarts with new keys, the assistant. Under the display lock.
     const auto start_assistant = [] {
+        companion.set_speech_service(nullptr);
         if (assistant.turn) assistant.turn->cancel();
         assistant.turn.reset();
         assistant.speech.reset();
@@ -511,6 +535,19 @@ extern "C" void app_main(void) {
         const auto& strings = companion_strings(assistant_language);
         assistant.turn->set_language(assistant_language);
         assistant.turn->set_answer_copy(strings.action_question, strings.action_refused, strings.empty_answer);
+        assistant.turn->set_action_handler([](const aura::AssistantAction& action) { companion.propose_action(action); });
+        // A message by voice: Aoraton's own confirmation, for the room named.
+        assistant.turn->set_message_handler([](const aura::AssistantAction& action) {
+            const auto* room = aura::assistant_message_room(aoraton.snapshot().rooms, action.room);
+            if (room && aoraton.prepare_send(room->id, action.text)) {
+                ui.apply_aoraton(aoraton.snapshot());
+                ui.show(aura::UiView::AoratonConfirm);
+            } else {
+                ui.show_message(companion_strings(companion.language()).action_failed, true);
+            }
+        });
+        assistant.turn->set_listen_again(start_listening);
+        companion.set_speech_service(assistant.speech.get());
         // "Βάλε Σφαίρα", "σταμάτα το ραδιόφωνο": the radio does it, decided as
         // in the simulator (radio_request); the assistant is not asked.
         assistant.turn->set_local_request([](const std::string& question) {
@@ -652,7 +689,18 @@ extern "C" void app_main(void) {
                     companion.set_speech_available(
                         true, assistant.speech->tts_available(aura::interface_language_code(assistant_language)));
                 }
+                // Ήχος: spoken answers on or off, and the chosen voice.
+                assistant.turn->set_spoken_replies(companion.sound().spoken_replies);
+                assistant.turn->set_voice(aura::assistant_voice_id(companion.sound().assistant_voice));
+                assistant.turn->set_follow_up(companion.sound().continuous_conversation);
                 assistant.turn->poll();
+                // Barge-in: the microphone listens while the answer is spoken.
+                companion.set_barge_monitor(assistant.turn->speaking() && companion.sound().barge_in);
+                if (companion.take_barge_in()) {
+                    assistant.turn->stop_speaking();
+                    audio.stop();
+                    start_listening();
+                }
             }
             aura::WeatherFetchResult weather_result;
             if (weather_backend.poll(weather_result)) {

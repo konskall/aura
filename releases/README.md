@@ -12,19 +12,19 @@ to GitHub, never committed (`.gitignore`).
 ## Publishing a release
 
 1. Set `firmware/version.txt` to the new version, newer than the devices'
-   (for example `13.1.0`), and build the firmware.
+   (for example `1.0.1` or `1.1.0`), and build the firmware.
 2. Prepare the release with the private key, which lives outside the
    repository:
 
    ```
-   node scripts/update-signing.mjs release --version 13.1.0 --key <private key file> --notes "What changed"
+   node scripts/update-signing.mjs release --version 1.1.0 --key <private key file> --notes "What changed"
    ```
 
    It refuses an image that carries another version, and an existing
-   folder. It writes `releases/v13.1.0/aura_firmware.bin` and
-   `releases/v13.1.0/aura-manifest.json`.
+   folder. It writes `releases/v1.1.0/aura_firmware.bin` and
+   `releases/v1.1.0/aura-manifest.json`.
 3. At `https://github.com/konskall/aura/releases/new`, create the tag
-   `v13.1.0`, attach both files and publish it as a full release, not a
+   `v1.1.0`, attach both files and publish it as a full release, not a
    draft or a pre-release: devices read the newest full release.
 4. On the device: Settings > Software update > Check for updates.
 

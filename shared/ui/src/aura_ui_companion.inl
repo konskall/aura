@@ -1160,21 +1160,15 @@
         return c().phone_unavailable;
     }
 
-    int render_settings_companion(lv_obj_t* list, int y) {
-        settings_row(list, y, c().display_title, display_power.settings.always_on ? c().always_on : nullptr,
-                     ui::IconRole::Display, ui::tokens::indigo, UiView::DisplaySettings);
-        y += kRowPitch;
+    // Συνδέσεις, after Wi-Fi: the phone and File transfer. The wake word has no
+    // row until a trained «Αύρα» model exists (docs/TASKS.md).
+    int render_settings_connections(lv_obj_t* list, int y) {
         const auto summary = phone_summary();
         settings_row(list, y, c().phone_title, summary.c_str(), ui::IconRole::Smartphone, ui::tokens::mint,
                      UiView::PhoneLink);
         y += kRowPitch;
-        // The wake word needs a trained "Aura" model; until then the row explains why.
-        auto* wake = list_row(list, y, c().wake_word, capabilities.wake_word ? c().enabled : c().wake_word_unavailable,
-                              ui::IconRole::Ear, ui::tokens::lilac);
-        if (!capabilities.wake_word) lv_obj_set_style_opa(wake, LV_OPA_60, 0);
-          y += kRowPitch;
-          settings_row(list, y, f().entry, f().trust, ui::IconRole::Download, ui::tokens::mint, UiView::FileTransfer);
-          return y + kRowPitch;
+        settings_row(list, y, f().entry, f().trust, ui::IconRole::Download, ui::tokens::mint, UiView::FileTransfer);
+        return y + kRowPitch;
     }
 
     int render_phone_rows(lv_obj_t* list, int y) {
@@ -2425,7 +2419,8 @@
         std::snprintf(example, sizeof(example), c().clock_24h_example_format, time_text(14, 5).c_str());
         setting_switch_row(list, kRowPitch * 5, c().clock_24h_title, example, ui::IconRole::Clock,
                            ui::tokens::ice, settings.clock_24h, true, 5);
-        list_end(list, kRowPitch * 6);
+        reduced_motion_row(list, kRowPitch * 6);
+        list_end(list, kRowPitch * 7);
     }
 
     void render_update() {

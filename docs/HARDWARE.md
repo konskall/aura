@@ -1,5 +1,7 @@
 # Hardware target and verified board profile
 
+The first flash and the checks on the board: [FIRST_FLASH.md](FIRST_FLASH.md).
+
 Target: Waveshare ESP32-S3-Touch-AMOLED-2.16, battery-included option (nominal 3.7 V / 1000 mAh), with a FAT32 microSD card. The card (`/sdcard/aura`) holds photos, notes and voice notes, file transfers and the cache of Aoraton's encrypted attachments. Without one the device still runs: notes and alarms stay in memory and nothing is cached. Its free space is read a minute apart (`esp_vfs_fat_info`). `Διαμόρφωση κάρτας` runs `esp_vfs_fat_sdcard_format` and restarts; NVS (Wi-Fi, the keys, the Aoraton account) is kept.
 
 Verified from the current official Waveshare documentation on 2026-10-17:

@@ -20,7 +20,10 @@
 ## Pending gates
 
 - [x] The device's own assistant (the owner's choice, 2026-11-05; ADR 0009): Groq listens and answers, Azure speaks, keys sent from the PC into encrypted NVS (`scripts/send-device-keys.ps1`). Spoken questions and replies are wired; confirming the model's actions on the device is still to do.
-- [ ] Confirming the model's proposed actions on the device.
+- [x] Confirming the model's proposed actions on the device (2026-11-14): timers, alarms, reminders, notes, tasks, shopping, calendar, volume, brightness and mute ask first and run on confirmation, through the same executor as the simulator (`assistant_actions.cpp`).
+- [x] On the device (2026-11-14): voice notes are transcribed with Groq, a message by voice opens Aoraton's confirmation for the room named, and a spoken answer is followed by listening again (continuous conversation) or stopped by speaking over it (barge-in).
+- [ ] On the board: tune barge-in (no echo reference there) and check it never cuts an answer by itself.
+- [ ] The first flash (`docs/FIRST_FLASH.md`), its board checks, and the update signing key.
 - [ ] Build the AURA Link Android app and the device-side GATT server (`docs/phone/ANDROID_COMPANION.md`).
 - [ ] Train and license a Greek wake-word model for «Αύρα» (ESP-SR WakeNet, openWakeWord or microWakeWord); measure false accepts/rejects and battery cost before enabling the existing capability.
 - [x] Signed updates in code (2026-11-05): the manifest carries the owner's ECDSA P-256 signature (`scripts/update-signing.mjs`); production adds Secure Boot V2.

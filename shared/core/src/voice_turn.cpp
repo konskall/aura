@@ -1,6 +1,7 @@
 #include "aura/voice_turn.hpp"
 
 #include <chrono>
+#include <optional>
 #include <utility>
 
 namespace aura {
@@ -82,6 +83,7 @@ void VoiceAssistantTurn::cancel() {
     speech_future_ = {};
     stream_.reset();
     listening_ = false;
+    reply_playing_ = false;
 }
 
 bool VoiceAssistantTurn::asking() const noexcept {
@@ -131,19 +133,56 @@ bool VoiceAssistantTurn::poll() {
     if (finished(speech_future_)) {
         auto spoken = speech_future_.get();
         // The answer may have been closed while its voice was on the way.
-        if (spoken.ok && controller_.snapshot().state == AssistantState::Responding) audio_.play_pcm(spoken.clip);
+        if (spoken.ok && controller_.snapshot().state == AssistantState::Responding &&
+            audio_.play_pcm(spoken.clip)) {
+            reply_playing_ = true;
+            reply_started_ = false;
+            reply_since_ms_ = clock_();
+        }
+    }
+    if (reply_playing_) {
+        const auto state = audio_.diagnostics().state;
+        const bool sounding = state == AudioState::Playing || state == AudioState::Buffering ||
+                              state == AudioState::Paused;
+        constexpr std::uint64_t kStartWithinMs = 3000;
+        if (sounding) {
+            reply_started_ = true;
+        } else if (reply_started_ || clock_() - reply_since_ms_ > kStartWithinMs) {
+            reply_playing_ = false;
+            // Heard to its end, with nothing waiting for a confirmation.
+            if (reply_started_ && follow_up_ && listen_again_ &&
+                controller_.snapshot().state == AssistantState::Responding) {
+                listen_again_();
+                changed = true;
+            }
+        }
     }
     return changed;
 }
 
 void VoiceAssistantTurn::deliver(const std::string& raw) {
     auto parsed = parse_assistant_answer(raw);
-    parsed.action_rejected = parsed.action_rejected || parsed.action.has_value();
-    parsed.action.reset();
+    // A message goes to the message handler once the answer is shown; any
+    // action without its handler is refused, and the answer says so.
+    std::optional<AssistantAction> message;
+    if (parsed.action && parsed.action->type == AssistantActionType::Message && message_handler_) {
+        message = std::move(parsed.action);
+        parsed.action.reset();
+    }
+    if (parsed.action && (!action_handler_ || parsed.action->type == AssistantActionType::Message)) {
+        parsed.action_rejected = true;
+        parsed.action.reset();
+    }
     std::string text = answer_display_text(parsed, action_question_, action_refused_);
     if (text.empty()) text = empty_answer_;
     controller_.dispatch({EventType::FinalResult, text, 0});
     memory_.record(question_, text, clock_());
+    if (message) {
+        message_handler_(*message);
+    } else if (parsed.action) {
+        action_handler_(*parsed.action);
+        controller_.dispatch({EventType::RequireConfirmation, assistant_action_name(parsed.action->type), 0});
+    }
     const char* language = interface_language_code(language_);
     if (spoken_ && speech_.tts_available(language)) speech_future_ = speech_.synthesize(text, language, voice_);
 }

@@ -377,6 +377,15 @@ void check_appearance_registry() {
                ui::metrics_for(Appearance::Halo).platter_radius == 28 &&
                ui::metrics_for(Appearance::Halo).hero_center_y == 246,
            "Halo metrics describe today's components");
+    // The voice screens' presence sits in the middle of the free band between
+    // the state caption (it ends near y = 100) and the action row (y = 380),
+    // so Μάρμαρο's ring clears the buttons (the owner's report, 2026-11-14).
+    expect(ui::metrics_for(Appearance::Marble).stage_center_y == 240,
+           "Μάρμαρο centres its pearl between the caption and the buttons");
+    for (const auto appearance : aura::kAppearances) {
+        const int stage = ui::metrics_for(appearance).stage_center_y;
+        expect(stage >= 230 && stage <= 250, "every look keeps its voice presence near the free band's centre");
+    }
 }
 
 // A headless 480 x 480 LVGL display for the checks that create objects.

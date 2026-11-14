@@ -68,6 +68,7 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 - **Always-on clock and power saving.** The screen dims, then shows an always-on clock, optionally over a dimmed photo you choose. Dimming is always relative to your chosen brightness.
 - **Gestures.** Raise to wake, and flip face down to mute.
 - **Sound settings.** Volume, mute, message chime, spoken answers and continuous conversation. A second tap on a read-aloud button stops the reading.
+- **Settings in four groups.** Συνδέσεις (Wi-Fi, phone, File transfer), Οθόνη και ήχος (Οθόνη with Λιγότερη κίνηση, Εμφάνιση, Ήχος), Βοηθός (the assistant, weather) and Συσκευή (language, status, system). On the device the assistant's row names who answers and who speaks (Groq · φωνή Azure).
 - **Device status.** Settings → Κατάσταση συσκευής shows the battery: percentage, charging stage, battery, USB and system voltage, the power chip's temperature and the rated 1000 mAh. The chip measures no health or cycles. It also shows the microSD card's free space, with a format that asks twice, and a switch for the status bar's battery percentage. Settings → Οθόνη switches between 24-hour time and 12-hour time (2:05 μ.μ.).
 - **Local file transfer.** Settings → Μεταφορά αρχείων shows a QR code and a six-digit code. From a phone or PC on the same Wi-Fi you send photos (prepared for the 480 × 480 screen in the browser) or other files, and you can list or delete them. Access lasts ten minutes and ends when you stop it. See [docs/FILE_TRANSFER.md](docs/FILE_TRANSFER.md).
 - **System.** Signed updates (OTA with rollback), diagnostics, credits, restart, power off, and a factory reset that erases settings and data but keeps your photos and files.
@@ -224,7 +225,9 @@ Single test programs can be built and run from `build/native`, for example `ninj
 - ES7210 microphones and ES8311 codec;
 - a microSD card (FAT32) for photos, notes, file transfers and Aoraton's encrypted files.
 
-See [docs/HARDWARE.md](docs/HARDWARE.md).
+See [docs/HARDWARE.md](docs/HARDWARE.md). The first flash, and what to check on the board, is in [docs/FIRST_FLASH.md](docs/FIRST_FLASH.md). Never use the production build for it: it burns secure boot and flash encryption into the chip for good.
+
+**Version.** The first image for the board is **1.0.0** (`firmware/version.txt`); updates count up from there.
 
 ```powershell
 . C:\path\to\esp-idf-v5.5.5\export.ps1     # activate ESP-IDF 5.5.5
@@ -300,6 +303,7 @@ Details: [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md) and the [Aoraton s
   - Unmeasured: heap and stack peaks, frame rate, power use and touch accuracy.
   - Halo's Σύναψη spends at most a third of the time drawing and switches to a lighter frame when frames are slow, but its cost has only been measured on a PC.
   - Only run in the simulator so far: photos on the card, transfers from a phone, and the device's assistant.
+  - On the device, barge-in (speaking over an answer) has no echo reference: it relies on the gate's calibration against the speaker and must be tuned on the board. Ήχος can turn it off.
   - Automatic light sleep waits for a power measurement on the board.
 - **There is no wake word.** No trained and measured Greek "Αύρα" model exists yet, so listening starts with a tap.
 - **Echo cancellation is untuned.** It works in tests, but still needs tuning in a real room and on the device's microphones.
@@ -315,6 +319,7 @@ Details: [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md) and the [Aoraton s
 | Decisions | [docs/ADR](docs/ADR) |
 | Verification ledger | [docs/VERIFICATION.md](docs/VERIFICATION.md) |
 | Hardware | [docs/HARDWARE.md](docs/HARDWARE.md) |
+| The first flash | [docs/FIRST_FLASH.md](docs/FIRST_FLASH.md) |
 | Security and privacy | [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md) |
 | The device's assistant | [ADR 0009](docs/ADR/0009-device-direct-cloud-assistant.md) |
 | aoraton.com on the device | [ADR 0010](docs/ADR/0010-device-aoraton-account.md) |

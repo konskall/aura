@@ -1,5 +1,7 @@
 #include "aura/companion_runtime.hpp"
 
+#include "aura/assistant_actions.hpp"
+
 #include "aura/briefing.hpp"
 #include "aura/companion_strings.hpp"
 #include "aura/text_util.hpp"
@@ -638,55 +640,10 @@ void CompanionRuntime::deliver_reply(const std::string& raw) {
 }
 
 bool CompanionRuntime::execute(const AssistantAction& action) {
-    switch (action.type) {
-        case AssistantActionType::Timer:
-            return clock_.start_timer(static_cast<std::uint32_t>(action.seconds), action.label) == ClockResult::Ok;
-        case AssistantActionType::Alarm:
-            return clock_.add_alarm(action.hour, action.minute, action.daily, action.label) == ClockResult::Ok;
-        case AssistantActionType::Reminder:
-            if (!clock_.snapshot().clock_valid) return false;
-            return clock_.add_reminder_at(reminder_due_minute(action, clock_.snapshot().now_minute), action.text) ==
-                   ClockResult::Ok;
-        case AssistantActionType::Note:
-            return notes_.add_text(action.text, now_minute()) == NoteResult::Ok;
-        case AssistantActionType::Task:
-            return organizer_.add_task(action.text, now_minute()) == OrganizerResult::Ok;
-        case AssistantActionType::Shopping:
-            return organizer_.add_shopping(action.text) == OrganizerResult::Ok;
-        case AssistantActionType::CalendarEvent:
-            organizer_.prune_events_before(now_minute());
-            return organizer_.add_event(action.text, action.start_minute, action.duration_minutes) == OrganizerResult::Ok;
-        case AssistantActionType::Volume: {
-            // "Louder" and "quieter" step from the volume heard now; louder
-            // also ends a mute, as on a phone.
-            const int current = static_cast<int>(std::lround(ctx_.audio->diagnostics().volume * 100.0F));
-            const int target = action.relative ? std::clamp(current + action.value, 0, 100) : action.value;
-            if (target < 0 || target > 100) return false;
-            sound_.volume = static_cast<float>(target) / 100.0F;
-            ctx_.audio->set_volume(sound_.volume);
-            if (action.relative && action.value > 0 && ctx_.audio->diagnostics().muted) {
-                sound_.muted = false;
-                ctx_.audio->set_muted(false);
-            }
-            return true;
-        }
-        case AssistantActionType::Brightness: {
-            if (action.value < 5 || action.value > 100) return false;
-            auto settings = display_.snapshot().settings;
-            settings.active_brightness_percent = action.value;
-            display_.set_settings(settings);
-            return true;
-        }
-        case AssistantActionType::Mute:
-            if (action.value != 0 && action.value != 1) return false;
-            sound_.muted = action.value != 0;
-            ctx_.audio->set_muted(sound_.muted);
-            return true;
-        case AssistantActionType::Message:
-            return route_message(action);
-        case AssistantActionType::None: break;
-    }
-    return false;
+    // A message goes to an Aoraton room; everything else is the shared
+    // executor's, exactly as on the device.
+    if (action.type == AssistantActionType::Message) return route_message(action);
+    return execute_assistant_action(action, {clock_, notes_, organizer_, display_, *ctx_.audio, sound_, now_minute()});
 }
 
 // A soft chime for a notification that was not there before: Aoraton
@@ -715,17 +672,7 @@ void CompanionRuntime::chime_for_new_messages(std::uint64_t now, AudioState audi
 
 // Only a room the owner clearly named (or the only room) is used.
 bool CompanionRuntime::route_message(const AssistantAction& action) {
-    const auto& rooms = ctx_.aoraton->snapshot().rooms;
-    const AoratonRoom* target = nullptr;
-    const auto wanted = fold_text(action.room);
-    for (const auto& room : rooms) {
-        const auto name = fold_text(room.display_name);
-        if (!wanted.empty() && (name == wanted || name.find(wanted) != std::string::npos)) {
-            target = &room;
-            break;
-        }
-    }
-    if (!target && rooms.size() == 1) target = &rooms.front();
+    const auto* target = assistant_message_room(ctx_.aoraton->snapshot().rooms, action.room);
     if (!target || !ctx_.aoraton->prepare_send(target->id, action.text)) return false;
     ctx_.ui->show(UiView::AoratonConfirm);
     return true;

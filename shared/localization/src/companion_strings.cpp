@@ -262,6 +262,13 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.storage_format_failed = "Η διαμόρφωση απέτυχε";
         s.size_gb_format = "%d,%d GB";
         s.size_mb_format = "%d MB";
+        s.settings_group_connections = "Συνδέσεις";
+        s.settings_group_display = "Οθόνη και ήχος";
+        s.settings_group_assistant = "Βοηθός";
+        s.settings_group_device = "Συσκευή";
+        s.assistant_voice_format = "%s · φωνή %s";
+        s.assistant_silent_format = "%s · χωρίς φωνή";
+        s.assistant_needs_keys = "Χρειάζεται τα κλειδιά από το PC";
         s.appearance_title = "Εμφάνιση";
         s.appearance_halo = "Άλως";
         s.appearance_marble = "Μάρμαρο";
@@ -725,6 +732,13 @@ const CompanionStrings& companion_en_us() noexcept {
         s.storage_format_failed = "Formatting failed";
         s.size_gb_format = "%d.%d GB";
         s.size_mb_format = "%d MB";
+        s.settings_group_connections = "Connections";
+        s.settings_group_display = "Display and sound";
+        s.settings_group_assistant = "Assistant";
+        s.settings_group_device = "Device";
+        s.assistant_voice_format = "%s · voice %s";
+        s.assistant_silent_format = "%s · no voice";
+        s.assistant_needs_keys = "Needs the keys from the PC";
         s.appearance_title = "Appearance";
         s.appearance_halo = "Halo";
         s.appearance_marble = "Marble";

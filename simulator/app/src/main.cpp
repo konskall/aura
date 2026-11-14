@@ -2535,28 +2535,41 @@ int main(int argc, char** argv) {
         record("nav.swipe_back", "clock-screen", clock_opened && ui.view() == aura::UiView::Launcher,
                std::to_string(static_cast<int>(ui.view())));
 
-        // Settings is a scrolling list: rows are 88 px high on a 96 px pitch
-        // starting at y=96 (Wi-Fi, language, provider, motion, weather, sound, status, system).
-        auto settings_row_y = [](int index, int scroll) { return 96 + index * 96 + 44 - scroll; };
+        // Settings is a scrolling list from y=96 in four groups (2026-11-14): a
+        // 40 px caption over each group, 8 px between groups, then rows 88 px
+        // high on a 96 px pitch. The rows' tops in the list:
+        constexpr int kSetWifi = 40, kSetPhone = 136, kSetDisplay = 376, kSetAppearance = 472,
+                      kSetSound = 568, kSetProvider = 712, kSetWeather = 808, kSetLanguage = 952,
+                      kSetStatus = 1048, kSetSystem = 1144;
+        // A row's centre on the screen with the list scrolled by `scroll`.
+        auto settings_row_y = [](int top, int scroll) { return 96 + top + 44 - scroll; };
+        // Οθόνη → Λιγότερη κίνηση, its seventh row, with the list at its end.
+        constexpr int kMotionScroll = 288;
+        // A plain list (System): rows from its top on a 96 px pitch.
+        auto list_row_y = [](int index, int scroll) { return 96 + index * 96 + 44 - scroll; };
+        const int motion_row_y = 96 + 6 * 96 + 44 - kMotionScroll;
         auto scroll_view_to = [&](int y) {
             lv_obj_update_layout(ui.root());
             if (auto* scroller = find_scrollable(ui.root())) lv_obj_scroll_to_y(scroller, y, LV_ANIM_OFF);
             pump(3);
         };
         reset_to(aura::UiView::Settings);
+        scroll_view_to(520);
         const int rapid_provider_before = interaction_counts.provider;
-        rapid_double_tap(220, settings_row_y(3, 0));
+        rapid_double_tap(220, settings_row_y(kSetProvider, 520));
         record("settings.provider", "rapid-double-tap",
                interaction_counts.provider == rapid_provider_before + 1,
                std::to_string(interaction_counts.provider - rapid_provider_before));
 
         reset_to(aura::UiView::Settings);
-        tap(220, settings_row_y(1, 0));
+        scroll_view_to(760);
+        tap(220, settings_row_y(kSetLanguage, 760));
         const bool language_page = ui.view() == aura::UiView::LanguageSettings;
         tap(220, 236);
         const bool english_selected = ui.language() == aura::InterfaceLanguage::English;
         tap(48, 48);
-        tap(220, settings_row_y(1, 0));
+        scroll_view_to(760);
+        tap(220, settings_row_y(kSetLanguage, 760));
         tap(220, 140);
         const bool greek_restored = ui.language() == aura::InterfaceLanguage::Greek;
         tap(48, 48);
@@ -2625,8 +2638,9 @@ int main(int argc, char** argv) {
         record("nav.home", "back-long-press", ui.view() == aura::UiView::Home,
                std::to_string(static_cast<int>(ui.view())));
 
-        for (const auto& point : row_points(settings_row_y(3, 0))) {
+        for (const auto& point : row_points(settings_row_y(kSetProvider, 520))) {
             reset_to(aura::UiView::Settings);
+            scroll_view_to(520);
             const int provider_before = interaction_counts.provider;
             const bool live_before = live_provider;
             tap(point.x, point.y);
@@ -2634,9 +2648,9 @@ int main(int argc, char** argv) {
                    interaction_counts.provider == provider_before + 1 && live_provider != live_before,
                    live_provider ? "codex" : "mock");
         }
-        for (const auto& point : row_points(settings_row_y(4, 96))) {
-            reset_to(aura::UiView::Settings);
-            scroll_view_to(96);
+        for (const auto& point : row_points(motion_row_y)) {
+            reset_to(aura::UiView::DisplaySettings);
+            scroll_view_to(kMotionScroll);
             const bool reduced_before = ui.reduced_motion();
             tap(point.x, point.y);
             record("settings.motion", point.name, ui.reduced_motion() != reduced_before,
@@ -2646,7 +2660,8 @@ int main(int argc, char** argv) {
             // Every check starts from Home: after reset_to, Back never reaches a
             // screen left over from an earlier check.
             reset_to(aura::UiView::Settings);
-            tap(240, settings_row_y(1, 0));
+            scroll_view_to(760);
+            tap(240, settings_row_y(kSetLanguage, 760));
             const bool language_opened = ui.view() == aura::UiView::LanguageSettings;
             reset_to(aura::UiView::Clock);
             tap(48, 48);
@@ -2654,14 +2669,14 @@ int main(int argc, char** argv) {
                    std::to_string(static_cast<int>(ui.view())));
         }
         // Lower rows are reached by scrolling the list while preserving 80 px targets.
-        const struct { const char* action; int index; int scroll; aura::UiView expected; } setting_routes[] = {
-            {"settings.weather", 5, 296, aura::UiView::WeatherSettings},
-            {"settings.audio", 6, 392, aura::UiView::Audio},
-            {"settings.status", 7, 392, aura::UiView::Battery},
-            {"settings.system", 8, 488, aura::UiView::System},
+        const struct { const char* action; int top; int scroll; aura::UiView expected; } setting_routes[] = {
+            {"settings.weather", kSetWeather, 600, aura::UiView::WeatherSettings},
+            {"settings.audio", kSetSound, 400, aura::UiView::Audio},
+            {"settings.status", kSetStatus, 760, aura::UiView::Battery},
+            {"settings.system", kSetSystem, 864, aura::UiView::System},
         };
         for (const auto& route : setting_routes) {
-            for (const auto& point : row_points(settings_row_y(route.index, route.scroll))) {
+            for (const auto& point : row_points(settings_row_y(route.top, route.scroll))) {
                 reset_to(aura::UiView::Settings);
                 if (route.scroll > 0) scroll_view_to(route.scroll);
                 tap(point.x, point.y);
@@ -2682,7 +2697,7 @@ int main(int argc, char** argv) {
         tap(220, 136);
         record("weather.settings_location", "location-row", ui.view() == aura::UiView::WeatherLocation,
                std::to_string(static_cast<int>(ui.view())));
-        for (const auto& point : row_points(settings_row_y(0, 0))) {
+        for (const auto& point : row_points(settings_row_y(kSetWifi, 0))) {
             reset_to(aura::UiView::Settings);
             const int wifi_open_before = interaction_counts.wifi_open;
             tap(point.x, point.y);
@@ -2750,12 +2765,12 @@ int main(int argc, char** argv) {
         apply();
         ui.apply_wifi(wifi_model.snapshot());
 
-        reset_to(aura::UiView::Settings);
+        reset_to(aura::UiView::DisplaySettings);
         const bool persisted_motion_before = ui.reduced_motion();
-        scroll_view_to(96);
-        tap(184, settings_row_y(4, 96));
+        scroll_view_to(kMotionScroll);
+        tap(184, motion_row_y);
         ui.show(aura::UiView::Home);
-        ui.show(aura::UiView::Settings);
+        ui.show(aura::UiView::DisplaySettings);
         pump(3);
         record("settings.motion_persistence", "leave-reopen",
                ui.reduced_motion() != persisted_motion_before,
@@ -2868,8 +2883,8 @@ int main(int argc, char** argv) {
                std::to_string(static_cast<int>(ui.view())));
 
         reset_to(aura::UiView::Settings);
-        scroll_view_to(296);
-        tap(184, settings_row_y(5, 296));
+        scroll_view_to(600);
+        tap(184, settings_row_y(kSetWeather, 600));
         tap(48, 48);
         record("weather_settings.back", "header-button",
                ui.view() == aura::UiView::Settings,
@@ -3037,15 +3052,15 @@ int main(int argc, char** argv) {
             for (int round = 0; round < 40 && ui.view() != aura::UiView::Home; ++round) pump(9);
         };
         reset_to(aura::UiView::System);
-        tap(220, settings_row_y(0, 0));
+        tap(220, list_row_y(0, 0));
         record("system.update", "row-center", ui.view() == aura::UiView::Update,
                std::to_string(static_cast<int>(ui.view())));
         reset_to(aura::UiView::System);
-        tap(220, settings_row_y(1, 0));
+        tap(220, list_row_y(1, 0));
         record("system.diagnostics", "row-center", ui.view() == aura::UiView::Diagnostics,
                std::to_string(static_cast<int>(ui.view())));
         reset_to(aura::UiView::System);
-        tap(220, settings_row_y(2, 0));
+        tap(220, list_row_y(2, 0));
         const bool credits_opened = ui.view() == aura::UiView::Credits;
         std::function<bool(lv_obj_t*, const char*)> credits_shows = [&](lv_obj_t* object,
                                                                         const char* text) -> bool {
@@ -3223,9 +3238,9 @@ int main(int argc, char** argv) {
                ui.view() == aura::UiView::Home, std::to_string(static_cast<int>(ui.view())));
         // The orbit check below needs full motion; earlier checks may leave reduced motion on.
         if (ui.reduced_motion()) {
-            reset_to(aura::UiView::Settings);
-            scroll_view_to(96);
-            tap(240, settings_row_y(4, 96));
+            reset_to(aura::UiView::DisplaySettings);
+            scroll_view_to(kMotionScroll);
+            tap(240, motion_row_y);
         }
         reset_to(aura::UiView::System);
         scroll_view_to(216);
@@ -3276,15 +3291,15 @@ int main(int argc, char** argv) {
 
         // Back returns to a list where it was left.
         reset_to(aura::UiView::Settings);
-        scroll_view_to(488);
-        tap(220, settings_row_y(8, 488));
-        const bool opened_system = ui.view() == aura::UiView::System;
+        scroll_view_to(760);
+        tap(220, settings_row_y(kSetStatus, 760));
+        const bool opened_status = ui.view() == aura::UiView::Battery;
         tap(56, 56);
         lv_obj_update_layout(ui.root());
         auto* settings_list = find_scrollable(ui.root());
         const int kept = settings_list ? static_cast<int>(lv_obj_get_scroll_y(settings_list)) : -1;
         record("nav.back_keeps_scroll", "header-back",
-               opened_system && ui.view() == aura::UiView::Settings && kept == 488, std::to_string(kept));
+               opened_status && ui.view() == aura::UiView::Settings && kept == 760, std::to_string(kept));
 
         controller.dispatch({aura::EventType::Reset});
         controller.dispatch({aura::EventType::TurnStarted, text().capture_speaking_prompt});
@@ -4488,17 +4503,23 @@ int main(int argc, char** argv) {
                checking && asked && companion.ota().snapshot().state == aura::UpdateState::Downloading, view_text());
 
         reset_to(aura::UiView::Settings);
-        scroll_view_to(776);
-        tap(220, settings_row_y(9, 776));
+        scroll_view_to(300);
+        tap(220, settings_row_y(kSetDisplay, 300));
         record("settings.display", "row", ui.view() == aura::UiView::DisplaySettings, view_text());
         reset_to(aura::UiView::Settings);
-        scroll_view_to(776);
-        tap(220, settings_row_y(10, 776));
+        tap(220, settings_row_y(kSetPhone, 0));
         record("settings.phone", "row", ui.view() == aura::UiView::PhoneLink, view_text());
+        // No wake-word row until a trained «Αύρα» model exists; the four group
+        // captions are there.
         reset_to(aura::UiView::Settings);
-        scroll_view_to(776);
-        tap(220, settings_row_y(11, 776));
-        record("settings.wake_word", "info-row", ui.view() == aura::UiView::Settings, view_text());
+        const auto& settings_copy = aura::l10n::companion_el_gr();
+        record("settings.wake_word", "no-row",
+               find_text(ui.root(), settings_copy.wake_word) == nullptr &&
+                   find_text(ui.root(), settings_copy.settings_group_connections) != nullptr &&
+                   find_text(ui.root(), settings_copy.settings_group_display) != nullptr &&
+                   find_text(ui.root(), settings_copy.settings_group_assistant) != nullptr &&
+                   find_text(ui.root(), settings_copy.settings_group_device) != nullptr,
+               view_text());
 
         {
             // Settings > Appearance: four looks, chosen on the device
@@ -4514,7 +4535,8 @@ int main(int argc, char** argv) {
             reset_to(aura::UiView::Settings);
             const bool row_named = find_text(ui.root(), el.appearance_title) != nullptr &&
                                    find_text(ui.root(), el.appearance_halo) != nullptr;
-            tap(220, settings_row_y(2, 0));
+            scroll_view_to(300);
+            tap(220, settings_row_y(kSetAppearance, 300));
             record("appearance.settings_row", "row",
                    row_named && ui.view() == aura::UiView::AppearanceSettings, view_text());
 

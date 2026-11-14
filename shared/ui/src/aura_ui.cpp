@@ -1650,9 +1650,10 @@ struct AuraUi::Impl {
 
     // The selected appearance owns the complete presence. Halo's Synapse
     // includes its reactor, paths and resonance inside one bounded frame.
-    // The presence's centre: the same on Home and in every assistant state, so
-    // starting to talk never moves it (each look sets its own).
+    // The presence's centre on Home, and on the voice screens (each look sets
+    // its own; only Μάρμαρο's differ, its pearl rising when it listens).
     int hero_y() const { return ui::active_metrics().hero_center_y; }
+    int stage_y() const { return ui::active_metrics().stage_center_y; }
 
     void create_presence(ui::MercuryState state, std::uint32_t accent) {
         (void)accent;
@@ -1661,7 +1662,7 @@ struct AuraUi::Impl {
         // A capture is a still picture: the presence shows its state, not a blend.
         presence->set_reduced_motion(reduced_motion || capture_mode);
         hero_image = presence->attach(content, ui::tokens::SYNAPSE_RECT.x + ui::tokens::SYNAPSE_RECT.width / 2,
-                                     hero_y());
+                                     state == ui::MercuryState::Idle ? hero_y() : stage_y());
     }
 
     // State title and caption above the presence.
@@ -1842,7 +1843,8 @@ struct AuraUi::Impl {
     void render_speaking() {
         create_presence(ui::MercuryState::Speaking, ui::tokens::magenta);
         const bool paused = audio.state == AudioState::Paused;
-        stage_title(v().speaking_title, paused ? t().pause : v().speaking_subtitle,
+        // Only a pause needs a caption; the title says it answers.
+        stage_title(v().speaking_title, paused ? t().pause : nullptr,
                     paused ? ui::tokens::amber : ui::tokens::text_secondary);
         round_button(content, 80, 372, 88, paused ? ui::IconRole::Play : ui::IconRole::Pause,
                      ui::tokens::blue, audio_pause_event);
@@ -3257,6 +3259,14 @@ struct AuraUi::Impl {
         make_header(t().settings_title);
         auto* list = make_list();
         int y = 0;
+        // Four groups, what is changed most often first (the owner's choice,
+        // 2026-11-14): Συνδέσεις, Οθόνη και ήχος, Βοηθός, Συσκευή.
+        const auto group = [&](const char* title) {
+            if (y > 0) y += 8;
+            line(list, title, kGutter + 4, y, kWidth - 8, ui::font_caption(), ui::tokens::text_secondary);
+            y += 40;
+        };
+        group(c().settings_group_connections);
         const int bars = wifi.link == WifiLinkState::Connected ? wifi_signal_bars(wifi.connected_rssi_dbm) : 0;
         const auto summary = wifi_summary();
         auto* wifi_row = list_row(list, y, t().wifi_title, summary.c_str(),
@@ -3266,19 +3276,35 @@ struct AuraUi::Impl {
         lv_obj_set_clickable(wifi_row, true);
         lv_obj_add_event_cb(wifi_row, wifi_open_event, LV_EVENT_CLICKED, this);
         y += kRowPitch;
+        y = render_settings_connections(list, y);
 
-        settings_row(list, y, t().language,
-            interface_language == InterfaceLanguage::English ? c().language_english : c().language_greek,
-            ui::IconRole::Languages, ui::tokens::ice, UiView::LanguageSettings);
+        group(c().settings_group_display);
+        settings_row(list, y, c().display_title, display_power.settings.always_on ? c().always_on : nullptr,
+                     ui::IconRole::Display, ui::tokens::indigo, UiView::DisplaySettings);
         y += kRowPitch;
-
         settings_row(list, y, c().appearance_title, appearance_name(appearance), ui::IconRole::Palette,
                      ui::tokens::magenta, UiView::AppearanceSettings);
         y += kRowPitch;
+        settings_row(list, y, v().sound, nullptr, ui::IconRole::Audio, ui::tokens::pink, UiView::Audio);
+        y += kRowPitch;
 
+        group(c().settings_group_assistant);
+        // The simulator switches between DEMO and the live provider here; the
+        // device's assistant is its own (Groq answers, Azure speaks).
         const bool provider_available = static_cast<bool>(callbacks.on_provider_changed);
+        std::string device_assistant = c().assistant_needs_keys;
+        if (!extras.assistant_provider.empty()) {
+            char text[96];
+            if (extras.speech_output_provider.empty()) {
+                std::snprintf(text, sizeof(text), c().assistant_silent_format, extras.assistant_provider.c_str());
+            } else {
+                std::snprintf(text, sizeof(text), c().assistant_voice_format, extras.assistant_provider.c_str(),
+                              extras.speech_output_provider.c_str());
+            }
+            device_assistant = text;
+        }
         auto* provider_row = list_row(list, y, t().provider,
-            !provider_available ? t().provider_unavailable : (live_provider ? t().live_codex : t().demo_provider),
+            provider_available ? (live_provider ? t().live_codex : t().demo_provider) : device_assistant.c_str(),
             ui::IconRole::Sparkles, ui::tokens::lilac, kRowHeight, provider_available ? 228 : 0);
         if (provider_available) {
             lv_obj_set_clickable(provider_row, true);
@@ -3289,6 +3315,28 @@ struct AuraUi::Impl {
         }
         y += kRowPitch;
 
+        char weather_summary[192];
+        std::snprintf(weather_summary, sizeof(weather_summary), c().weather_settings_summary_format,
+                      weather.has_saved_location ? weather.saved_location.name.c_str() : v().weather_choose_city,
+                      weather_refresh_text(weather.refresh_interval));
+        settings_row(list, y, v().weather, weather_summary,
+            ui::IconRole::Weather, ui::tokens::amber, UiView::WeatherSettings);
+        y += kRowPitch;
+
+        group(c().settings_group_device);
+        settings_row(list, y, t().language,
+            interface_language == InterfaceLanguage::English ? c().language_english : c().language_greek,
+            ui::IconRole::Languages, ui::tokens::ice, UiView::LanguageSettings);
+        y += kRowPitch;
+        settings_row(list, y, v().status_title, nullptr, ui::IconRole::Battery, ui::tokens::mint, UiView::Battery);
+        y += kRowPitch;
+        settings_row(list, y, v().system, nullptr, ui::IconRole::Cpu, ui::tokens::blue, UiView::System);
+        y += kRowPitch;
+        list_end(list, y, 8);
+    }
+
+    // Λιγότερη κίνηση, a switch in Οθόνη: the presence and the transitions rest.
+    void reduced_motion_row(lv_obj_t* list, int y) {
         auto* motion_row = list_row(list, y, v().reduced_motion, v().reduced_motion_detail,
                                     ui::IconRole::Visibility, ui::tokens::indigo, kRowHeight, 252);
         lv_obj_set_clickable(motion_row, true);
@@ -3301,23 +3349,6 @@ struct AuraUi::Impl {
         lv_obj_set_style_bg_color(motion_switch, ui::color(ui::tokens::text), LV_PART_KNOB);
         lv_obj_set_clickable(motion_switch, false);
         if (reduced_motion) lv_obj_add_state(motion_switch, LV_STATE_CHECKED);
-        y += kRowPitch;
-
-        char weather_summary[192];
-        std::snprintf(weather_summary, sizeof(weather_summary), c().weather_settings_summary_format,
-                      weather.has_saved_location ? weather.saved_location.name.c_str() : v().weather_choose_city,
-                      weather_refresh_text(weather.refresh_interval));
-        settings_row(list, y, v().weather, weather_summary,
-            ui::IconRole::Weather, ui::tokens::amber, UiView::WeatherSettings);
-        y += kRowPitch;
-        settings_row(list, y, v().sound, nullptr, ui::IconRole::Audio, ui::tokens::pink, UiView::Audio);
-        y += kRowPitch;
-        settings_row(list, y, v().status_title, nullptr, ui::IconRole::Battery, ui::tokens::mint, UiView::Battery);
-        y += kRowPitch;
-        settings_row(list, y, v().system, nullptr, ui::IconRole::Cpu, ui::tokens::blue, UiView::System);
-        y += kRowPitch;
-        y = render_settings_companion(list, y);
-        list_end(list, y, 8);
     }
 
     void render_language_settings() {

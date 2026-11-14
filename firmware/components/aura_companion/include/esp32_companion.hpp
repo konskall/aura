@@ -3,6 +3,7 @@
 #include "esp32_file_transfer.hpp"
 
 #include "aura/app_layout.hpp"
+#include "aura/assistant_companion.hpp"
 #include "aura/aura_ui.hpp"
 #include "aura/clock_services.hpp"
 #include "aura/cloud_keys.hpp"
@@ -12,6 +13,7 @@
 #include "aura/organizer.hpp"
 #include "aura/ota_update.hpp"
 #include "aura/phone_link.hpp"
+#include "aura/provider.hpp"
 #include "aura/sounds.hpp"
 #include "aura/voice.hpp"
 #include "esp32_microphone.hpp"
@@ -23,6 +25,7 @@
 #include <ctime>
 #include <atomic>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -72,6 +75,20 @@ public:
     void set_message_sink(std::function<void(std::vector<std::uint8_t>)> sink) { message_sink_ = std::move(sink); }
     // Speech recognition and spoken replies, once the cloud keys are there.
     void set_speech_available(bool recognition, bool output);
+    // An action the assistant proposed, kept for the confirmation screen.
+    void propose_action(const AssistantAction& action);
+    // The owner confirmed it: true when it was done. Declined: dropped.
+    bool confirm_action();
+    void decline_action();
+    // The assistant's speech service (null without the cloud keys): voice
+    // notes are transcribed with it, as in the simulator.
+    void set_speech_service(ISpeechService* speech) noexcept { speech_ = speech; }
+    // Barge-in: while a spoken answer plays the microphone listens for the
+    // owner speaking over it. take_barge_in() is true once, when they did.
+    void set_barge_monitor(bool on);
+    bool take_barge_in() noexcept;
+    // The Sound settings the voice turn follows (spoken answers, the voice).
+    const SoundSettings& sound() const noexcept { return sound_; }
     // The microphone records (a note, a question, a voice message): the radio
     // is silenced meanwhile, so its sound does not end up in the recording.
     bool microphone_active() const noexcept { return voice_.state == VoiceCaptureState::Recording; }
@@ -115,6 +132,7 @@ private:
         std::uint32_t duration_ms{0};
         std::int64_t minute{0};
         bool success{false};
+        bool transcribe{false};  // a voice note heard speaking: keep its WAV for the transcript
     };
     static void storage_task_entry(void* context);
     void storage_task();
@@ -137,6 +155,15 @@ private:
     bool recording_message_{false};
     std::function<void(std::vector<std::uint8_t>)> message_sink_;
     VoiceSnapshot voice_{};
+    // What the UI shows beside the assistant's state: the proposed action and
+    // the providers (Κατάσταση συσκευής).
+    AssistantExtras extras_{};
+    ISpeechService* speech_{nullptr};
+    NoteTranscriptions note_transcriptions_;
+    BargeInGate barge_gate_;
+    bool barge_monitoring_{false};
+    bool barge_heard_{false};
+    bool extras_dirty_{true};
     CompanionCapabilities capabilities_{};
     bool capabilities_dirty_{true};
     Esp32Motion motion_;

@@ -10,6 +10,7 @@ idf_component_register(
         "${AURA_ROOT}/shared/third_party/tjpgd/tjpgd.c"
         "${AURA_ROOT}/shared/core/src/appearance.cpp"
         "${AURA_ROOT}/shared/core/src/aoraton.cpp"
+        "${AURA_ROOT}/shared/core/src/assistant_actions.cpp"
         "${AURA_ROOT}/shared/core/src/assistant_companion.cpp"
         "${AURA_ROOT}/shared/core/src/briefing.cpp"
         "${AURA_ROOT}/shared/core/src/clock_services.cpp"

@@ -274,6 +274,15 @@ struct CompanionStrings {
     const char* storage_format_failed;
     const char* size_gb_format;
     const char* size_mb_format;
+    // Ρυθμίσεις, grouped (2026-11-14).
+    const char* settings_group_connections;
+    const char* settings_group_display;
+    const char* settings_group_assistant;
+    const char* settings_group_device;
+    // The Βοηθός row on the device: who answers and who speaks.
+    const char* assistant_voice_format;  // %s answers, %s speaks
+    const char* assistant_silent_format;  // %s answers, no voice
+    const char* assistant_needs_keys;
     // Settings > Appearance: the screen title and the four looks
     const char* appearance_title;
     const char* appearance_halo;

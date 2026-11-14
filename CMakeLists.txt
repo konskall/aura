@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(aura VERSION 0.1.0 LANGUAGES C CXX)
+project(aura VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -50,6 +50,7 @@ add_library(aura_core STATIC
     shared/third_party/tjpgd/tjpgd.c
     shared/core/src/appearance.cpp
     shared/core/src/aoraton.cpp
+    shared/core/src/assistant_actions.cpp
     shared/core/src/assistant_companion.cpp
     shared/core/src/briefing.cpp
     shared/core/src/clock_services.cpp
