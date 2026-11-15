@@ -18,7 +18,7 @@ Verified from the current official Waveshare documentation on 2026-10-17:
   - The AXP2101 setup does what Waveshare's ESP-IDF example `01_AXP2101` does with its bundled XPowersLib:
     - ADC control 0x30: battery, VBUS and system voltage and the temperature on, TS-pin detection off ("necessary on the board");
     - battery detection 0x68 bit 0 on;
-    - nothing else: no rail, charger or power-key writes.
+    - since the first flash, the PWR key: its timing (0x27), its short and long presses (0x41), and switching off (0x10 bit 0); no rail or charger writes.
 - ES7210 microphone ADC and ES8311 playback codec/amplifier path. The owner's board has a speaker (2026-11-06).
   The firmware plays clips at 16 or 24 kHz, and the radio as a continuous stream at the station's own rate (8–48 kHz). The codec is reopened in between, because the board has one output.
 - TF slot, native USB-C, 2.4 GHz Wi-Fi, Bluetooth 5 LE. Bluetooth Classic A2DP/HFP is not promised.
@@ -46,9 +46,27 @@ The production table (`partitions.production.csv`) moves only the small partitio
 | Playback data / microphone data / amplifier | 8 / 10 / 46 |
 | QMI8658 INT1 / INT2 | 17 / 21 |
 | RTC interrupt | 13 |
-| User / boot buttons | 18 / 0 |
+| Keys: right (user), left (BOOT), centre (PWR) | GPIO18 / GPIO0 / the AXP2101's PWRON |
 
-Power off is deep sleep woken by the user key (GPIO18) only: the touch interrupt no longer wakes the board, so a touch in a pocket cannot switch it on, and the screen says to press the side button. The panel dims through `bsp_display_brightness_set` alone (the shared UI draws no dimming veil on the device).
+The keys (the owner's request on the first flash, 2026-11-14): the left one turns the volume down and the right one up, 10 % a press and again every 200 ms while held. The centre one is the PMU's PWR key: a press wakes or sleeps the screen, held 1.5 s it switches AURA off through the PMU (0x10 bit 0), and held 1 s while off the PMU switches it on. Its presses are read from the AXP2101 every 100 ms (interrupt status 0x49; timing 0x27: long press 1.5 s, the chip's own forced off 6 s, on 1 s). Without the PMU, power off is deep sleep woken by the right key; the touch interrupt never wakes the board. The panel dims through `bsp_display_brightness_set` alone (the shared UI draws no dimming veil on the device).
+
+## Internal RAM (the first flash, 2026-11-14)
+
+The board ran out of internal RAM at boot until these held; `aura_firmware_config_tests` checks the settings.
+
+- malloc() takes PSRAM first (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0`); 64 KiB stay for allocations that ask for internal or DMA memory (`CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL`).
+- Wi-Fi's and lwIP's buffers in PSRAM, Wi-Fi's code out of IRAM.
+- The panel's SPI transfers are 6 rows (the driver copies each from PSRAM into internal RAM first). `psram_dma_direct` underflows at the panel's 40 MHz.
+- Threads that never touch the flash keep their stacks in PSRAM; NVS from them goes through `aura_board::run_on_internal_stack()` (the flash driver turns the cache off).
+- LVGL's lock: `aura_board_display_lock()`, never the BSP 2.0.1's `bsp_display_lock()`, whose result is inverted.
+- The screen turns through the panel's MADCTL (0xA0 upright, 0xC0 the right edge down, 0x60 upside down, 0x00 the left edge down); touches are turned back in software. The QMI8658's axes match the display frame (checked on the board).
+
+## Σύναψη on the board (2026-11-15)
+
+- Its worker draws on the first core (priority 1, taking turns with the UI loop), its helper on the second (priority 1, below LVGL). The worker's two strip memories are internal DMA RAM, the helper's PSRAM (`PanelSynapseOutput` in `app_main.cpp`).
+- The frame's middle rows go to the panel straight (`esp_lcd_panel_draw_bitmap` under LVGL's lock); LVGL draws the rest, and the whole frame when anything covers it.
+- The device frame's loops run from IRAM (~9 KiB). In them: no `sqrtf` (it runs from flash) and no float division (ROM's `__divsf3`), and bits move with `__builtin_bit_cast` (a 4-byte `std::memcpy` became a ROM call).
+- The worker wakes the UI loop when it has drawn a frame (`FrameWorker::set_finished`); while the screen is lit the loop sleeps no longer than Synapse's rest.
 
 The code consumes these through `firmware/components/aura_board/include/aura_board_profile.h`; pins must not be scattered through application code. Safe PMIC/display/audio initialization order still needs BSP source inspection and physical verification.
 

@@ -1562,6 +1562,22 @@ int main(int argc, char** argv) {
             preview(voice);
         };
     }
+    // The device's start-up screen (show_startup) as the board shows it while its
+    // services start, before create() fills its bar.
+    if (capture_scenario == "startup") {
+        ui.set_capture_mode(true);
+        ui.show_startup(display);
+        ui.set_boot_progress(45);
+        for (int frame = 0; frame < 4; ++frame) {
+            lv_timer_handler();
+            SDL_Delay(16);
+        }
+        if (screenshot_path.empty() || !aura::simulator::save_display_bmp(display, screenshot_path)) {
+            std::cerr << "AURA: capture failed\n";
+            return 6;
+        }
+        return 0;
+    }
     ui.create(display, std::move(ui_callbacks));
     select_provider(live_provider);
     ui.set_provider_live(live_provider);
@@ -2657,8 +2673,11 @@ int main(int argc, char** argv) {
             scroll_view_to(kMotionScroll);
             const bool reduced_before = ui.reduced_motion();
             tap(point.x, point.y);
-            record("settings.motion", point.name, ui.reduced_motion() != reduced_before,
-                   ui.reduced_motion() ? "reduced" : "full");
+            // It stays on Οθόνη, where its row is (it opened Settings on the board).
+            record("settings.motion", point.name,
+                   ui.reduced_motion() != reduced_before && ui.view() == aura::UiView::DisplaySettings,
+                   std::string(ui.reduced_motion() ? "reduced" : "full") + " view " +
+                       std::to_string(static_cast<int>(ui.view())));
         }
         {
             // Every check starts from Home: after reset_to, Back never reaches a
@@ -5989,8 +6008,78 @@ int main(int argc, char** argv) {
                            std::to_string(ambient) + std::to_string(hero) + " " + problem);
                 }
 
-                // System in every look and language: no row title is cut (LVGL ends a
-                // cut label's text in dots); the factory reset title was cut in all four.
+                // The ambient screen in every look (the owner's requests on the
+                // first flash, 2026-11-14): the weather large (the look's display
+                // numerals beside a 64 px icon), and every line on the panel and
+                // clear of the others at the burn-in shift's extremes (±5 px; the
+                // shift changes each minute, so a fixed one keeps the check
+                // independent of the time), with an alarm showing.
+                {
+                    std::uint32_t alarm_id = 0;
+                    companion.clock().add_alarm(7, 30, true, "", &alarm_id);
+                    const bool had_weather = weather_model.snapshot().has_data;
+                    if (!had_weather) {
+                        weather_model.fetch_succeeded(
+                            demo_weather_data(aura::WeatherCondition::PartlyCloudy, {}, ui.language()));
+                        apply_weather();
+                    }
+                    reset_to(aura::UiView::Home);
+                    std::string detail = had_weather ? "" : "seeded ";
+                    bool every_look = true;
+                    for (const auto look : aura::kAppearances) {
+                        ui.set_appearance(look);
+                        const auto& look_fonts = aura::ui::fonts_for(look);
+                        for (const int shift : {5, -5}) {
+                            auto ambient_display = companion.display().snapshot();
+                            ambient_display.mode = aura::DisplayMode::AlwaysOn;
+                            ambient_display.shift_x = shift;
+                            ambient_display.shift_y = shift;
+                            ambient_display.sequence += 1000;
+                            ui.apply_display(ambient_display);
+                            lv_obj_update_layout(ui.root());
+                            std::string problem;
+                            if (ui.view() != aura::UiView::AlwaysOn) problem += "view;";
+                            auto* temperature = label_in_font(view_content(), look_fonts.display);
+                            auto* weather_row = temperature ? lv_obj_get_parent(temperature) : nullptr;
+                            auto* icon = weather_row ? lv_obj_get_child(weather_row, 0) : nullptr;
+                            if (!temperature) problem += "temperature;";
+                            if (!icon || lv_obj_get_width(icon) < 64) problem += "icon;";
+                            std::vector<lv_obj_t*> lines;
+                            collect_labels(view_content(), lines);
+                            for (std::size_t index = 0; index < lines.size(); ++index) {
+                                lv_area_t area{};
+                                lv_obj_get_coords(lines[index], &area);
+                                const std::string text = lv_label_get_text(lines[index]);
+                                if (area.x1 < 0 || area.y1 < 0 || area.x2 >= 480 || area.y2 >= 480) {
+                                    problem += "off [" + text + "];";
+                                }
+                                for (std::size_t other = index + 1; other < lines.size(); ++other) {
+                                    lv_area_t next{};
+                                    lv_obj_get_coords(lines[other], &next);
+                                    if (areas_meet(area, next)) {
+                                        problem += "overlap [" + text + "|" + lv_label_get_text(lines[other]) + "];";
+                                    }
+                                }
+                            }
+                            ambient_display.mode = aura::DisplayMode::Active;
+                            ambient_display.sequence += 1;
+                            ui.apply_display(ambient_display);
+                            if (!problem.empty()) {
+                                every_look = false;
+                                detail += std::string(aura::appearance_id(look)) + " " + std::to_string(shift) + ": " +
+                                          problem + " ";
+                            }
+                        }
+                    }
+                    ui.set_appearance(aura::Appearance::Graphite);
+                    companion.clock().remove_alarm(alarm_id);
+                    pump(2);
+                    record("ambient.every_look", "large-weather-lines-on-screen", every_look, detail);
+                }
+
+                // System and Οθόνη in every look and language: no row title is cut
+                // (LVGL ends a cut label's text in dots). The factory reset title was cut
+                // in all four, and on the board the rotation lock's (2026-11-14).
                 {
                     std::function<std::string(lv_obj_t*, const lv_font_t*)> cut_titles =
                         [&](lv_obj_t* object, const lv_font_t* font) {
@@ -6014,11 +6103,16 @@ int main(int argc, char** argv) {
                         ui.set_appearance(look);
                         for (const auto language : languages) {
                             ui.set_language(language);
-                            reset_to(aura::UiView::System);
-                            pump(2);
-                            const std::string cut = cut_titles(view_content(), aura::ui::fonts_for(look).headline);
-                            titles_ok = titles_ok && cut.empty();
-                            if (!cut.empty()) titles_detail += std::string(aura::appearance_id(look)) + ":" + cut + " ";
+                            for (const auto view : {aura::UiView::System, aura::UiView::DisplaySettings}) {
+                                reset_to(view);
+                                pump(2);
+                                const std::string cut = cut_titles(view_content(), aura::ui::fonts_for(look).headline);
+                                titles_ok = titles_ok && cut.empty();
+                                if (!cut.empty()) {
+                                    titles_detail += std::string(aura::appearance_id(look)) + "/" +
+                                                     std::to_string(static_cast<int>(view)) + ":" + cut + " ";
+                                }
+                            }
                         }
                     }
                     ui.set_language(aura::InterfaceLanguage::Greek);

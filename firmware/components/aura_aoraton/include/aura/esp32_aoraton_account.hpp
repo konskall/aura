@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace aura::firmware {
 
@@ -38,7 +39,21 @@ public:
     static constexpr std::size_t kMaxResponseBytes = 512 * 1024;
     // A request may ask for more (attachments, in PSRAM), never beyond this.
     static constexpr std::size_t kMaxDownloadBytes = 4 * 1024 * 1024 + 64;
+    ~Esp32AoratonHttp() override;
     AoratonHttpResponse send(const AoratonHttpRequest& request) override;
+
+private:
+    // One exchange on the kept connection (`reuse`) or a new one;
+    // `transport_failed`: it failed before the server answered.
+    AoratonHttpResponse exchange(const AoratonHttpRequest& request, int method, bool reuse,
+                                 bool& transport_failed);
+    void drop();
+    // One HTTPS connection kept open between requests to the same server: a
+    // new TLS handshake costs ~2 s on the board (the first flash, 2026-11-14).
+    std::mutex mutex_;
+    void* client_{nullptr};  // esp_http_client_handle_t
+    std::string origin_;     // scheme://host[:port] of the kept connection
+    std::vector<std::string> headers_;  // set by the last request, removed before the next
 };
 
 // The refresh token and room keys as one bounded record in encrypted NVS

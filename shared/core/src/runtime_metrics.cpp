@@ -30,13 +30,17 @@ unsigned long kibibytes(std::size_t bytes) { return static_cast<unsigned long>(b
 }  // namespace
 
 std::string format_runtime_metrics(const RuntimeMetrics& metrics) {
-    char line[320];
+    char line[360];
+    const auto frames = metrics.frame.count();
+    const unsigned long kilopixels =
+        frames == 0 ? 0UL : static_cast<unsigned long>(metrics.flushed_pixels / frames / 1000U);
     std::snprintf(line, sizeof(line),
-                  "t=%.1f s | frame avg %.1f max %.1f ms n=%lu | loop avg %.1f max %.1f ms n=%lu | "
+                  "t=%.1f s | frame avg %.1f max %.1f ms n=%lu wait %.1f ms %lu kpx | loop avg %.1f max %.1f ms n=%lu | "
                   "synapse %lu ms %s %.1f fps | internal free %lu min %lu largest %lu KiB | "
                   "psram free %lu min %lu largest %lu KiB",
                   static_cast<double>(metrics.uptime_ms) / 1000.0, milliseconds(metrics.frame.mean_us()),
-                  milliseconds(metrics.frame.max_us()), static_cast<unsigned long>(metrics.frame.count()),
+                  milliseconds(metrics.frame.max_us()), static_cast<unsigned long>(frames),
+                  milliseconds(metrics.flush_wait.mean_us()), kilopixels,
                   milliseconds(metrics.loop.mean_us()), milliseconds(metrics.loop.max_us()),
                   static_cast<unsigned long>(metrics.loop.count()),
                   static_cast<unsigned long>(metrics.presence_frame_ms), metrics.presence_reduced ? "reduced" : "full",

@@ -4,16 +4,20 @@
 #include "aura/audio_service.hpp"
 #include "aura/text_util.hpp"
 #include "aura_board_profile.h"
+#include "aura_display.h"
 
 #include "bsp/esp-bsp.h"
+#include "esp_heap_caps.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_sleep.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "lvgl.h"
 #include "nvs_flash.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <new>
 #include <string>
@@ -23,7 +27,12 @@ namespace aura::firmware {
 namespace {
 
 constexpr const char* kTag = "aura-companion";
-constexpr std::uint64_t kLongPressMs = 600;
+// The volume keys: 10 % a press, again every 200 ms after 500 ms held.
+constexpr float kVolumeStep = 0.1F;
+constexpr std::uint64_t kVolumeRepeatDelayMs = 500;
+constexpr std::uint64_t kVolumeRepeatMs = 200;
+// The PMU is asked for the PWR key's presses this often.
+constexpr std::uint64_t kPowerKeyPollMs = 100;
 
 }  // namespace
 
@@ -77,7 +86,9 @@ void Esp32Companion::start() {
         storage_jobs_ = xQueueCreate(8, sizeof(StoreJob*));
         storage_results_ = xQueueCreate(8, sizeof(StoreJob*));
         if (!storage_jobs_ || !storage_results_ ||
-            xTaskCreate(storage_task_entry, "aura_store", 16384, this, 3, &storage_task_handle_) != pdPASS) {
+            // The card only (FAT on SDMMC), never the flash: the stack lives in PSRAM.
+            xTaskCreateWithCaps(storage_task_entry, "aura_store", 16384, this, 3, &storage_task_handle_,
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
             ESP_LOGE(kTag, "storage worker unavailable; persistent writes and voice notes disabled");
             if (storage_jobs_) vQueueDelete(storage_jobs_);
             if (storage_results_) vQueueDelete(storage_results_);
@@ -111,7 +122,8 @@ void Esp32Companion::start() {
     capabilities_dirty_ = true;
 
     gpio_config_t button{};
-    button.pin_bit_mask = 1ULL << aura_board::Pins::user_button;
+    // The right key (GPIO18) and the left one (BOOT, GPIO0): the volume.
+    button.pin_bit_mask = (1ULL << aura_board::Pins::user_button) | (1ULL << aura_board::Pins::boot_button);
     button.mode = GPIO_MODE_INPUT;
     button.pull_up_en = GPIO_PULLUP_ENABLE;
     gpio_config(&button);
@@ -244,6 +256,14 @@ void Esp32Companion::install(AuraUiCallbacks& callbacks, IAoratonService* aorato
     };
     callbacks.on_update_restart = [this] { updater_.restart(); };
     callbacks.on_system_action = [this](SystemAction action) {
+        // Its screen at once, as the simulator shows it: switched off for a
+        // switch-off; for a restart, reset or format its screen with a bar,
+        // held until the board restarts (run_deferred_system_action).
+        if (active_ui_) {
+            if (action == SystemAction::PowerOff) active_ui_->power_off();
+            else active_ui_->show_system_progress(action);
+        }
+        system_percent_ = 0;
         pending_system_action_.store(static_cast<int>(action));
     };
 }
@@ -492,9 +512,18 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
 
     imu_samples_.clear();
     motion_.drain(imu_samples_);
+    // The screen turns with the device unless the owner locked it.
+    const bool rotation_locked = display_.snapshot().settings.rotation_locked;
+    if (rotation_locked != orientation_.locked()) orientation_.set_locked(rotation_locked);
     for (const auto& sample : imu_samples_) {
         const auto gesture = imu_.push(sample);
         if (gesture != ImuGesture::None) display_.gesture(gesture, now);
+        orientation_.push(sample);
+    }
+    const int rotation = static_cast<int>(orientation_.rotation());
+    if (rotation != applied_rotation_) {
+        aura_board_display_set_rotation(rotation);
+        applied_rotation_ = rotation;
     }
 
     PhoneEvent phone_event;
@@ -535,23 +564,33 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
         }
     }
 
-    // The side button: a press wakes or sleeps the screen; holding it records a note.
-    const bool down = gpio_get_level(static_cast<gpio_num_t>(aura_board::Pins::user_button)) == 0;
-    if (down && !button_down_) button_since_ms_ = now;
-    if (down && !recording_note_ && now - button_since_ms_ >= kLongPressMs && button_since_ms_ != 0) {
-        display_.user_activity(now);
-        begin_note();
-        button_since_ms_ = 0;
-    }
-    if (!down && button_down_) {
-        if (recording_note_) {
-            finish_note();
-        } else if (button_since_ms_ != 0) {
+    // The three keys (the owner's request on the first flash, 2026-11-14). The
+    // left (BOOT) turns the volume down and the right (GPIO18) up, again while
+    // held. The centre one is the PMU's PWR key: a press wakes or sleeps the
+    // screen, a hold of 1.5 s switches AURA off, and held for 1 s while off
+    // the PMU switches it on.
+    poll_volume_key(volume_down_key_, gpio_get_level(static_cast<gpio_num_t>(aura_board::Pins::boot_button)) == 0,
+                    -1, now);
+    poll_volume_key(volume_up_key_, gpio_get_level(static_cast<gpio_num_t>(aura_board::Pins::user_button)) == 0,
+                    1, now);
+    if (power_ != nullptr && now - power_key_polled_ms_ >= kPowerKeyPollMs) {
+        power_key_polled_ms_ = now;
+        const auto presses = power_->read_power_key();
+        if (presses.long_press) {
+            if (active_ui_) active_ui_->power_off();
+            pending_system_action_.store(static_cast<int>(SystemAction::PowerOff));
+        } else if (presses.short_press) {
             if (display_.snapshot().mode == DisplayMode::Active) display_.sleep_now(now);
             else display_.user_activity(now);
         }
     }
-    button_down_ = down;
+
+    // Any touch resets the screen timeout, as in the simulator: LVGL's inactive
+    // time falls back whenever the panel is touched. Without it the screen dimmed
+    // while in use (the first flash, 2026-11-14). Under the display lock.
+    const std::uint32_t inactive = lv_display_get_inactive_time(nullptr);
+    if (inactive < last_inactive_ms_) display_.user_activity(now);
+    last_inactive_ms_ = inactive;
 
     const bool busy = clock_.snapshot().alert || recording_note_ || recording_question_ || recording_message_ ||
                       phone_.snapshot().incoming_call ||
@@ -564,7 +603,7 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
     const int brightness = display_.snapshot().brightness_percent;
     if (brightness != applied_brightness_) {
         applied_brightness_ = brightness;
-        bsp_display_brightness_set(brightness);
+        aura_board_display_set_brightness(brightness);
     }
     // The alert rings until it is handled, a little louder each pass and
     // through mute; face down silences it.
@@ -597,6 +636,22 @@ bool Esp32Companion::enqueue(StoreJob* job) {
         return false;
     }
     return true;
+}
+
+void Esp32Companion::poll_volume_key(VolumeKey& key, bool down, int direction, std::uint64_t now) {
+    if (!down) {
+        key.down = false;
+        return;
+    }
+    if (key.down && now < key.next_ms) return;
+    key.next_ms = now + (key.down ? kVolumeRepeatMs : kVolumeRepeatDelayMs);
+    key.down = true;
+    display_.user_activity(now);
+    const auto audio = audio_.diagnostics();
+    const float volume = std::clamp(audio.volume + kVolumeStep * static_cast<float>(direction), 0.0F, 1.0F);
+    audio_.set_volume(volume);
+    if (direction > 0 && audio.muted) audio_.set_muted(false);
+    if (active_ui_) active_ui_->show_volume(static_cast<int>(volume * 100.0F + 0.5F));
 }
 
 void Esp32Companion::storage_task_entry(void* context) {
@@ -844,11 +899,42 @@ void Esp32Companion::confirm_image_after(std::uint32_t uptime_ms) {
     Esp32Ota::confirm_running_image();
 }
 
+void Esp32Companion::system_progress(int percent) {
+    system_percent_ = percent;
+    if (active_ui_ && aura_board_display_lock(200)) {
+        active_ui_->set_boot_progress(percent);
+        aura_board_display_unlock();
+    }
+}
+
+void Esp32Companion::hold_system_screen(int percent, std::uint32_t ms) {
+    constexpr std::uint32_t kStepMs = 40;
+    const int from = system_percent_;
+    const int steps = std::max(1, static_cast<int>(ms / kStepMs));
+    for (int step = 1; step <= steps; ++step) {
+        if (active_ui_ && aura_board_display_lock(200)) {
+            active_ui_->tick(kStepMs);  // the core keeps turning
+            active_ui_->set_boot_progress(from + (percent - from) * step / steps);
+            aura_board_display_unlock();
+        }
+        vTaskDelay(pdMS_TO_TICKS(kStepMs));
+    }
+    system_percent_ = percent;
+}
+
+// A confirmed action's screen stays at least this long, its bar gliding to full;
+// the panel then keeps that last frame through the restart until the next start
+// resets it (the owner wanted the simulator's screens on the board, 2026-11-14).
+constexpr std::uint32_t kSystemScreenMs = 1400;
+
 void Esp32Companion::run_deferred_system_action() {
     const int raw = pending_system_action_.exchange(-1);
     if (raw < 0) return;
+    const std::uint64_t shown_at = now_ms();
     transfer_.shutdown();
     const auto action = static_cast<SystemAction>(raw);
+    const bool switching_off = action == SystemAction::PowerOff;
+    if (!switching_off) system_progress(15);
     storage_accepting_ = false;
     bool storage_flushed = true;
     if (storage_jobs_) {
@@ -864,21 +950,51 @@ void Esp32Companion::run_deferred_system_action() {
     if (!storage_flushed) ESP_LOGW(kTag, "system action continuing after storage flush timeout");
     microphone_.stop();
     audio_.stop();
+    if (!switching_off) system_progress(40);
+    // The rest of the screen's time, the bar gliding to full, then the last
+    // frame's way to the panel; the restart follows.
+    const auto finish_screen = [this, shown_at] {
+        const auto shown = now_ms() - shown_at;
+        hold_system_screen(100, shown + 300 >= kSystemScreenMs ? 300U : static_cast<std::uint32_t>(kSystemScreenMs - shown));
+        vTaskDelay(pdMS_TO_TICKS(120));
+    };
 
     if (action == SystemAction::FormatCard) {
         // Everything on the card goes; NVS (Wi-Fi, keys, the account) stays.
         // The restart loads the empty stores.
         if (!store_.format()) ESP_LOGE(kTag, "the card was not formatted");
+        finish_screen();
         esp_restart();
     }
     if (action == SystemAction::FactoryReset) {
         store_.factory_reset();
+        system_progress(65);
         const auto erased = nvs_flash_erase();
         if (erased != ESP_OK) ESP_LOGE(kTag, "factory reset NVS erase failed: %s", esp_err_to_name(erased));
+        finish_screen();
         esp_restart();
     }
-    if (action == SystemAction::PowerOff) {
-        bsp_display_brightness_set(0);
+    if (switching_off) {
+        // The switched-off screen (power_off()) a moment, then dimming to dark.
+        const int from = applied_brightness_ > 0 ? applied_brightness_ : 100;
+        constexpr int kSteps = 24;  // 50 ms each: 0.4 s as it is, 0.8 s dimming
+        constexpr int kSteady = 8;
+        for (int step = 1; step <= kSteps; ++step) {
+            if (aura_board_display_lock(200)) {
+                if (active_ui_) active_ui_->tick(50);
+                if (step > kSteady) aura_board_display_set_brightness(from * (kSteps - step) / (kSteps - kSteady));
+                aura_board_display_unlock();
+            }
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        // Lit again by the next poll should AURA stay on (no PMU, no deep sleep).
+        applied_brightness_ = 0;
+        // The PMU switches the board off; held for 1 s, the PWR key switches it
+        // on again. Should it not (no PMU), deep sleep, woken by the right key.
+        if (power_ != nullptr && power_->power_off()) {
+            ESP_LOGI(kTag, "switched off; hold the PWR key to switch on");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+        }
         // The side button only: a touch in a pocket or a bag must not switch
         // AURA on (the screen says to press the button).
         const std::uint64_t wake_mask = 1ULL << aura_board::Pins::user_button;
@@ -892,6 +1008,7 @@ void Esp32Companion::run_deferred_system_action() {
         esp_deep_sleep_start();
     }
     // Restart and PowerOn both perform a real clean boot.
+    finish_screen();
     esp_restart();
 }
 

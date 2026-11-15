@@ -417,7 +417,62 @@
         lv_obj_add_event_cb(catcher, power_on_event, LV_EVENT_LONG_PRESSED, this);
     }
 
+    static void spin_arc(void* arc, int32_t angle) { lv_arc_set_rotation(static_cast<lv_obj_t*>(arc), angle); }
+
+    // A ring turned by LVGL itself, a whole turn every `turn_ms`.
+    static void spin(lv_obj_t* arc, std::uint32_t turn_ms, bool backwards) {
+        if (!arc) return;
+        lv_anim_t turn;
+        lv_anim_init(&turn);
+        lv_anim_set_var(&turn, arc);
+        lv_anim_set_exec_cb(&turn, spin_arc);
+        lv_anim_set_values(&turn, backwards ? 360 : 0, backwards ? 0 : 360);
+        lv_anim_set_duration(&turn, turn_ms);
+        lv_anim_set_repeat_count(&turn, LV_ANIM_REPEAT_INFINITE);
+        lv_anim_start(&turn);
+    }
+
+    // The device's own start (show_startup), from its first frame: the AURA
+    // wordmark, the core and a bar, centred. No words, as the language is still
+    // on the card, and the brand's colours whatever look the card holds: Halo's
+    // (the first look) and, on the bar, the wordmark's gradient. Until the
+    // device's loop ticks the UI, LVGL itself turns the core's rings.
+    void render_startup() {
+        header_action = true;
+        constexpr int kWordmarkY = 91;
+        constexpr int kCoreCentreY = 262;
+        constexpr int kBarY = 384;
+        const auto chosen = ui::active_appearance();
+        ui::set_active_appearance(Appearance::Halo);
+        aura_wordmark(content, (ui::tokens::display_width - 176) / 2, kWordmarkY, true);
+        system_orb(kCoreCentreY, ui::IconRole::Sparkles, ui::tokens::ice);
+        boot_spinner = system_ring_outer;
+        system_progress = lv_bar_create(content);
+        lv_obj_set_size(system_progress, 240, 5);
+        lv_obj_set_pos(system_progress, 120, kBarY);
+        lv_bar_set_range(system_progress, 0, 100);
+        lv_bar_set_value(system_progress, boot_progress, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(system_progress, ui::color(ui::tokens::surface_high), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(system_progress, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(system_progress, ui::color(ui::tokens::brand_start), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_grad_color(system_progress, ui::color(ui::tokens::brand_end), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_grad_dir(system_progress, LV_GRAD_DIR_HOR, LV_PART_INDICATOR);
+        lv_obj_set_style_radius(system_progress, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_set_style_radius(system_progress, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+        // The platform's steps glide rather than jump.
+        lv_obj_set_style_anim_duration(system_progress, 360, LV_PART_MAIN);
+        ui::set_active_appearance(chosen);
+        if (!capture_mode && !reduced_motion) {
+            spin(system_ring_outer, 3240, false);  // as system_tick turns them
+            spin(system_ring_inner, 5400, true);
+        }
+    }
+
     void render_boot() {
+        if (startup) {
+            render_startup();
+            return;
+        }
         header_action = true;
         const char* title = c().system_restarting;
         const char* detail = c().system_restarting_detail;
@@ -447,12 +502,13 @@
         lv_obj_set_size(system_progress, 240, 5);
         lv_obj_set_pos(system_progress, 120, 414);
         lv_bar_set_range(system_progress, 0, 100);
-        lv_bar_set_value(system_progress, 0, LV_ANIM_OFF);
+        lv_bar_set_value(system_progress, boot_progress, LV_ANIM_OFF);
         lv_obj_set_style_bg_color(system_progress, ui::color(ui::tokens::surface_high), LV_PART_MAIN);
         lv_obj_set_style_bg_opa(system_progress, LV_OPA_COVER, LV_PART_MAIN);
         lv_obj_set_style_bg_color(system_progress, ui::color(accent), LV_PART_INDICATOR);
         lv_obj_set_style_radius(system_progress, LV_RADIUS_CIRCLE, LV_PART_MAIN);
         lv_obj_set_style_radius(system_progress, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+        lv_obj_set_style_anim_duration(system_progress, 360, LV_PART_MAIN);
         line(content, c().system_starting, 0, 434, ui::tokens::display_width, ui::font_caption(),
              ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
     }
@@ -470,10 +526,11 @@
                     lv_obj_set_style_bg_opa(system_core, static_cast<lv_opa_t>(28 + pulse * 24.0F), 0);
                 }
             }
-            if (system_ring_outer) {
+            // The start-up screen's rings turn by themselves (render_startup).
+            if (system_ring_outer && !startup) {
                 lv_arc_set_rotation(system_ring_outer, static_cast<int32_t>((phase_ms / 9U) % 360U));
             }
-            if (system_ring_inner) {
+            if (system_ring_inner && !startup) {
                 lv_arc_set_rotation(system_ring_inner, static_cast<int32_t>(360U - (phase_ms / 15U) % 360U));
             }
             if (system_orbit_dot) {
@@ -490,18 +547,22 @@
         if (boot_remaining_ms == 0) return;
         boot_remaining_ms = elapsed_ms >= boot_remaining_ms ? 0U : boot_remaining_ms - elapsed_ms;
         if (system_progress) {
-            const auto progress = 100U - (boot_remaining_ms * 100U / 1800U);
+            // From where the bar was (boot(): empty) to full as the time runs out.
+            const auto left = static_cast<std::uint32_t>(100 - boot_from_percent);
+            const auto progress = 100U - (boot_remaining_ms * left / boot_total_ms);
             lv_bar_set_value(system_progress, static_cast<int32_t>(progress), LV_ANIM_OFF);
         }
         if (boot_remaining_ms == 0) {
+            startup = false;
             navigation.reset();
             render(UiView::Home, true);
         }
     }
 
-    // Only the boot and switched-off screens show while the device is off or starting.
+    // Only the boot and switched-off screens show while the device is off or
+    // starting, and a confirmed restart's screen until the board restarts.
     bool blocked_by_power(UiView view) const {
         if (powered_off) return view != UiView::PowerOff;
-        if (boot_remaining_ms > 0) return view != UiView::Boot;
+        if (boot_remaining_ms > 0 || startup || system_held) return view != UiView::Boot;
         return false;
     }

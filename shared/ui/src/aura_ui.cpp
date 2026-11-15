@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -108,6 +109,17 @@ std::uint32_t icon_accent(std::size_t index) {
 constexpr lv_style_selector_t kIndicatorChecked =
     static_cast<lv_style_selector_t>(LV_PART_INDICATOR) | static_cast<lv_style_selector_t>(LV_STATE_CHECKED);
 
+// What the UI shows before any Aoraton snapshot: a sequence no service reports,
+// so the first one always lands. The real service starts at 0, as a default
+// snapshot does, and apply_aoraton() dropped it as unchanged: the device kept
+// the default's DEMO state, without the Google sign-in, until the account first
+// changed (the first flash, 2026-11-14).
+AoratonSnapshot unshown_aoraton() {
+    AoratonSnapshot snapshot;
+    snapshot.sequence = std::numeric_limits<std::uint64_t>::max();
+    return snapshot;
+}
+
 }  // namespace
 
 struct AuraUi::Impl {
@@ -181,7 +193,7 @@ struct AuraUi::Impl {
     AuraUiCallbacks callbacks{};
     AssistantSnapshot snapshot{};
     AudioDiagnostics audio{};
-    AoratonSnapshot aoraton{};
+    AoratonSnapshot aoraton{unshown_aoraton()};
     DeviceStatusSnapshot status{};
     WeatherSnapshot weather{};
     WifiSnapshot wifi{};
@@ -228,6 +240,16 @@ struct AuraUi::Impl {
     bool format_armed{false};
     bool powered_off{false};
     std::uint32_t boot_remaining_ms{0};
+    // The bar fills from boot_from_percent to full over boot_total_ms (boot():
+    // from empty in 1.8 s; the device's start-up: from the platform's last step).
+    std::uint32_t boot_total_ms{1800};
+    int boot_from_percent{0};
+    // The device's start-up screen (show_startup), until create() has filled it.
+    bool startup{false};
+    // A restart, reset or format confirmed on the device: held until the restart.
+    bool system_held{false};
+    int boot_progress{0};  // the platform's step (set_boot_progress)
+    static constexpr std::uint32_t kStartupFinishMs = 600;
     lv_obj_t* boot_spinner{};
     lv_obj_t* system_core{};
     int system_core_size{};      // the core's size at rest; its pulse resizes it
@@ -250,6 +272,9 @@ struct AuraUi::Impl {
     std::uint32_t phase_ms{0};
     std::uint32_t animation_ms{0};
     std::uint32_t motion_sample_ms{0};
+    // The time since the presence's last tick: the UI's 33 ms pace, or sooner
+    // when a presence drawn on a worker wants its tick (next_tick_ms()).
+    std::uint32_t presence_ms{0};
     std::uint64_t motion_sample_updates{0};
     float motion_update_rate{0.0F};
     std::uint64_t weather_motion_updates{0};
@@ -463,7 +488,9 @@ struct AuraUi::Impl {
         if (!self->accept_action()) return;
         self->reduced_motion = !self->reduced_motion;
         self->motion.set_reduced(self->reduced_motion);
-        self->render(UiView::Settings);
+        // Its row's screen (Οθόνη since the settings were grouped): it opened
+        // Settings on the board (2026-11-14).
+        self->render(self->current_view);
     }
 
     static void audio_test_event(lv_event_t* event) {
@@ -3972,6 +3999,8 @@ struct AuraUi::Impl {
     }
 
     void update_motion(std::uint32_t elapsed_ms) {
+        const std::uint32_t presence_elapsed = presence_ms;
+        presence_ms = 0;
         if (capture_mode || !motion.active()) return;
         if (motion.mode() == MotionMode::Listening) motion.set_amplitude(input_amplitude);
         else if (motion.mode() == MotionMode::Speaking) motion.set_amplitude(audio.envelope);
@@ -3979,9 +4008,24 @@ struct AuraUi::Impl {
         if (presence->object()) {
             presence->set_level(motion.mode() == MotionMode::Listening ? input_amplitude : audio.envelope);
             presence->set_reduced_motion(reduced_motion);
-            presence->tick(elapsed_ms);
+            presence->tick(presence_elapsed);
         }
         update_audio_widgets();
+    }
+
+    // How long until the presence wants a tick of its own, between the UI's.
+    std::uint32_t presence_due_ms() const noexcept {
+        if (capture_mode || !motion.active() || !presence->object()) return ui::PresenceView::no_tick;
+        const std::uint32_t due = presence->next_tick_ms();
+        if (due == ui::PresenceView::no_tick) return due;
+        return due > presence_ms ? due - presence_ms : 0U;
+    }
+
+    // Its frame drawn, or its rest over, before the UI's next 33 ms.
+    void tick_presence_if_due() {
+        if (presence_due_ms() != 0U) return;
+        presence->tick(presence_ms);
+        presence_ms = 0;
     }
 
     void update_weather_motion(std::uint32_t elapsed_ms) {
@@ -4312,6 +4356,31 @@ struct AuraUi::Impl {
         lv_obj_set_hidden(status_bar, immersive(current_view));
     }
 
+    // The screen, its content and the status bar: once, by create() or, on the
+    // device, by show_startup() before it.
+    void build_screen(lv_display_t* target) {
+        display = target;
+        lv_display_set_default(target);
+        screen = lv_obj_create(nullptr);
+        ui::reset(screen);
+        lv_obj_set_style_bg_color(screen, ui::color(ui::tokens::canvas), 0);
+        lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+        lv_obj_set_style_text_font(screen, ui::font_body(), 0);
+
+        content = lv_obj_create(screen);
+        ui::reset(content);
+        lv_obj_set_size(content, ui::tokens::display_width, ui::tokens::display_height);
+        lv_obj_set_pos(content, 0, 0);
+        lv_obj_set_scrollable(content, false);
+        lv_obj_set_clickable(content, true);
+        // Every child bubbles gestures by default, up to the first ancestor that
+        // does not: without this the screen, not `content`, receives them.
+        lv_obj_set_gesture_bubble(content, false);
+        lv_obj_add_event_cb(content, gesture_event, LV_EVENT_GESTURE, this);
+
+        create_status();
+    }
+
 #include "aura_ui_companion.inl"
 #include "aura_ui_photos.inl"
 #include "aura_ui_transfer.inl"
@@ -4326,30 +4395,48 @@ AuraUi::AuraUi() : impl_(std::make_unique<Impl>()) {}
 AuraUi::~AuraUi() = default;
 
 void AuraUi::create(lv_display_t* display, AuraUiCallbacks callbacks) {
-    impl_->display = display;
     impl_->callbacks = std::move(callbacks);
-    lv_display_set_default(display);
-    impl_->screen = lv_obj_create(nullptr);
-    ui::reset(impl_->screen);
-    lv_obj_set_style_bg_color(impl_->screen, ui::color(ui::tokens::canvas), 0);
-    lv_obj_set_style_bg_opa(impl_->screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_font(impl_->screen, ui::font_body(), 0);
-
-    impl_->content = lv_obj_create(impl_->screen);
-    ui::reset(impl_->content);
-    lv_obj_set_size(impl_->content, ui::tokens::display_width, ui::tokens::display_height);
-    lv_obj_set_pos(impl_->content, 0, 0);
-    lv_obj_set_scrollable(impl_->content, false);
-    lv_obj_set_clickable(impl_->content, true);
-    // Every child bubbles gestures by default, up to the first ancestor that
-    // does not: without this the screen, not `content`, receives them.
-    lv_obj_set_gesture_bubble(impl_->content, false);
-    lv_obj_add_event_cb(impl_->content, Impl::gesture_event, LV_EVENT_GESTURE, impl_.get());
-
-    impl_->create_status();
+    if (impl_->startup) {
+        // The device's start-up screen is up (show_startup): its bar fills from
+        // the platform's last step, then Home (system_tick).
+        impl_->boot_from_percent = impl_->boot_progress;
+        impl_->boot_total_ms = Impl::kStartupFinishMs;
+        impl_->boot_remaining_ms = Impl::kStartupFinishMs;
+        return;
+    }
+    impl_->build_screen(display);
     impl_->render(UiView::Home);
     impl_->update_status();
     lv_screen_load(impl_->screen);
+}
+
+void AuraUi::show_startup(lv_display_t* display) {
+    if (impl_->screen) return;
+    impl_->build_screen(display);
+    impl_->startup = true;
+    impl_->boot_progress = 0;
+    impl_->render(UiView::Boot, true);
+    lv_screen_load(impl_->screen);
+}
+
+void AuraUi::show_system_progress(SystemAction action) {
+    impl_->powered_off = false;
+    impl_->startup = false;
+    impl_->boot_remaining_ms = 0;
+    impl_->navigation.reset();
+    impl_->pending_system = action;
+    impl_->boot_progress = 0;
+    impl_->system_held = true;
+    impl_->render(UiView::Boot, true);
+    if (impl_->toast) lv_obj_set_hidden(impl_->toast, true);
+}
+
+void AuraUi::set_boot_progress(int percent) {
+    impl_->boot_progress = std::clamp(percent, 0, 100);
+    if (impl_->current_view == UiView::Boot && impl_->system_progress) {
+        lv_bar_set_value(impl_->system_progress, impl_->boot_progress,
+                         impl_->capture_mode ? LV_ANIM_OFF : LV_ANIM_ON);
+    }
 }
 
 // Every apply_* compares the sequence before copying: the platforms call them
@@ -4406,15 +4493,26 @@ void AuraUi::apply_sound(const SoundSettings& settings) {
 
 void AuraUi::power_off() {
     impl_->boot_remaining_ms = 0;
+    impl_->system_held = false;
     impl_->navigation.reset();
     impl_->render(UiView::PowerOff);
     impl_->powered_off = true;
     if (impl_->toast) lv_obj_set_hidden(impl_->toast, true);
 }
 
+void AuraUi::show_volume(int percent) {
+    char text[48];
+    std::snprintf(text, sizeof(text), "%s %d%%", impl_->c().sound_volume, std::clamp(percent, 0, 100));
+    impl_->show_toast(text, ui::tokens::blue);
+}
+
 void AuraUi::boot() {
     impl_->powered_off = false;
+    impl_->system_held = false;
     impl_->navigation.reset();
+    impl_->boot_progress = 0;
+    impl_->boot_from_percent = 0;
+    impl_->boot_total_ms = 1800;
     impl_->boot_remaining_ms = 1800;
     impl_->render(UiView::Boot, true);
     if (impl_->toast) lv_obj_set_hidden(impl_->toast, true);
@@ -4604,6 +4702,7 @@ void AuraUi::tick(std::uint32_t elapsed_ms) {
     impl_->phase_ms += elapsed_ms;
     impl_->animation_ms += elapsed_ms;
     impl_->motion_sample_ms += elapsed_ms;
+    impl_->presence_ms += elapsed_ms;
     const std::uint32_t interval = 33U;
     if (impl_->animation_ms >= interval) {
         const auto delta = impl_->animation_ms;
@@ -4615,6 +4714,8 @@ void AuraUi::tick(std::uint32_t elapsed_ms) {
         if (impl_->wifi_spinner && !impl_->capture_mode && !impl_->reduced_motion) {
             lv_arc_set_rotation(impl_->wifi_spinner, static_cast<int32_t>((impl_->phase_ms / 4U) % 360U));
         }
+    } else {
+        impl_->tick_presence_if_due();
     }
     if (impl_->toast_remaining_ms > 0) {
         impl_->toast_remaining_ms = elapsed_ms >= impl_->toast_remaining_ms ? 0U :
@@ -4640,6 +4741,8 @@ void AuraUi::tick(std::uint32_t elapsed_ms) {
         impl_->update_host_metrics_label();
     }
 }
+
+std::uint32_t AuraUi::next_tick_ms() const noexcept { return impl_->presence_due_ms(); }
 
 void AuraUi::set_aoraton_sign_in_relay(bool relay) { impl_->aoraton_sign_in_relay = relay; }
 

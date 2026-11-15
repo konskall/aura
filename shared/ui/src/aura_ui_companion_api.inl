@@ -135,7 +135,9 @@ void AuraUi::apply_display(const DisplaySnapshot& snapshot) {
         snapshot.settings.raise_to_wake != previous.settings.raise_to_wake ||
         snapshot.settings.flip_to_mute != previous.settings.flip_to_mute ||
         snapshot.settings.active_brightness_percent != previous.settings.active_brightness_percent ||
-        snapshot.settings.timeout_ms != previous.settings.timeout_ms;
+        snapshot.settings.timeout_ms != previous.settings.timeout_ms ||
+        // Its switch did not move on the board: the lock alone drew nothing (2026-11-14).
+        snapshot.settings.rotation_locked != previous.settings.rotation_locked;
     // Times and the battery's percentage show on many screens: the one in view
     // and the status bar follow a new choice at once.
     const bool reading_changed = snapshot.settings.clock_24h != previous.settings.clock_24h ||

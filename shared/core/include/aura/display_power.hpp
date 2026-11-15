@@ -32,10 +32,16 @@ private:
     float gy_{0.0F};
     float gz_{0.0F};
     std::uint32_t last_ms_{0};
-    // Raise: the screen was not facing the viewer, then motion, then it settles
-    // facing up and towards the viewer.
-    std::uint32_t away_until_ms_{0};
-    std::uint32_t motion_at_ms_{0};
+    // Raise: AURA rested still on its desk (on any edge, or flat), then moved
+    // away from that reading for a few samples (lifted, tilted, turned), then
+    // is held or keeps moving, not on its way face down.
+    std::uint32_t still_since_ms_{0};
+    bool resting_{false};
+    float rest_x_{0.0F};
+    float rest_y_{0.0F};
+    float rest_z_{0.0F};
+    int moving_samples_{0};
+    std::uint32_t moved_at_ms_{0};
     std::uint32_t settled_since_ms_{0};
     std::uint32_t last_raise_ms_{0};
     bool raise_seen_{false};
@@ -44,6 +50,35 @@ private:
     std::uint32_t up_since_ms_{0};
     bool face_down_{false};
 };
+
+// Which panel edge is the bottom of what the screen shows: the device can stand
+// on any of its four edges (the owner's request on the first flash, 2026-11-14).
+enum class ScreenRotation : std::uint8_t { Bottom, Right, Top, Left };
+
+// The screen's rotation from accelerometer samples (ImuSample's frame): the edge
+// nearest the ground becomes the bottom. A new edge counts once the device has
+// stood on it for settle_ms, leaning at least 15 degrees away from a diagonal;
+// lying flat, shaken, or locked, the screen keeps its rotation.
+class OrientationTracker {
+public:
+    static constexpr std::uint32_t settle_ms = 600;
+    // True when this sample changed the rotation.
+    bool push(const ImuSample& sample);
+    void set_locked(bool locked) noexcept;
+    bool locked() const noexcept { return locked_; }
+    ScreenRotation rotation() const noexcept { return rotation_; }
+
+private:
+    ScreenRotation rotation_{ScreenRotation::Bottom};
+    ScreenRotation pending_{ScreenRotation::Bottom};
+    std::uint32_t pending_since_ms_{0};
+    bool has_pending_{false};
+    bool locked_{false};
+};
+
+// A touch at (x, y), as the square panel of side `size` reports it upright, to
+// the point of the rotated content drawn under it.
+void rotate_touch_point(ScreenRotation rotation, int size, int& x, int& y) noexcept;
 
 enum class DisplayMode { Active, Dimmed, AlwaysOn, Off };
 
@@ -59,6 +94,8 @@ struct DisplaySettings {
     bool battery_percent{true};
     // Times read 14:05; false: 2:05 μ.μ. (2:05 PM).
     bool clock_24h{true};
+    // The screen keeps its rotation instead of turning with the device.
+    bool rotation_locked{false};
 };
 
 std::string serialize_display_settings(const DisplaySettings& settings);

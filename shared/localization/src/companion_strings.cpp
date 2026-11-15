@@ -292,6 +292,9 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.raise_detail = "Η οθόνη ανάβει όταν τη σηκώνεις";
         s.flip_to_mute = "Σίγαση ανάποδα";
         s.flip_detail = "Γύρισέ τη ανάποδα για ησυχία";
+        // "Κλείδωμα περιστροφής" was cut beside the switch in every look (2026-11-14).
+        s.rotation_lock_title = "Κλείδωμα θέσης";
+        s.rotation_lock_detail = "Δεν γυρίζει μαζί με τη συσκευή";
         s.needs_motion_sensor = "Χρειάζεται τον αισθητήρα κίνησης";
         s.screen_timeout = "Σβήσιμο οθόνης";
         s.seconds_format = "Μετά από %u δευτ.";
@@ -441,7 +444,7 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.system_restart_detail = "Η συσκευή θα ξεκινήσει ξανά σε λίγα δευτερόλεπτα.";
         s.system_power_off_question = "Απενεργοποίηση;";
         s.system_power_off_detail = "Για να ανοίξει ξανά, κράτα πατημένη την οθόνη.";
-        s.system_power_off_detail_button = "Για να ανοίξει ξανά, πάτα το πλαϊνό κουμπί.";
+        s.system_power_off_detail_button = "Για να ανοίξει ξανά, κράτα πατημένο το κεντρικό κουμπί.";
         s.system_reset_question = "Πλήρης επαναφορά;";
         s.system_reset_detail = "Διαγράφονται όλα τα δεδομένα και οι συνδέσεις. Δεν αναιρείται.";
         s.system_reset_confirm = "Επαναφορά";
@@ -453,7 +456,7 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.system_powering_on = "Καλώς ήρθες ξανά";
         s.system_powering_on_detail = "Το AURA προετοιμάζεται.";
         s.system_power_off_hint = "Κράτησε πατημένη την οθόνη για ενεργοποίηση";
-        s.system_power_off_hint_button = "Πάτα το πλαϊνό κουμπί για ενεργοποίηση";
+        s.system_power_off_hint_button = "Κράτα το κεντρικό κουμπί για να ανοίξει";
         s.credits_creator = "Δημιουργός · KonsKall";
         s.credits_intro = "Η AURA δημιουργήθηκε με έργα ανοιχτού κώδικα και την ταυτότητα που παραχώρησε ο ιδιοκτήτης του έργου.";
         s.credits_platform_title = "Πλατφόρμα και διεπαφή";
@@ -767,6 +770,8 @@ const CompanionStrings& companion_en_us() noexcept {
         s.raise_detail = "Lights up when you lift it";
         s.flip_to_mute = "Turn over to mute";
         s.flip_detail = "Turn it face down for quiet";
+        s.rotation_lock_title = "Rotation lock";
+        s.rotation_lock_detail = "Stays put when the device turns";
         s.needs_motion_sensor = "Needs the motion sensor";
         s.screen_timeout = "Screen timeout";
         s.seconds_format = "After %u s";
@@ -916,7 +921,7 @@ const CompanionStrings& companion_en_us() noexcept {
         s.system_restart_detail = "The device starts again in a few seconds.";
         s.system_power_off_question = "Power off?";
         s.system_power_off_detail = "To turn it on again, press and hold the screen.";
-        s.system_power_off_detail_button = "To turn it on again, press the side button.";
+        s.system_power_off_detail_button = "To turn it on again, hold the centre button.";
         s.system_reset_question = "Factory reset?";
         s.system_reset_detail = "All data and connections are erased. This cannot be undone.";
         s.system_reset_confirm = "Reset";
@@ -928,7 +933,7 @@ const CompanionStrings& companion_en_us() noexcept {
         s.system_powering_on = "Welcome back";
         s.system_powering_on_detail = "AURA is getting ready.";
         s.system_power_off_hint = "Press and hold the screen to power on";
-        s.system_power_off_hint_button = "Press the side button to power on";
+        s.system_power_off_hint_button = "Hold the centre button to power on";
         s.credits_creator = "Created by KonsKall";
         s.credits_intro = "AURA was created with open-source work and the project identity supplied by its owner.";
         s.credits_platform_title = "Platform and interface";

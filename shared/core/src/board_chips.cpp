@@ -90,4 +90,26 @@ std::uint8_t axp2101_battery_detection(std::uint8_t current) noexcept {
     return static_cast<std::uint8_t>(current | 0x01);
 }
 
+std::uint8_t axp2101_power_key_timing(std::uint8_t current) noexcept {
+    constexpr std::uint8_t kLongPress1500Ms = 0x01 << 4;  // IRQLEVEL: 1 s, 1.5 s, 2 s, 2.5 s
+    constexpr std::uint8_t kForcedOff6S = 0x01 << 2;      // OFFLEVEL: 4 s, 6 s, 8 s, 10 s
+    constexpr std::uint8_t kOn1S = 0x02;                   // ONLEVEL: 128 ms, 512 ms, 1 s, 2 s
+    return static_cast<std::uint8_t>((current & 0xC0) | kLongPress1500Ms | kForcedOff6S | kOn1S);
+}
+
+std::uint8_t axp2101_power_key_irq_enable(std::uint8_t current) noexcept {
+    return static_cast<std::uint8_t>(current | kAxp2101PowerKeyIrqBits);
+}
+
+PowerKeyPresses axp2101_power_key_presses(std::uint8_t status2) noexcept {
+    PowerKeyPresses presses;
+    presses.short_press = (status2 & 0x08) != 0;
+    presses.long_press = (status2 & 0x04) != 0;
+    return presses;
+}
+
+std::uint8_t axp2101_power_off_command(std::uint8_t current) noexcept {
+    return static_cast<std::uint8_t>(current | 0x01);
+}
+
 }  // namespace aura

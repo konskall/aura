@@ -61,6 +61,7 @@ const lv_font_t* font_display() { return fonts().display; }
 const lv_font_t* font_clock() { return fonts().clock; }
 const lv_font_t* font_numerals_small() { return fonts().numerals_small; }
 const lv_font_t* font_numerals_large() { return fonts().numerals_large; }
+const lv_font_t* font_ambient_clock() { return fonts().ambient_clock ? fonts().ambient_clock : font_hero(); }
 const lv_font_t* font_hero() { return fonts().hero ? fonts().hero : fonts().numerals_large; }
 const lv_font_t* font_brand() { return &aura_font_space_medium_26; }
 

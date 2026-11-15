@@ -93,6 +93,10 @@ public:
     static constexpr std::uint32_t kSignInSeconds = 300;
     static constexpr std::int64_t kPollIntervalMs = 10000;
     static constexpr std::int64_t kRetryIntervalMs = 30000;
+    // Restoring a stored session while the network comes up: the first tries
+    // every 5 s, then every kRetryIntervalMs (the first flash, 2026-11-14).
+    static constexpr std::int64_t kRestoreRetryMs = 5000;
+    static constexpr int kRestoreQuickTries = 6;
     // While saving power (screen dark on battery) realtime is off and the
     // overview is checked at least this often, whatever the polling setting.
     static constexpr std::int64_t kPowerSavingPollMs = 300000;
@@ -201,6 +205,9 @@ private:
     std::int64_t now_unix_{0};
     std::int64_t next_poll_ms_{0};
     std::int64_t next_retry_ms_{0};
+    // A stored session was announced as signed in and connecting at start.
+    bool restoring_announced_{false};
+    int restore_tries_{0};
     std::vector<AoratonRemoteRoom> rooms_;
     std::map<std::string, RoomTrack> tracks_;
     std::vector<PendingSend> pending_sends_;

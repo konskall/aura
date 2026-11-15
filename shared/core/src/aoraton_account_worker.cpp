@@ -149,15 +149,32 @@ void AoratonAccountWorker::start(std::int64_t now_ms, std::int64_t now_unix) {
     AoratonStoredSecrets loaded;
     if (store_.load(loaded)) secrets_ = std::move(loaded);
     if (secrets_.refresh_token.empty()) return;
+    // A stored session shows as signed in and connecting at once, not as "Sign
+    // in with Google" while the network comes up: on the first flash
+    // (2026-11-14) the owner, still signed in, saw that for half a minute and
+    // reset the device. A revoked session still ends as one to sign in again.
+    if (!restoring_announced_) {
+        restoring_announced_ = true;
+        AoratonEvent paired;
+        paired.type = AoratonEventType::Paired;
+        emit(std::move(paired));
+        AoratonEvent connecting;
+        connecting.type = AoratonEventType::ConnectionChanged;
+        connecting.connection = AoratonConnectionState::Connecting;
+        emit(std::move(connecting));
+    }
     session_.refresh_token = secrets_.refresh_token;
     switch (refresh_session()) {
         case RefreshResult::Ok: {
+            restore_tries_ = 0;
             AoratonSession session = std::move(session_);
             finish_sign_in(std::move(session));
             break;
         }
         case RefreshResult::Revoked: session_revoked(); break;
-        case RefreshResult::Transient: next_retry_ms_ = now_ms_ + kRetryIntervalMs; break;
+        case RefreshResult::Transient:
+            next_retry_ms_ = now_ms_ + (restore_tries_++ < kRestoreQuickTries ? kRestoreRetryMs : kRetryIntervalMs);
+            break;
     }
 }
 

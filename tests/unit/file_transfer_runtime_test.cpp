@@ -182,6 +182,39 @@ int main(int argc, char** argv) {
         auto listed = request(port, "POST", "/api/files", "{\"area\":\"files\",\"after\":\"\"}", json_headers);
         expect(listed.status == 200 && listed.body.find(filename) != std::string::npos,
                "authenticated listing preserves Unicode names");
+        // Downloads (the owner's request, 2026-11-14): the exact bytes, as an
+        // attachment under the file's own name, and only within the session.
+        const auto download_body = "{\"area\":\"files\",\"name\":\"" + filename + "\"}";
+        expect(request(port, "POST", "/api/download", download_body, "Content-Type: application/json\r\n").status ==
+                   401,
+               "a download needs the bearer");
+        const auto downloaded = request(port, "POST", "/api/download", download_body, json_headers);
+        const auto has = [](const std::string& headers, const std::string& line) {
+            return headers.find("\r\n" + line + "\r\n") != std::string::npos ||
+                   (headers.size() >= line.size() && headers.compare(headers.size() - line.size(), line.size(), line) == 0);
+        };
+        expect(downloaded.status == 200 && downloaded.body == text &&
+                   has(downloaded.headers, "Content-Type: application/octet-stream") &&
+                   has(downloaded.headers, "Content-Length: " + std::to_string(text.size())) &&
+                   has(downloaded.headers, "Content-Disposition: " + transfer_attachment_header(filename)) &&
+                   has(downloaded.headers, "X-Content-Type-Options: nosniff") &&
+                   has(downloaded.headers, "Cache-Control: no-store") &&
+                   downloaded.headers.find("Content-Security-Policy: default-src 'none';") != std::string::npos,
+               "a stored file downloads exactly, as an attachment");
+        const auto downloaded_photo =
+            request(port, "POST", "/api/download", "{\"area\":\"photos\",\"name\":\"DEMO photo.png\"}", json_headers);
+        expect(downloaded_photo.status == 200 && downloaded_photo.body == photo, "a photo downloads as it was sent");
+        expect(request(port, "POST", "/api/download", "{\"area\":\"files\",\"name\":\"../escaped.txt\"}", json_headers)
+                       .status == 400,
+               "download traversal rejected");
+        fs::create_directory(root / "files" / "DEMO folder.txt");
+        expect(request(port, "POST", "/api/download", "{\"area\":\"files\",\"name\":\"DEMO folder.txt\"}", json_headers)
+                       .status == 400,
+               "a directory is not downloaded");
+        fs::remove(root / "files" / "DEMO folder.txt");
+        expect(request(port, "POST", "/api/download", "{\"area\":\"files\",\"name\":\"DEMO missing.txt\"}", json_headers)
+                       .status == 404,
+               "a missing file has a distinct result");
         const auto delete_body = "{\"area\":\"files\",\"name\":\"" + filename + "\",\"confirm\":true}";
         expect(request(port, "POST", "/api/delete", delete_body, "Content-Type: application/json\r\n").status == 401 &&
                    fs::exists(file_path),

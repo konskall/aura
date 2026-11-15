@@ -1,4 +1,5 @@
 #include "esp32_file_transfer.hpp"
+#include "esp_heap_caps.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_random.h"
@@ -8,6 +9,9 @@
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -45,6 +49,46 @@ public:
 
 private:
     httpd_req_t* request_;
+};
+// Every response's headers but its type. ESP-IDF keeps the pointers until it
+// sends the headers: string literals here, a writer's own strings below.
+void security_headers(httpd_req_t* req) {
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
+    httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_set_hdr(req, "Content-Security-Policy", kTransferContentSecurityPolicy);
+}
+// A download (the owner's request, 2026-11-14): its headers, then the file in
+// HTTP/1.1 chunks as it is read, since a whole file does not fit in memory. Only
+// a complete file ends with HTTP's last chunk; a cut one ends with the
+// connection, so the browser reports a failure instead of saving it.
+class ResponseWriter final : public ITransferWriter {
+public:
+    explicit ResponseWriter(httpd_req_t* request) : request_(request) {}
+    bool begin(const std::string& name, std::uint64_t bytes) override {
+        disposition_ = transfer_attachment_header(name);
+        announced_ = bytes;
+        httpd_resp_set_status(request_, "200 OK");
+        httpd_resp_set_type(request_, "application/octet-stream");
+        security_headers(request_);
+        httpd_resp_set_hdr(request_, "Content-Disposition", disposition_.c_str());
+        return true;
+    }
+    bool write(const std::uint8_t* data, std::size_t size) override {
+        if (httpd_resp_send_chunk(request_, reinterpret_cast<const char*>(data), static_cast<ssize_t>(size)) != ESP_OK)
+            return false;
+        written_ += size;
+        return true;
+    }
+    // ESP_FAIL makes the server close the connection of an unfinished download.
+    esp_err_t finish() { return written_ == announced_ ? httpd_resp_send_chunk(request_, nullptr, 0) : ESP_FAIL; }
+
+private:
+    httpd_req_t* request_;
+    std::string disposition_;
+    std::uint64_t announced_{0};
+    std::uint64_t written_{0};
 };
 bool directory(const std::string& name) {
     mkdir(name.c_str(), 0775);
@@ -108,6 +152,29 @@ TransferError Esp32TransferStorage::erase(TransferArea area, const std::string& 
     if (stat(path.c_str(), &info) != 0) return TransferError::Missing;
     if (!S_ISREG(info.st_mode)) return TransferError::Name;
     return std::remove(path.c_str()) == 0 ? TransferError::None : TransferError::Storage;
+}
+TransferError Esp32TransferStorage::open_download(TransferArea area, const std::string& name, std::uint64_t& bytes) {
+    close_download();
+    if (!transfer_filename_valid(name) || (area == TransferArea::Photos && !photo_filename_valid(name)))
+        return TransferError::Name;
+    const auto path = std::string(kRoot) + (area == TransferArea::Photos ? "/photos/" : "/files/") + name;
+    struct stat info{};
+    if (stat(path.c_str(), &info) != 0) return TransferError::Missing;
+    if (!S_ISREG(info.st_mode) || info.st_size < 0) return TransferError::Name;  // an ordinary file only
+    reading_ = std::fopen(path.c_str(), "rb");
+    if (!reading_) return TransferError::Storage;
+    bytes = static_cast<std::uint64_t>(info.st_size);
+    return TransferError::None;
+}
+int Esp32TransferStorage::read_download(std::uint8_t* data, std::size_t capacity) {
+    if (!reading_) return -1;
+    const auto n = std::fread(data, 1, capacity, reading_);
+    return n == 0 && std::ferror(reading_) ? -1 : static_cast<int>(n);
+}
+void Esp32TransferStorage::close_download() {
+    if (!reading_) return;
+    std::fclose(reading_);
+    reading_ = nullptr;
 }
 bool Esp32TransferStorage::write(const std::uint8_t* data, std::size_t size) {
     return file_ && std::fwrite(data, 1, size, file_) == size;
@@ -190,26 +257,40 @@ esp_err_t Esp32FileTransfer::request(httpd_req_t* req) {
     r.filename = header(req, "X-Aura-Filename");
     r.area = header(req, "X-Aura-Area");
     r.length = req->content_len;
-    sockaddr_in peer{};
+    // The server's socket is IPv6 (dual-stack, CONFIG_LWIP_IPV6), so an IPv4
+    // client arrives as ::ffff:a.b.c.d. Read as a plain IPv4 address it was
+    // nonsense, and every request from the owner's network was refused as "auth"
+    // (the first flash, 2026-11-14).
+    sockaddr_storage peer{};
     socklen_t size = sizeof(peer);
-    char address[64]{};
-    r.local_peer = getpeername(httpd_req_to_sockfd(req), reinterpret_cast<sockaddr*>(&peer), &size) == 0 &&
-                   inet_ntop(AF_INET, &peer.sin_addr, address, sizeof(address)) && transfer_private_ipv4(address);
+    std::string address;
+    if (getpeername(httpd_req_to_sockfd(req), reinterpret_cast<sockaddr*>(&peer), &size) == 0) {
+        if (peer.ss_family == AF_INET) {
+            char text[INET_ADDRSTRLEN]{};
+            const auto* ipv4 = reinterpret_cast<const sockaddr_in*>(&peer);
+            if (inet_ntop(AF_INET, &ipv4->sin_addr, text, sizeof(text))) address = text;
+        } else if (peer.ss_family == AF_INET6) {
+            const auto* ipv6 = reinterpret_cast<const sockaddr_in6*>(&peer);
+            std::array<std::uint8_t, 16> bytes{};
+            std::memcpy(bytes.data(), &ipv6->sin6_addr, bytes.size());
+            if (!transfer_mapped_ipv4(bytes, address)) address.clear();
+        }
+    }
+    r.local_peer = !address.empty() && transfer_private_ipv4(address);
     RequestReader reader(req);
     TransferProtocol protocol(session_, storage_, transfer_now, key_sink_, aoraton_link_);
     bool framing =
         httpd_req_get_hdr_value_len(req, "Transfer-Encoding") == 0 && httpd_req_get_hdr_value_len(req, "Expect") == 0;
     for (const char* name : {"Host", "Origin", "Authorization", "Content-Type", "X-Aura-Filename", "X-Aura-Area"})
         framing = framing && httpd_req_get_hdr_value_len(req, name) <= 512;
-    const auto result = framing ? protocol.handle(r, reader) : TransferResponse{400, "{\"error\":\"name\"}", false};
+    ResponseWriter writer(req);
+    const auto result =
+        framing ? protocol.handle(r, reader, &writer) : TransferResponse{400, "{\"error\":\"name\"}", false};
+    if (result.sent) return writer.finish();
     const auto status = std::to_string(result.status) + " Response";
     httpd_resp_set_status(req, status.c_str());
     httpd_resp_set_type(req, result.html ? "text/html; charset=utf-8" : "application/json; charset=utf-8");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
-    httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
-    httpd_resp_set_hdr(req, "Connection", "close");
-    httpd_resp_set_hdr(req, "Content-Security-Policy", kTransferContentSecurityPolicy);
+    security_headers(req);
     return httpd_resp_send(req, result.body.data(), static_cast<ssize_t>(result.body.size()));
 }
 void Esp32FileTransfer::manage() {
@@ -234,7 +315,16 @@ void Esp32FileTransfer::manage() {
         config.server_port = 8788;
         config.ctrl_port = 32778;
         config.stack_size = 16384;
+        // In PSRAM: internal RAM ran out on the first flash (2026-11-14). The
+        // handlers touch NVS only through the key store and the Aoraton link,
+        // which run it on an internal stack (aura_board::run_on_internal_stack).
+        config.task_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
         config.max_open_sockets = 2;
+        // With both connections taken (a browser keeps idle ones open, and its
+        // fetch(credentials: 'omit') opens another), the server stops listening
+        // unless it may close the least recently used one: the login's request
+        // then waited forever (the first flash, 2026-11-14).
+        config.lru_purge_enable = true;
         config.max_uri_handlers = 13;
         config.max_resp_headers = 8;
         config.max_req_hdr_len = 8192;

@@ -16,6 +16,7 @@
 #include "aura/provider.hpp"
 #include "aura/sounds.hpp"
 #include "aura/voice.hpp"
+#include "aura_board_chips.hpp"
 #include "esp32_microphone.hpp"
 #include "esp32_motion.hpp"
 #include "esp32_ota.hpp"
@@ -105,6 +106,8 @@ public:
     }
     // Where the transfer session's POST /api/keys puts the assistant's keys.
     void set_cloud_key_sink(ICloudKeySink* sink) { transfer_.set_key_sink(sink); }
+    // The PMU, for the PWR key and switching off; null without one.
+    void set_power_key(Axp2101Power* power) { power_ = power; }
     // The PC-assisted aoraton.com sign-in over the same session (ADR 0010).
     void set_aoraton_link(IAoratonLinkEndpoint* link) { transfer_.set_aoraton_link(link); }
     // What the phone sign-in follows: File transfer's server (the UI thread).
@@ -122,6 +125,12 @@ public:
 private:
     std::int64_t now_minute() const;
     std::uint64_t now_ms() const;
+    // The bar of the screen a confirmed action shows while it finishes (the UI's
+    // show_system_progress), outside the display lock.
+    void system_progress(int percent);
+    // That screen for `ms` more: the bar glides to `percent`, the core turns.
+    void hold_system_screen(int percent, std::uint32_t ms);
+    int system_percent_{0};
     void begin_note();
     void finish_note();
     void save();
@@ -152,6 +161,9 @@ private:
     OtaUpdateModel ota_;
     DisplayPowerModel display_;
     ImuGestureDetector imu_;
+    // The screen turns with the device (the owner's request, 2026-11-14).
+    OrientationTracker orientation_;
+    int applied_rotation_{0};
     VoiceRecorder recorder_;
     bool recording_question_{false};
     std::function<void(std::vector<std::uint8_t>, bool)> question_sink_;
@@ -189,8 +201,18 @@ private:
     bool recording_note_{false};
     bool image_confirmed_{false};
     int applied_brightness_{-1};
-    bool button_down_{false};
-    std::uint64_t button_since_ms_{0};
+    // LVGL's inactive time at the last poll: a smaller value means a touch.
+    std::uint32_t last_inactive_ms_{0};
+    // The volume keys: pressed since, and the next repeat while held.
+    struct VolumeKey {
+        bool down{false};
+        std::uint64_t next_ms{0};
+    };
+    void poll_volume_key(VolumeKey& key, bool down, int direction, std::uint64_t now);
+    VolumeKey volume_down_key_;
+    VolumeKey volume_up_key_;
+    Axp2101Power* power_{nullptr};
+    std::uint64_t power_key_polled_ms_{0};
     AlarmRinger alarm_ringer_;  // one melody pass per cycle, through mute
     MessageChimeGate message_chime_;
     SoundSettings sound_{};

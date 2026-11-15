@@ -153,6 +153,9 @@ add_library(aura_ui STATIC
     shared/assets/fonts/aura_font_manrope_extralight_96.c
     shared/assets/fonts/aura_font_robotoflex_light_cond_96.c
     shared/assets/fonts/aura_font_space_medium_26.c
+    shared/assets/fonts/aura_font_plex_light_150.c
+    shared/assets/fonts/aura_font_notoserif_extralight_164.c
+    shared/assets/fonts/aura_font_manrope_extralight_148.c
 )
 target_include_directories(aura_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/shared/ui/include

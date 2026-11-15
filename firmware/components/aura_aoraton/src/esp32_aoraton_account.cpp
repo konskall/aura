@@ -1,5 +1,7 @@
 #include "aura/esp32_aoraton_account.hpp"
 
+#include "aura_internal_stack.hpp"
+
 #include "aura/aoraton_account.hpp"
 #include "aura/aoraton_realtime.hpp"
 #include "aura/aoraton_self_test.hpp"
@@ -78,7 +80,10 @@ std::thread spawn(const char* name, std::size_t stack, std::size_t priority, int
     config.stack_size = stack;
     config.prio = priority;
     config.pin_to_core = core;
-    config.stack_alloc_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;  // NVS writes need an internal stack
+    // In PSRAM: internal RAM ran out on the first flash (2026-11-14). The
+    // threads reach NVS only through the functions below, which run on an
+    // internal stack (aura_board::run_on_internal_stack).
+    config.stack_alloc_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
     esp_pthread_set_cfg(&config);
     std::thread thread(std::move(body));
     if (had) {
@@ -138,6 +143,7 @@ bool Esp32AoratonAccountCrypto::sha256(const std::uint8_t* data, std::size_t siz
 bool Esp32AoratonAccountCrypto::pbkdf2_sha256(const std::string& passphrase, const std::vector<std::uint8_t>& salt,
                                               std::uint32_t iterations, std::array<std::uint8_t, 32>& key) {
     if (iterations == 0 || salt.size() > 1024 || passphrase.size() > 4096) return false;
+    const std::int64_t started_us = esp_timer_get_time();
     const mbedtls_md_info_t* sha = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
     if (sha == nullptr) return false;
     mbedtls_md_context_t context;
@@ -159,6 +165,8 @@ bool Esp32AoratonAccountCrypto::pbkdf2_sha256(const std::string& passphrase, con
         if (round % kPbkdf2Slice == 0) vTaskDelay(1);  // let the idle task and the UI run
     }
     mbedtls_md_free(&context);
+    ESP_LOGI(kTag, "vault PBKDF2: %u iterations in %lld ms", static_cast<unsigned>(iterations),
+             static_cast<long long>((esp_timer_get_time() - started_us) / 1000));
     if (ok) key = sum;
     mbedtls_platform_zeroize(block.data(), block.size());
     mbedtls_platform_zeroize(sum.data(), sum.size());
@@ -188,45 +196,123 @@ bool Esp32AoratonAccountCrypto::aes_gcm_open(const std::array<std::uint8_t, 32>&
 
 // ---- HTTP -------------------------------------------------------------------
 
+namespace {
+
+// scheme://host[:port]: requests to the same origin share the kept connection.
+std::string origin_of(const std::string& url) {
+    const auto host_end = url.find('/', 8);
+    return host_end == std::string::npos ? url : url.substr(0, host_end);
+}
+
+}  // namespace
+
+Esp32AoratonHttp::~Esp32AoratonHttp() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    drop();
+}
+
+void Esp32AoratonHttp::drop() {
+    if (client_ == nullptr) return;
+    auto client = static_cast<esp_http_client_handle_t>(client_);
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    client_ = nullptr;
+    origin_.clear();
+    headers_.clear();
+}
+
 AoratonHttpResponse Esp32AoratonHttp::send(const AoratonHttpRequest& request) {
+    std::lock_guard<std::mutex> lock(mutex_);
     AoratonHttpResponse response;
+    // Each request's path (never its query, which can name a room), status,
+    // size and time, to see where a slow sync spends it on the board.
+    const std::int64_t started_us = esp_timer_get_time();
+    struct Timing {
+        const AoratonHttpRequest& request;
+        const AoratonHttpResponse& response;
+        std::int64_t started_us;
+        ~Timing() {
+            const auto host_end = request.url.find('/', 8);
+            const auto query = request.url.find('?');
+            const std::string path = host_end == std::string::npos ? std::string("/") :
+                request.url.substr(host_end, query == std::string::npos ? std::string::npos : query - host_end);
+            ESP_LOGI(kTag, "http %s %s -> %d, %u bytes, %lld ms", request.method.c_str(), path.c_str(),
+                     response.status, static_cast<unsigned>(response.body.size()),
+                     static_cast<long long>((esp_timer_get_time() - started_us) / 1000));
+        }
+    } timing{request, response, started_us};
     bool known = false;
     const auto method = method_of(request.method, known);
     if (!known || request.url.rfind("https://", 0) != 0) return response;
-    esp_http_client_config_t config{};
-    config.url = request.url.c_str();
-    config.method = method;
-    config.timeout_ms = request.timeout_ms != 0 ? static_cast<int>(request.timeout_ms) : 15000;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
-    config.buffer_size = 4096;
-    config.buffer_size_tx = 6144;  // a session JWT and the anon key travel in headers
-    config.keep_alive_enable = false;
-    config.disable_auto_redirect = true;
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (client == nullptr) return response;
-    esp_http_client_set_header(client, "Accept", "application/json");
-    esp_http_client_set_header(client, "Accept-Encoding", "identity");
+    // A connection kept since the last request to this server answers at once.
+    // One the server has closed meanwhile fails before any answer: the request
+    // goes again, once, on a new connection.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        const bool reuse = client_ != nullptr && origin_ == origin_of(request.url);
+        bool transport_failed = false;
+        response = exchange(request, static_cast<int>(method), reuse, transport_failed);
+        if (!transport_failed || !reuse) break;
+    }
+    return response;
+}
+
+AoratonHttpResponse Esp32AoratonHttp::exchange(const AoratonHttpRequest& request, int method, bool reuse,
+                                               bool& transport_failed) {
+    AoratonHttpResponse response;
+    transport_failed = false;
+    const int timeout_ms = request.timeout_ms != 0 ? static_cast<int>(request.timeout_ms) : 15000;
+    esp_http_client_handle_t client = nullptr;
+    if (reuse) {
+        client = static_cast<esp_http_client_handle_t>(client_);
+        for (const auto& name : headers_) esp_http_client_delete_header(client, name.c_str());
+        if (esp_http_client_set_url(client, request.url.c_str()) != ESP_OK) {
+            drop();
+            transport_failed = true;
+            return response;
+        }
+        esp_http_client_set_method(client, static_cast<esp_http_client_method_t>(method));
+        esp_http_client_set_timeout_ms(client, timeout_ms);
+    } else {
+        drop();
+        esp_http_client_config_t config{};
+        config.url = request.url.c_str();
+        config.method = static_cast<esp_http_client_method_t>(method);
+        config.timeout_ms = timeout_ms;
+        config.crt_bundle_attach = esp_crt_bundle_attach;
+        config.buffer_size = 4096;
+        config.buffer_size_tx = 6144;  // a session JWT and the anon key travel in headers
+        config.keep_alive_enable = true;
+        config.disable_auto_redirect = true;
+        client = esp_http_client_init(&config);
+        if (client == nullptr) return response;
+        client_ = client;
+        origin_ = origin_of(request.url);
+        esp_http_client_set_header(client, "Accept", "application/json");
+        esp_http_client_set_header(client, "Accept-Encoding", "identity");
+    }
+    headers_.clear();
     for (const auto& header : request.headers) {
         esp_http_client_set_header(client, header.first.c_str(), header.second.c_str());
+        headers_.push_back(header.first);
     }
-    const auto finish = [&](bool failed) {
-        esp_http_client_close(client);
-        esp_http_client_cleanup(client);
-        if (failed) {
-            response.status = 0;
-            wipe(response.body);
-        }
+    // A failed exchange leaves the rest of itself on the connection: it is
+    // closed, never reused. `transport`: it failed before the server answered.
+    const auto fail = [&](bool transport) {
+        drop();
+        transport_failed = transport;
+        response.status = 0;
+        wipe(response.body);
         return response;
     };
-    if (esp_http_client_open(client, static_cast<int>(request.body.size())) != ESP_OK) return finish(true);
+    if (esp_http_client_open(client, static_cast<int>(request.body.size())) != ESP_OK) return fail(true);
     for (std::size_t sent = 0; sent < request.body.size();) {
         const int written =
             esp_http_client_write(client, request.body.data() + sent, static_cast<int>(request.body.size() - sent));
-        if (written <= 0) return finish(true);
+        if (written <= 0) return fail(true);
         sent += static_cast<std::size_t>(written);
     }
     const std::int64_t length = esp_http_client_fetch_headers(client);
-    if (length < 0) return finish(true);
+    if (length < 0) return fail(true);
     response.status = esp_http_client_get_status_code(client);
     const std::size_t limit = request.max_response_bytes != 0
                                   ? std::min(request.max_response_bytes, kMaxDownloadBytes)
@@ -235,7 +321,7 @@ AoratonHttpResponse Esp32AoratonHttp::send(const AoratonHttpRequest& request) {
     if (length > 0) {
         const auto expected = static_cast<std::size_t>(length);
         if (expected > limit || heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < expected + 64 * 1024)
-            return finish(true);
+            return fail(false);
         response.body.reserve(expected);
     }
     char buffer[2048];
@@ -246,12 +332,14 @@ AoratonHttpResponse Esp32AoratonHttp::send(const AoratonHttpRequest& request) {
             (response.body.size() + static_cast<std::size_t>(read) > response.body.capacity() &&
              heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < 2 * response.body.size() + 64 * 1024)) {
             mbedtls_platform_zeroize(buffer, sizeof(buffer));
-            return finish(true);
+            return fail(false);
         }
         response.body.append(buffer, static_cast<std::size_t>(read));
     }
     mbedtls_platform_zeroize(buffer, sizeof(buffer));
-    return finish(!esp_http_client_is_complete_data_received(client));
+    if (!esp_http_client_is_complete_data_received(client)) return fail(false);
+    // Complete: the connection stays open for the next request.
+    return response;
 }
 
 // ---- microSD cache -------------------------------------------------------------
@@ -339,78 +427,90 @@ void Esp32AoratonCacheFiles::remove(const std::string& name) {
 }
 
 // ---- NVS --------------------------------------------------------------------
+// The account's threads keep their stacks in PSRAM; NVS runs on an internal
+// stack (aura_board::run_on_internal_stack), as the flash driver requires.
 
 bool Esp32AoratonSecretStore::load(AoratonStoredSecrets& secrets) {
-    secrets.clear();
-    nvs_handle_t handle = 0;
-    if (nvs_open(kNamespace, NVS_READONLY, &handle) != ESP_OK) return false;
-    std::size_t size = 0;
-    bool ok = nvs_get_blob(handle, "secrets", nullptr, &size) == ESP_OK && size > 0 && size <= 16384;
-    std::vector<std::uint8_t> record(ok ? size : 0);
-    ok = ok && nvs_get_blob(handle, "secrets", record.data(), &size) == ESP_OK && size == record.size() &&
-         aoraton_decode_secrets(record, secrets);
-    nvs_close(handle);
-    wipe(record);
-    return ok;
+    return aura_board::run_on_internal_stack([&]() -> bool {
+        secrets.clear();
+        nvs_handle_t handle = 0;
+        if (nvs_open(kNamespace, NVS_READONLY, &handle) != ESP_OK) return false;
+        std::size_t size = 0;
+        bool ok = nvs_get_blob(handle, "secrets", nullptr, &size) == ESP_OK && size > 0 && size <= 16384;
+        std::vector<std::uint8_t> record(ok ? size : 0);
+        ok = ok && nvs_get_blob(handle, "secrets", record.data(), &size) == ESP_OK && size == record.size() &&
+             aoraton_decode_secrets(record, secrets);
+        nvs_close(handle);
+        wipe(record);
+        return ok;
+    });
 }
 
 bool Esp32AoratonSecretStore::save(const AoratonStoredSecrets& secrets) {
-    std::vector<std::uint8_t> record;
-    if (!aoraton_encode_secrets(secrets, record)) return false;
-    nvs_handle_t handle = 0;
-    bool ok = nvs_open(kNamespace, NVS_READWRITE, &handle) == ESP_OK;
-    if (ok) {
-        ok = nvs_set_blob(handle, "secrets", record.data(), record.size()) == ESP_OK && nvs_commit(handle) == ESP_OK;
-        nvs_close(handle);
-    }
-    wipe(record);
-    return ok;
+    return aura_board::run_on_internal_stack([&]() -> bool {
+        std::vector<std::uint8_t> record;
+        if (!aoraton_encode_secrets(secrets, record)) return false;
+        nvs_handle_t handle = 0;
+        bool ok = nvs_open(kNamespace, NVS_READWRITE, &handle) == ESP_OK;
+        if (ok) {
+            ok = nvs_set_blob(handle, "secrets", record.data(), record.size()) == ESP_OK && nvs_commit(handle) == ESP_OK;
+            nvs_close(handle);
+        }
+        wipe(record);
+        return ok;
+    });
 }
 
 bool Esp32AoratonSecretStore::erase() {
-    nvs_handle_t handle = 0;
-    if (nvs_open(kNamespace, NVS_READWRITE, &handle) != ESP_OK) return false;
-    const esp_err_t erased = nvs_erase_key(handle, "secrets");
-    const bool ok = (erased == ESP_OK || erased == ESP_ERR_NVS_NOT_FOUND) && nvs_commit(handle) == ESP_OK;
-    nvs_close(handle);
-    return ok;
+    return aura_board::run_on_internal_stack([&]() -> bool {
+        nvs_handle_t handle = 0;
+        if (nvs_open(kNamespace, NVS_READWRITE, &handle) != ESP_OK) return false;
+        const esp_err_t erased = nvs_erase_key(handle, "secrets");
+        const bool ok = (erased == ESP_OK || erased == ESP_ERR_NVS_NOT_FOUND) && nvs_commit(handle) == ESP_OK;
+        nvs_close(handle);
+        return ok;
+    });
 }
 
 bool esp32_aoraton_load_config(AoratonLinkConfig& config) {
-    config = {};
-    nvs_handle_t handle = 0;
-    if (nvs_open(kNamespace, NVS_READONLY, &handle) != ESP_OK) return false;
-    const auto read = [&](const char* key, std::string& value) {
-        std::size_t size = 0;
-        if (nvs_get_str(handle, key, nullptr, &size) != ESP_OK || size == 0 || size > 4000) return false;
-        std::string text(size, '\0');
-        if (nvs_get_str(handle, key, &text[0], &size) != ESP_OK) return false;
-        text.resize(size - 1);
-        value = std::move(text);
-        return true;
-    };
-    std::uint8_t inco = 0;
-    const bool ok = read("url", config.base_url) && read("anon", config.anon_key) &&
-                    nvs_get_u8(handle, "inco", &inco) == ESP_OK;
-    nvs_close(handle);
-    config.inco_enabled = inco == 1;
-    if (!ok || !aoraton_link_config_valid(config)) {
-        wipe(config.anon_key);
+    return aura_board::run_on_internal_stack([&]() -> bool {
         config = {};
-        return false;
-    }
-    return true;
+        nvs_handle_t handle = 0;
+        if (nvs_open(kNamespace, NVS_READONLY, &handle) != ESP_OK) return false;
+        const auto read = [&](const char* key, std::string& value) {
+            std::size_t size = 0;
+            if (nvs_get_str(handle, key, nullptr, &size) != ESP_OK || size == 0 || size > 4000) return false;
+            std::string text(size, '\0');
+            if (nvs_get_str(handle, key, &text[0], &size) != ESP_OK) return false;
+            text.resize(size - 1);
+            value = std::move(text);
+            return true;
+        };
+        std::uint8_t inco = 0;
+        const bool ok = read("url", config.base_url) && read("anon", config.anon_key) &&
+                        nvs_get_u8(handle, "inco", &inco) == ESP_OK;
+        nvs_close(handle);
+        config.inco_enabled = inco == 1;
+        if (!ok || !aoraton_link_config_valid(config)) {
+            wipe(config.anon_key);
+            config = {};
+            return false;
+        }
+        return true;
+    });
 }
 
 bool esp32_aoraton_save_config(const AoratonLinkConfig& config) {
-    if (!aoraton_link_config_valid(config)) return false;
-    nvs_handle_t handle = 0;
-    if (nvs_open(kNamespace, NVS_READWRITE, &handle) != ESP_OK) return false;
-    const bool ok = nvs_set_str(handle, "url", config.base_url.c_str()) == ESP_OK &&
-                    nvs_set_str(handle, "anon", config.anon_key.c_str()) == ESP_OK &&
-                    nvs_set_u8(handle, "inco", config.inco_enabled ? 1 : 0) == ESP_OK && nvs_commit(handle) == ESP_OK;
-    nvs_close(handle);
-    return ok;
+    return aura_board::run_on_internal_stack([&]() -> bool {
+        if (!aoraton_link_config_valid(config)) return false;
+        nvs_handle_t handle = 0;
+        if (nvs_open(kNamespace, NVS_READWRITE, &handle) != ESP_OK) return false;
+        const bool ok = nvs_set_str(handle, "url", config.base_url.c_str()) == ESP_OK &&
+                        nvs_set_str(handle, "anon", config.anon_key.c_str()) == ESP_OK &&
+                        nvs_set_u8(handle, "inco", config.inco_enabled ? 1 : 0) == ESP_OK && nvs_commit(handle) == ESP_OK;
+        nvs_close(handle);
+        return ok;
+    });
 }
 
 // ---- realtime ---------------------------------------------------------------

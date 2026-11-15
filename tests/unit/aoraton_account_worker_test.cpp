@@ -1062,6 +1062,32 @@ int main() {
                "sign out erases the store and the session");
     }
 
+    // A stored session restored before the network is up (the first flash,
+    // 2026-11-14): the owner, still signed in, saw "Sign in with Google" for half
+    // a minute and reset the device. Now the account shows as signed in and
+    // connecting at once, and tries again within seconds, not half a minute.
+    {
+        Rig rig;
+        rig.sign_in();
+        const std::string stored = rig.store.refresh;
+        Rig restarted;
+        restarted.server.generation = rig.server.generation;
+        restarted.server.refresh = rig.server.refresh;
+        restarted.store.present = true;
+        restarted.store.refresh = stored;
+        restarted.server.network_down = true;
+        restarted.worker.start(restarted.now_ms, 1792760000);
+        restarted.pump();
+        expect(restarted.service.snapshot().pairing == AoratonPairingState::Paired &&
+                   restarted.service.snapshot().connection == AoratonConnectionState::Connecting,
+               "a stored session shows as signed in and connecting while the network is down");
+        restarted.server.network_down = false;
+        restarted.advance(5000);
+        expect(restarted.service.snapshot().pairing == AoratonPairingState::Paired &&
+                   restarted.service.snapshot().connection == AoratonConnectionState::Connected,
+               "it connects within seconds once the network is up");
+    }
+
     // sign_in_times_out and a cancelled / rejected exchange
     {
         Rig rig;

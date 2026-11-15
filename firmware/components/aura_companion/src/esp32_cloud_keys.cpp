@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "aura_internal_stack.hpp"
 #include "nvs.h"
 
 namespace aura::firmware {
@@ -31,25 +32,34 @@ bool write_key(nvs_handle_t handle, const char* name, const std::string& value) 
 
 }  // namespace
 
+// NVS on an internal stack: the file transfer's server, which stores the keys,
+// keeps its stack in PSRAM (aura_board::run_on_internal_stack).
 CloudKeys Esp32CloudKeyStore::load() const {
     CloudKeys keys;
-    nvs_handle_t handle = 0;
-    if (nvs_open(kNamespace, NVS_READONLY, &handle) != ESP_OK) return keys;
-    keys.groq_api_key = read_key(handle, "groq");
-    keys.azure_speech_key = read_key(handle, "azure");
-    keys.azure_speech_region = read_key(handle, "region");
-    nvs_close(handle);
+    aura_board::run_on_internal_stack([&]() -> bool {
+        nvs_handle_t handle = 0;
+        if (nvs_open(kNamespace, NVS_READONLY, &handle) != ESP_OK) return false;
+        keys.groq_api_key = read_key(handle, "groq");
+        keys.azure_speech_key = read_key(handle, "azure");
+        keys.azure_speech_region = read_key(handle, "region");
+        nvs_close(handle);
+        return true;
+    });
     if (!cloud_keys_valid(keys)) wipe_cloud_keys(keys);
     return keys;
 }
 
 bool Esp32CloudKeyStore::store(const CloudKeys& keys) {
     if (!cloud_keys_valid(keys)) return false;
-    nvs_handle_t handle = 0;
-    if (nvs_open(kNamespace, NVS_READWRITE, &handle) != ESP_OK) return false;
-    const bool ok = write_key(handle, "groq", keys.groq_api_key) && write_key(handle, "azure", keys.azure_speech_key) &&
-                    write_key(handle, "region", keys.azure_speech_region) && nvs_commit(handle) == ESP_OK;
-    nvs_close(handle);
+    const bool ok = aura_board::run_on_internal_stack([&]() -> bool {
+        nvs_handle_t handle = 0;
+        if (nvs_open(kNamespace, NVS_READWRITE, &handle) != ESP_OK) return false;
+        const bool written = write_key(handle, "groq", keys.groq_api_key) &&
+                             write_key(handle, "azure", keys.azure_speech_key) &&
+                             write_key(handle, "region", keys.azure_speech_region) && nvs_commit(handle) == ESP_OK;
+        nvs_close(handle);
+        return written;
+    });
     if (ok) generation_.fetch_add(1);
     return ok;
 }

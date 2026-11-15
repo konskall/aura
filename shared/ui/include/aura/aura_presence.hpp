@@ -25,6 +25,11 @@ public:
     virtual void set_reduced_motion(bool reduced) noexcept = 0;
     // Advances the animation; true when a new frame was drawn.
     virtual bool tick(std::uint32_t elapsed_ms) = 0;
+    // For a presence drawn on a worker: how long until it wants its next tick
+    // (0: now), so the board's loop wakes for it; no_tick leaves it to the
+    // UI's own pace.
+    static constexpr std::uint32_t no_tick = 0xFFFFFFFFU;
+    virtual std::uint32_t next_tick_ms() const noexcept { return no_tick; }
     virtual lv_obj_t* object() const noexcept = 0;
     virtual std::uint64_t frame_count() const noexcept = 0;
     virtual std::size_t buffer_bytes() const noexcept = 0;

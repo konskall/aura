@@ -72,6 +72,15 @@ bool transfer_private_ipv4(std::string_view s) {
     return p[0] == 10 || (p[0] == 172 && p[1] >= 16 && p[1] <= 31) || (p[0] == 192 && p[1] == 168) ||
            (p[0] == 127 && p[1] == 0 && p[2] == 0 && p[3] == 1);
 }
+bool transfer_mapped_ipv4(const std::array<std::uint8_t, 16>& ipv6, std::string& ipv4) {
+    for (std::size_t index = 0; index < 10; ++index) {
+        if (ipv6[index] != 0) return false;
+    }
+    if (ipv6[10] != 0xFF || ipv6[11] != 0xFF) return false;
+    ipv4 = std::to_string(ipv6[12]) + "." + std::to_string(ipv6[13]) + "." + std::to_string(ipv6[14]) + "." +
+           std::to_string(ipv6[15]);
+    return true;
+}
 bool transfer_address_valid(std::string_view s) {
     if (s.size() > 64 || s.substr(0, 7) != "http://") return false;
     s.remove_prefix(7);
@@ -567,7 +576,59 @@ TransferResponse TransferProtocol::phone_request(const TransferRequest& r) {
     return response;
 }
 
-TransferResponse TransferProtocol::handle(const TransferRequest& r, ITransferReader& reader) {
+std::string transfer_attachment_header(std::string_view name) {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string ascii;
+    std::string exact;
+    for (const char value : name) {
+        const auto c = static_cast<unsigned char>(value);
+        // One '_' for each character that is not ASCII, not one per byte.
+        if (c < 0x80) ascii += value;
+        else if ((c & 0xC0) != 0x80) ascii += '_';
+        const bool plain = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                           (c < 0x80 && std::string_view("!#$&+-.^_`|~").find(value) != std::string_view::npos);
+        if (plain) {
+            exact += value;
+        } else {
+            exact += '%';
+            exact += kHex[c >> 4];
+            exact += kHex[c & 15];
+        }
+    }
+    return "attachment; filename=\"" + ascii + "\"; filename*=UTF-8''" + exact;
+}
+
+TransferResponse TransferProtocol::download(TransferArea area, const std::string& name, std::uint64_t ticket,
+                                            ITransferWriter& writer) {
+    std::uint64_t bytes = 0;
+    const auto error = storage_.open_download(area, name, bytes);
+    if (error != TransferError::None) {
+        return error_response(error == TransferError::Missing ? 404 : (error == TransferError::Name ? 400 : 507),
+                              error);
+    }
+    struct Close {
+        ITransferStorage& storage;
+        ~Close() { storage.close_download(); }
+    } close{storage_};
+    // From here on the writer has the response: a cut connection, a read error
+    // or the end of the session leaves the PC with fewer bytes than announced.
+    const TransferResponse sent{200, {}, false, true};
+    if (!writer.begin(name, bytes)) return sent;
+    std::array<std::uint8_t, 4096> chunk{};
+    std::uint64_t written = 0;
+    const auto started = clock_();
+    while (written < bytes) {
+        if (!session_.valid(ticket, clock_()) || clock_() - started > 300000) break;
+        const auto wanted = static_cast<std::size_t>(std::min<std::uint64_t>(chunk.size(), bytes - written));
+        const int n = storage_.read_download(chunk.data(), wanted);
+        if (n <= 0 || static_cast<std::size_t>(n) > wanted) break;
+        if (!writer.write(chunk.data(), static_cast<std::size_t>(n))) break;
+        written += static_cast<unsigned>(n);
+    }
+    return sent;
+}
+
+TransferResponse TransferProtocol::handle(const TransferRequest& r, ITransferReader& reader, ITransferWriter* writer) {
     if (!r.local_peer) return error_response(403, TransferError::Auth);
     const bool phone = aoraton_ && r.method == "GET" && phone_route(r.path);
     session_.tick(clock_());
@@ -601,11 +662,11 @@ TransferResponse TransferProtocol::handle(const TransferRequest& r, ITransferRea
     }
     if (r.path == "/api/keys" && keys_) return store_keys(r, reader);
     if (r.path.rfind("/api/aoraton/", 0) == 0 && aoraton_) return aoraton_request(r, reader);
-    if (r.path != "/api/upload" && r.path != "/api/files" && r.path != "/api/delete")
+    if (r.path != "/api/upload" && r.path != "/api/files" && r.path != "/api/delete" && r.path != "/api/download")
         return error_response(404, TransferError::Name);
     const auto ticket = session_.authorize(r.authorization, clock_());
     if (!ticket) return error_response(401, TransferError::Auth);
-    if (r.path == "/api/files" || r.path == "/api/delete") {
+    if (r.path == "/api/files" || r.path == "/api/delete" || r.path == "/api/download") {
         if (r.length < 2 || r.length > 768 || r.content_type != "application/json")
             return error_response(400, TransferError::Name);
         std::string body(static_cast<std::size_t>(r.length), '\0');
@@ -640,6 +701,13 @@ TransferResponse TransferProtocol::handle(const TransferRequest& r, ITransferRea
             return {200, std::move(response), false};
         }
         const auto name = json->string("name");
+        if (r.path == "/api/download") {
+            if (json->size() != 2 || !name || !transfer_filename_valid(*name) ||
+                (area == TransferArea::Photos && !photo_filename_valid(*name)))
+                return error_response(400, TransferError::Name);
+            if (!writer) return error_response(501, TransferError::Storage);
+            return download(area, *name, ticket, *writer);
+        }
         if (json->size() != 3 || !name || json->boolean("confirm") != true || !transfer_filename_valid(*name) ||
             (area == TransferArea::Photos && !photo_filename_valid(*name)))
             return error_response(400, TransferError::Name);

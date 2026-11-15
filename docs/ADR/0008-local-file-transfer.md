@@ -51,3 +51,22 @@ the source file and aspect ratio. Device byte/decode limits remain unchanged;
 resolution and byte-size errors have distinct codes. JPEG BGR conversion and
 MCU sampling are shared across simulator and firmware. Reset still preserves
 owner files. Hardware color/timing/removal checks remain NEEDS HARDWARE.
+
+## Owner amendment: downloads (2026-11-14)
+
+On the first board the owner asked to download files as well as send them. The
+same authenticated service now offers POST `/api/download` with exactly an
+allowed area (`photos` or `files`) and a validated name, and the browser page has
+a Download button beside each listed file. It needs the same bearer, Host/Origin
+and private-peer checks as every other call; there is still no GET for files, no
+other directory and no listing beyond the two areas. Only an ordinary file is
+sent: a folder, link or junction is refused, a missing name is 404.
+
+The file is streamed in 4 KiB chunks while it is read; it never sits whole in
+memory. The response is `application/octet-stream` with an attachment
+Content-Disposition (an ASCII name and the exact UTF-8 one), `nosniff`,
+`no-store` and the same CSP, so the browser saves it and never renders it in the
+page's origin. The session's end, a read error or a lost connection stops it:
+the simulator announces the length and the device never sends HTTP's final
+chunk, so the browser reports a failure instead of saving a cut file. Downloads
+do not count against the 128 uploads and change nothing on the device.

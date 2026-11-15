@@ -93,22 +93,45 @@ private:
     std::size_t position_{0};
     std::uint64_t consumed_{0};
 };
+bool send_all(SOCKET socket, const char* data, std::size_t size) {
+    std::size_t done = 0;
+    while (done < size) {
+        const int n = send(socket, data + done, static_cast<int>(std::min<std::size_t>(size - done, 65536)), 0);
+        if (n <= 0) return false;
+        done += static_cast<unsigned>(n);
+    }
+    return true;
+}
+// The headers every response carries, after its own.
+std::string common_headers() {
+    return "Connection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: "
+           "no-referrer\r\nContent-Security-Policy: " +
+           std::string(kTransferContentSecurityPolicy) + "\r\n\r\n";
+}
 void respond(SOCKET socket, const TransferResponse& response) {
-    const auto body = response.body;
     const auto message =
         "HTTP/1.1 " + std::to_string(response.status) + " Response\r\nContent-Type: " +
         std::string(response.html ? "text/html; charset=utf-8" : "application/json; charset=utf-8") +
-        "\r\nContent-Length: " + std::to_string(body.size()) +
-        "\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: " +
-        std::string(kTransferContentSecurityPolicy) + "\r\n\r\n" +
-        body;
-    std::size_t done = 0;
-    while (done < message.size()) {
-        const int n = send(socket, message.data() + done, static_cast<int>(message.size() - done), 0);
-        if (n <= 0) break;
-        done += static_cast<unsigned>(n);
-    }
+        "\r\nContent-Length: " + std::to_string(response.body.size()) + "\r\n" + common_headers() + response.body;
+    send_all(socket, message.data(), message.size());
 }
+// A download: an attachment of a known length, sent as the file is read.
+class SocketWriter final : public ITransferWriter {
+public:
+    explicit SocketWriter(SOCKET socket) : socket_(socket) {}
+    bool begin(const std::string& name, std::uint64_t bytes) override {
+        const auto head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: " +
+                          std::to_string(bytes) + "\r\nContent-Disposition: " + transfer_attachment_header(name) +
+                          "\r\n" + common_headers();
+        return send_all(socket_, head.data(), head.size());
+    }
+    bool write(const std::uint8_t* data, std::size_t size) override {
+        return send_all(socket_, reinterpret_cast<const char*>(data), size);
+    }
+
+private:
+    SOCKET socket_;
+};
 void serve(SOCKET socket, TransferSession& session, DesktopTransferStorage& storage, IAoratonLinkEndpoint* aoraton) {
     const DWORD timeout = 1000;
     setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
@@ -134,7 +157,9 @@ void serve(SOCKET socket, TransferSession& session, DesktopTransferStorage& stor
                          inet_ntop(AF_INET, &peer.sin_addr, peer_address, sizeof(peer_address)) &&
                          transfer_private_ipv4(peer_address);
     TransferProtocol protocol(session, storage, now_ms, nullptr, aoraton);
-    respond(socket, protocol.handle(request, reader));
+    SocketWriter writer(socket);
+    const auto response = protocol.handle(request, reader, &writer);
+    if (!response.sent) respond(socket, response);
     // On an early rejection the browser may still be sending its body. Send
     // a graceful FIN and briefly drain it so a TCP reset cannot hide the JSON
     // error response (notably an existing filename) from XMLHttpRequest.
@@ -154,7 +179,48 @@ void serve(SOCKET socket, TransferSession& session, DesktopTransferStorage& stor
     }
 }
 }  // namespace
-DesktopTransferStorage::~DesktopTransferStorage() { cancel(); }
+DesktopTransferStorage::~DesktopTransferStorage() {
+    cancel();
+    close_download();
+}
+TransferError DesktopTransferStorage::open_download(TransferArea area, const std::string& name, std::uint64_t& bytes) {
+    close_download();
+    if (!transfer_filename_valid(name) || (area == TransferArea::Photos && !photo_filename_valid(name)))
+        return TransferError::Name;
+    const auto folder = root_ / (area == TransferArea::Photos ? "photos" : "files");
+    if (root_.empty() || !directory(folder)) return TransferError::Storage;
+    const auto path = folder / std::filesystem::u8path(name);
+    const auto attributes = GetFileAttributesW(path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        const auto error = GetLastError();
+        return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? TransferError::Missing
+                                                                              : TransferError::Storage;
+    }
+    // A regular file only: never a folder, a link or a junction.
+    if (attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) return TransferError::Name;
+    const auto file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                  FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return TransferError::Storage;
+    LARGE_INTEGER size{};
+    if (!normal_file(file) || !GetFileSizeEx(file, &size) || size.QuadPart < 0) {
+        CloseHandle(file);
+        return TransferError::Name;
+    }
+    reading_ = file;
+    bytes = static_cast<std::uint64_t>(size.QuadPart);
+    return TransferError::None;
+}
+int DesktopTransferStorage::read_download(std::uint8_t* data, std::size_t capacity) {
+    DWORD read = 0;
+    if (!reading_ || !ReadFile(static_cast<HANDLE>(reading_), data, static_cast<DWORD>(capacity), &read, nullptr))
+        return -1;
+    return static_cast<int>(read);
+}
+void DesktopTransferStorage::close_download() {
+    if (!reading_) return;
+    CloseHandle(static_cast<HANDLE>(reading_));
+    reading_ = nullptr;
+}
 TransferError DesktopTransferStorage::list(TransferArea area, const std::string& after,
                                            std::vector<TransferFile>& files, bool& more) {
     files.clear();

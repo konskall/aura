@@ -15,9 +15,13 @@ public:
     TransferError list(TransferArea area, const std::string& after, std::vector<TransferFile>& files,
                        bool& more) override;
     TransferError erase(TransferArea area, const std::string& name) override;
+    TransferError open_download(TransferArea area, const std::string& name, std::uint64_t& bytes) override;
+    int read_download(std::uint8_t* data, std::size_t capacity) override;
+    void close_download() override;
 
 private:
     FILE* file_{nullptr};
+    FILE* reading_{nullptr};  // the file a download reads
     std::string destination_;
     bool owned_{false};
 };

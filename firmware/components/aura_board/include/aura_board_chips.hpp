@@ -30,6 +30,10 @@ class Axp2101Power {
 public:
     bool start();
     std::optional<PowerReading> read();
+    // The PWR key's presses since the last call (cleared as they are read).
+    PowerKeyPresses read_power_key();
+    // Switches the board off; held for 1 s, the PWR key switches it on.
+    bool power_off();
 
 private:
     void* device_{};

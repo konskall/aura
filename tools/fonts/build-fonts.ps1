@@ -89,7 +89,13 @@ $jobs += @(
     @{ Font='RobotoFlex-LightCondensed-64.ttf'; Size=64; Name='aura_font_robotoflex_light_cond_64'; Range=$numerals; Filter=$true; Fallback='aura_font_robotoflex_semibold_32' },
     @{ Font='RobotoFlex-LightCondensed-96.ttf'; Size=96; Name='aura_font_robotoflex_light_cond_96'; Range=$clockDigits; Filter=$true; Fallback='aura_font_robotoflex_semibold_32' },
     @{ Font='RobotoFlex-LightCondensed-116.ttf'; Size=116; Name='aura_font_robotoflex_light_cond_116'; Range=$numerals; Filter=$true; Fallback='aura_font_robotoflex_semibold_32' },
-    @{ Font='RobotoFlex-LightCondensed-204.ttf'; Size=204; Name='aura_font_robotoflex_light_cond_204'; Range=$numerals; Filter=$true; Fallback='aura_font_robotoflex_semibold_32' }
+    @{ Font='RobotoFlex-LightCondensed-204.ttf'; Size=204; Name='aura_font_robotoflex_light_cond_204'; Range=$numerals; Filter=$true; Fallback='aura_font_robotoflex_semibold_32' },
+    # The always-on clock (the first flash, 2026-11-14: the owner asked for an
+    # ambient screen that fills the panel). Each size keeps "08:08" within about
+    # 420 px; Graphite's condensed 204 px numerals already do.
+    @{ Font='IBMPlexSans-Light.ttf'; Size=150; Name='aura_font_plex_light_150'; Range=$clockDigits; Fallback='aura_font_plex_semibold_32' },
+    @{ Font='NotoSerifDisplay-ExtraLight.ttf'; Size=164; Name='aura_font_notoserif_extralight_164'; Range=$clockDigits; Filter=$true; Fallback='aura_font_notoserif_regular_32' },
+    @{ Font='Manrope-ExtraLight.ttf'; Size=148; Name='aura_font_manrope_extralight_148'; Range=$clockDigits; Filter=$true; Fallback='aura_font_manrope_bold_32' }
 )
 
 Push-Location $sourceDir

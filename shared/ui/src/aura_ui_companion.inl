@@ -586,7 +586,7 @@
     }
 
     // value: 0 always-on, 1 raise, 2 flip, 3 timeout, 4 brightness, 5 24-hour
-    // time, 6 the battery's percentage
+    // time, 6 the battery's percentage, 7 the rotation lock
     static void display_setting_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (!self->accept_action() || !self->callbacks.on_display_settings) return;
@@ -604,6 +604,7 @@
                 break;
             case 5: settings.clock_24h = !settings.clock_24h; break;
             case 6: settings.battery_percent = !settings.battery_percent; break;
+            case 7: settings.rotation_locked = !settings.rotation_locked; break;
             default: return;
         }
         self->callbacks.on_display_settings(settings);
@@ -2177,8 +2178,13 @@
         return row;
     }
 
-    // Ambient clock: weather, time, date, new messages and the next alarm on
-    // black. Drawn once per minute (or when its data changes), never animated.
+    // Ambient clock: weather, time, date, new messages, the radio and the next
+    // alarm on black, filling the panel (the owner's request on the first
+    // flash, 2026-11-14: the old block sat small in the middle; later that day
+    // the weather grew too, as there was room). Each row shows only when it
+    // applies, the block is centred on the screen, and it moves a few pixels a
+    // minute against burn-in, every line staying on the panel. Drawn once per
+    // minute (or when its data changes), never animated.
     void render_always_on() {
         header_action = true;
         const bool lit = display_power.mode != DisplayMode::Off;
@@ -2191,27 +2197,39 @@
         const int total = notification_total();
         const bool radio_on = radio.state == RadioState::Playing || radio.state == RadioState::Connecting;
         const auto alarm = next_alarm(clock);
-        const bool graphite = appearance == Appearance::Graphite;
-        const auto* text_font = graphite ? ui::font_body() : ui::font_caption();
-        const auto* clock_font = graphite ? ui::font_hero() : ui::font_clock();
-        const int date_offset = graphite ? lv_font_get_line_height(clock_font) + 8 : 92;
-        const int rows_offset = graphite ? date_offset + lv_font_get_line_height(text_font) + 16 : 150;
-        // The rows stack from the weather down; the whole block is centred on
-        // the screen whichever rows are present.
-        const int weather_height = has_weather ? 90 : 0;
-        int block_height = weather_height + 118;  // clock and date
-        if (total > 0) block_height += 62;
-        if (radio_on) block_height += (total > 0 ? 40 : 62);
-        if (alarm) block_height += (total > 0 || radio_on) ? 40 : 62;
-        if (graphite) {
-            const int rows = (total > 0 ? 1 : 0) + (radio_on ? 1 : 0) + (alarm ? 1 : 0);
-            block_height = weather_height + date_offset + lv_font_get_line_height(text_font) +
-                           (rows > 0 ? 16 + rows * 40 : 0);
-        }
-        const int top = ui::tokens::display_height / 2 - block_height / 2;
-        // Four faint concentric layers frame the whole ambient information
-        // block. Scale with its height while keeping a black margin and the
-        // same low opacity, including when the larger hero clock is used.
+        const int rows = (total > 0 ? 1 : 0) + (radio_on ? 1 : 0) + (alarm ? 1 : 0);
+
+        // The sizes: the look's always-on clock; the weather's temperature in the
+        // look's display numerals beside a 64 px icon (the icons' own size) and a
+        // title-sized city, its range headline-sized; a title-sized date;
+        // headline-sized rows with 32 px icons.
+        const auto* date_font = ui::font_title();
+        const auto* row_font = ui::font_headline();
+        const auto* temperature_font = ui::font_display();
+        const auto* city_font = ui::font_title();
+        constexpr int kWeatherIcon = 64;
+        constexpr int kRowIcon = 32;
+        const int date_height = lv_font_get_line_height(date_font);
+        const int row_pitch = std::max<int>(lv_font_get_line_height(row_font), kRowIcon) + 12;
+        const int weather_row = std::max({static_cast<int>(lv_font_get_line_height(temperature_font)),
+                                          static_cast<int>(lv_font_get_line_height(city_font)), kWeatherIcon});
+        const int weather_height = has_weather ? weather_row + 4 + lv_font_get_line_height(row_font) : 0;
+        auto block_for = [&](const lv_font_t* clock_font) {
+            int height = lv_font_get_line_height(clock_font) + 6 + date_height;
+            if (has_weather) height += weather_height + 20;
+            if (rows > 0) height += 24 + rows * row_pitch - 12;
+            return height;
+        };
+        // Within the panel's rounded corners; the tallest clock (Graphite's)
+        // steps down to the look's large numerals when every row is on.
+        constexpr int kMaxBlock = 448;
+        const lv_font_t* clock_font = ui::font_ambient_clock();
+        if (block_for(clock_font) > kMaxBlock) clock_font = ui::font_numerals_large();
+        const int block_height = block_for(clock_font);
+        const int top = std::max(16, ui::tokens::display_height / 2 - block_height / 2);
+        const std::uint32_t bright = ui::tokens::text_secondary;
+        const std::uint32_t quiet = ui::tokens::text_tertiary;
+
         if (lit && photos.ambient) {
             photo_image(content, *photos.ambient, ambient_descriptor, dx, dy, 480, 480);
             auto* shade = lv_obj_create(content); ui::reset(shade);
@@ -2221,7 +2239,9 @@
             if (photos.demo) line(content, t().demo, 24, 444, 432, ui::font_caption(), ui::tokens::amber, LV_TEXT_ALIGN_CENTER);
         }
         if (lit && !photos.ambient) {
-            const int halo_diameter = std::clamp(block_height + 72, 360, 416);
+            // Four faint concentric layers frame the block, as large as it is,
+            // short of a black margin around the screen (display.aod_glow).
+            const int halo_diameter = std::clamp(block_height + 60, 380, 416);
             for (const int percent : {100, 85, 70, 55}) {
                 const int size = halo_diameter * percent / 100;
                 auto* halo = make_dot(content, size, tint, 10);
@@ -2238,19 +2258,20 @@
         lv_obj_set_clickable(catcher, true);
         lv_obj_add_event_cb(catcher, wake_event, LV_EVENT_CLICKED, this);
         if (!lit) return;
-        constexpr std::uint32_t kDim = 0x6F7A8C;
-        constexpr std::uint32_t kFaint = 0x535D6D;
+
+        int y = top;
         if (has_weather) {
-            auto* row = centered_row(top, 10);
-            if (auto* icon = icon_view(row, weather_condition_icon(sky.condition), 34, tint)) {
-                lv_obj_set_style_opa(icon, LV_OPA_70, 0);
+            auto* row = centered_row(y, 14);
+            if (auto* icon = icon_view(row, weather_condition_icon(sky.condition), kWeatherIcon, tint)) {
+                lv_obj_set_style_opa(icon, LV_OPA_80, 0);
             }
             char temperature[16];
             std::snprintf(temperature, sizeof(temperature), "%d°", whole_degrees(sky.temperature_c));
-            ui::make_label(row, temperature, kDim, ui::font_title());
-            auto* city = ui::make_label(row, sky.location.name.c_str(), kFaint, text_font);
+            ui::make_label(row, temperature, bright, temperature_font);
+            // The rest of the panel's width: 432 less the icon, "-12°" and the gaps.
+            auto* city = ui::make_label(row, sky.location.name.c_str(), quiet, city_font);
             lv_label_set_long_mode(city, LV_LABEL_LONG_DOT);
-            lv_obj_set_style_max_width(city, 200, 0);
+            lv_obj_set_style_max_width(city, 190, 0);
             char range[48];
             std::snprintf(range, sizeof(range), "↑ %d°   ↓ %d°", whole_degrees(sky.daily_maximum_c),
                           whole_degrees(sky.daily_minimum_c));
@@ -2260,48 +2281,49 @@
             } else if (sky.origin == WeatherDataOrigin::Cache || sky.stale) {
                 detail += std::string(" · ") + v().weather_cached;
             }
-            line(content, detail.c_str(), kGutter + dx, top + 44 + dy, kWidth, text_font, kFaint,
+            line(content, detail.c_str(), kGutter + dx, y + weather_row + 4 + dy, kWidth, row_font, quiet,
                  LV_TEXT_ALIGN_CENTER);
+            y += weather_height + 20;
         }
-        const int clock_y = top + weather_height;
         if (status.clock_valid) {
-            label(content, time_digits(status.hour, status.minute).c_str(), graphite ? kGutter + dx : dx, clock_y + dy,
-                  graphite ? kWidth : ui::tokens::display_width, clock_font, kDim,
-                  LV_TEXT_ALIGN_CENTER);
+            // Within the gutters like every other line, so the shift never moves
+            // it off the panel; the widest time is 420 px (ui_assets_test).
+            label(content, time_digits(status.hour, status.minute).c_str(), kGutter + dx, y + dy, kWidth,
+                  clock_font, bright, LV_TEXT_ALIGN_CENTER);
         }
+        y += lv_font_get_line_height(clock_font) + 6;
         const auto date = date_text();
         if (!date.empty()) {
-            line(content, date.c_str(), kGutter + dx, clock_y + date_offset + dy, kWidth, text_font, kDim,
-                 LV_TEXT_ALIGN_CENTER);
+            line(content, date.c_str(), kGutter + dx, y + dy, kWidth, date_font, bright, LV_TEXT_ALIGN_CENTER);
         }
-        int y = clock_y + rows_offset;
+        y += date_height + 24;
         if (total > 0) {
-            auto* row = centered_row(y, 10);
-            make_dot(row, 10, ui::tokens::pink, LV_OPA_80);
+            auto* row = centered_row(y, 12);
+            make_dot(row, 14, ui::tokens::pink, LV_OPA_80);
             char count[24];
             std::snprintf(count, sizeof(count), c().aod_new_format, total);
             std::string text = total == 1 ? c().aod_new_one : count;
             const auto source = notification_source();
             if (!source.empty()) text += " · " + source;
-            auto* note = ui::make_label(row, text.c_str(), kDim, text_font);
+            auto* note = ui::make_label(row, text.c_str(), bright, row_font);
             lv_label_set_long_mode(note, LV_LABEL_LONG_DOT);
-            lv_obj_set_style_max_width(note, 340, 0);
-            y += 40;
+            lv_obj_set_style_max_width(note, 380, 0);
+            y += row_pitch;
         }
         if (radio_on) {
-            auto* row = centered_row(y, 8);
-            icon_view(row, ui::IconRole::Audio, 24, ui::tokens::magenta);
+            auto* row = centered_row(y, 12);
+            icon_view(row, ui::IconRole::Audio, kRowIcon, ui::tokens::magenta);
             char now_playing[128];
             std::snprintf(now_playing, sizeof(now_playing), c().radio_aod_format, radio.station.name.c_str());
-            auto* station = ui::make_label(row, now_playing, kDim, text_font);
+            auto* station = ui::make_label(row, now_playing, bright, row_font);
             lv_label_set_long_mode(station, LV_LABEL_LONG_DOT);
-            lv_obj_set_style_max_width(station, 330, 0);
-            y += 40;
+            lv_obj_set_style_max_width(station, 370, 0);
+            y += row_pitch;
         }
         if (alarm) {
-            auto* row = centered_row(y, 8);
-            icon_view(row, ui::IconRole::Reminder, 24, kFaint);
-            ui::make_label(row, time_text(alarm->hour, alarm->minute).c_str(), kFaint, text_font);
+            auto* row = centered_row(y, 12);
+            icon_view(row, ui::IconRole::Reminder, kRowIcon, quiet);
+            ui::make_label(row, time_text(alarm->hour, alarm->minute).c_str(), quiet, row_font);
         }
     }
 
@@ -2420,7 +2442,10 @@
         setting_switch_row(list, kRowPitch * 5, c().clock_24h_title, example, ui::IconRole::Clock,
                            ui::tokens::ice, settings.clock_24h, true, 5);
         reduced_motion_row(list, kRowPitch * 6);
-        list_end(list, kRowPitch * 7);
+        // The screen turns with the device unless locked (the first flash).
+        setting_switch_row(list, kRowPitch * 7, c().rotation_lock_title, c().rotation_lock_detail,
+                           ui::IconRole::Lock, ui::tokens::ice, settings.rotation_locked, capabilities.imu, 7);
+        list_end(list, kRowPitch * 8);
     }
 
     void render_update() {

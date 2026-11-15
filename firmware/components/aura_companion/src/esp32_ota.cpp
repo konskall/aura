@@ -8,6 +8,7 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_heap_caps.h"
 #include "mbedtls/sha256.h"
 #include "nvs.h"
 
@@ -77,7 +78,11 @@ bool Esp32Ota::request_check() {
     bool expected = false;
     if (!configured() || !busy_.compare_exchange_strong(expected, true)) return false;
     // A TLS handshake and an ECDSA check: as much stack as the weather worker.
-    if (xTaskCreate(&Esp32Ota::check_task, "aura_ota_check", 8192, this, 3, nullptr) != pdPASS) {
+    // The check reads the manifest over HTTPS and never the flash (the manifest
+    // URL is read from NVS in initialize()): its stack lives in PSRAM. The
+    // install task writes the flash and keeps an internal stack.
+    if (xTaskCreateWithCaps(&Esp32Ota::check_task, "aura_ota_check", 8192, this, 3, nullptr,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         busy_ = false;
         return false;
     }
@@ -118,7 +123,7 @@ void Esp32Ota::check_task(void* argument) {
     }
     self->busy_ = false;
     self->push(std::move(event));
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);
 }
 
 void Esp32Ota::install_task(void* argument) {

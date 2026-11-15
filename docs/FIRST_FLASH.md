@@ -21,7 +21,7 @@ key is kept safely outside the repository.
 
 - ESP-IDF 5.5.5 at `C:\Users\polis\esp\v5.5.5\esp-idf` (`docs/HARDWARE.md`).
 - A USB-C data cable, and the board's COM port: Device Manager → Ports, for
-  example `COM5`.
+  example `COM5` (the owner's board came up as `COM3`).
 - A microSD card is optional. Notes, photos, the radio's favourites, the app
   order and the settings live on it, formatted FAT32. Without a card the device
   runs, the assistant listens and answers, and those stay in memory only.
@@ -64,6 +64,10 @@ In this order, within a few seconds:
 - With each, `stack main_min_free=N`: the least stack the UI loop ever had
   left, of 12 KiB. Below about 2000 it needs more
   (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` in `sdkconfig.defaults`).
+- `lvgl_min_free=M`: the same for LVGL's task, of 16 KiB (about 6 KiB used on
+  the first flash).
+- In `frame ... wait W ms K kpx`: how long a frame waited for the panel's
+  transfers, and how many thousand pixels it sent (230 is the whole screen).
 - The same numbers are on the device: Ρυθμίσεις → Σύστημα → Διαγνωστικά.
 
 If it crashes, the monitor prints the backtrace. Without a monitor, the crash
@@ -134,11 +138,17 @@ HARDWARE.
 | Touch | Every corner reacts; scrolling lists; swiping back |
 | Audio | The test tone in Σύστημα → Διαγνωστικά; volume and mute; a spoken answer; the radio for 10 minutes |
 | Microphone | A question, a voice note (with a card), a voice message in Aoraton |
-| Power | Κατάσταση συσκευής: percentage, charging stage, voltages and temperature against a USB meter; power off and on with the side button |
+| Power | Κατάσταση συσκευής: percentage, charging stage, voltages and temperature against a USB meter; the centre key held 1.5 s switches off, held 1 s switches on |
+| Keys | Left: volume down, right: volume up («Ένταση NN%»), again while held; the centre key's press wakes and sleeps the screen |
+| Rotation | Stood on each edge the screen turns after about half a second, touches land where they show; Οθόνη → Κλείδωμα θέσης holds it; lying flat keeps the last |
 | microSD | Free space after a minute; Διαμόρφωση κάρτας on a spare card |
-| Motion | Raise to wake; face down mutes |
+| Motion | Raise to wake: rested half a second, then lifted, tilted or turned (a knock on the desk does not wake it); face down mutes |
+| Σύναψη | Lines sharp and motion steady in all four states; in the `metrics` lines `synapse` near 80 ms and about 9 fps |
+| Start | The brand screen within about two seconds of a reset, no white flash; Επανεκκίνηση and Απενεργοποίηση show their progress |
+| File transfer | Λήψη saves a photo and a file whole; signing in with other tabs open does not hang |
 | Clock | The time survives a restart without Wi-Fi |
+| Network | The router's list of devices shows the board as «Aura-Ai-Assistant» (it was «espressif») |
 | Phone | Pairing an iPhone and a notification arriving |
 | Aoraton | Sign-in from the phone, reading, a reply |
-| Memory | The `metrics` lines after 10 minutes of use: internal free memory must not keep falling |
+| Memory | The `metrics` lines after 10 minutes of use: internal free memory must not keep falling (68-86 KiB free at rest on the first flash, never below 38) |
 | GPIO46 | The speaker stays silent during boot and reset |

@@ -24,6 +24,10 @@ constexpr std::uint8_t kPowerAdcControl = 0x30;      // [ADC_CHANNEL_CTRL]
 constexpr std::uint8_t kPowerAdcData = 0x34;  // [ADC_DATA_RELUST0-9]: battery, TS, USB, system, die
 constexpr std::uint8_t kPowerDetection = 0x68;       // [BAT_DET_CTRL]
 constexpr std::uint8_t kPowerPercent = 0xA4;         // [BAT_PERCENT_DATA]
+constexpr std::uint8_t kPowerCommon = 0x10;          // [COMMON_CONFIG]: bit 0 switches off
+constexpr std::uint8_t kPowerKeyLevels = 0x27;       // [IRQ_OFF_ON_LEVEL_CTRL]
+constexpr std::uint8_t kPowerIrqEnable2 = 0x41;      // [INTEN2]: the PWR key's presses
+constexpr std::uint8_t kPowerIrqStatus2 = 0x49;      // [INTSTS2], write 1 to clear
 
 void* join_bus(std::uint16_t address) {
     if (bsp_i2c_init() != ESP_OK) return nullptr;
@@ -95,8 +99,37 @@ bool Axp2101Power::start() {
         device_ = nullptr;
         return false;
     }
-    return settle_register(device_, kPowerAdcControl, adc, axp2101_adc_control(adc)) &&
-           settle_register(device_, kPowerDetection, detection, axp2101_battery_detection(detection));
+    if (!settle_register(device_, kPowerAdcControl, adc, axp2101_adc_control(adc)) ||
+        !settle_register(device_, kPowerDetection, detection, axp2101_battery_detection(detection))) {
+        return false;
+    }
+    // The PWR key: its timing, its presses reported, and any press from before
+    // this boot (the one that switched the board on) forgotten.
+    std::uint8_t levels = 0;
+    std::uint8_t enable = 0;
+    const std::uint8_t clear = kAxp2101PowerKeyIrqBits;
+    if (!read_registers(device_, kPowerKeyLevels, &levels, 1) || !read_registers(device_, kPowerIrqEnable2, &enable, 1) ||
+        !settle_register(device_, kPowerKeyLevels, levels, axp2101_power_key_timing(levels)) ||
+        !settle_register(device_, kPowerIrqEnable2, enable, axp2101_power_key_irq_enable(enable)) ||
+        !write_registers(device_, kPowerIrqStatus2, &clear, 1)) {
+        ESP_LOGW(kTag, "AXP2101 power key not configured");
+    }
+    return true;
+}
+
+PowerKeyPresses Axp2101Power::read_power_key() {
+    std::uint8_t status = 0;
+    if (device_ == nullptr || !read_registers(device_, kPowerIrqStatus2, &status, 1)) return {};
+    const std::uint8_t seen = static_cast<std::uint8_t>(status & kAxp2101PowerKeyIrqBits);
+    if (seen != 0) write_registers(device_, kPowerIrqStatus2, &seen, 1);
+    return axp2101_power_key_presses(status);
+}
+
+bool Axp2101Power::power_off() {
+    std::uint8_t common = 0;
+    if (device_ == nullptr || !read_registers(device_, kPowerCommon, &common, 1)) return false;
+    const std::uint8_t off = axp2101_power_off_command(common);
+    return write_registers(device_, kPowerCommon, &off, 1);
 }
 
 std::optional<PowerReading> Axp2101Power::read() {

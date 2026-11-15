@@ -313,6 +313,9 @@ struct CompanionStrings {
     const char* raise_detail;
     const char* flip_to_mute;
     const char* flip_detail;
+    // Οθόνη: the screen keeps its rotation (2026-11-14).
+    const char* rotation_lock_title;
+    const char* rotation_lock_detail;
     const char* needs_motion_sensor;
     const char* screen_timeout;
     const char* seconds_format;  // %u

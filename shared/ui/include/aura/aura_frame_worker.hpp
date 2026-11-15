@@ -26,12 +26,20 @@ public:
     bool busy() const noexcept { return busy_.load(std::memory_order_acquire); }
     // Blocks until no job is running.
     void wait_idle();
+    // Runs `finished(context)` on the worker after each job, once busy() is
+    // false: the board's loop sleeps between its passes, and this wakes it to
+    // show the frame drawn.
+    void set_finished(Job finished, void* context);
 
     // The worker the presence draws on, once the platform has started it.
     static FrameWorker* shared() noexcept;
     // Starts the shared worker; the thread takes the creating thread's settings
     // (the firmware sets core, priority and stack with esp_pthread_set_cfg first).
     static void start_shared();
+    // A second worker that takes part of a frame from the shared one (the
+    // board's other core), once the platform has started it; null without.
+    static FrameWorker* helper() noexcept;
+    static void start_helper();
 
 private:
     void run();
@@ -41,6 +49,8 @@ private:
     std::condition_variable idle_;
     Job job_{};
     void* context_{};
+    Job finished_{};
+    void* finished_context_{};
     std::atomic<bool> busy_{false};
     bool stopping_{};
     std::thread thread_;

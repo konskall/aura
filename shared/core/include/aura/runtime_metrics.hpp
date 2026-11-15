@@ -28,6 +28,8 @@ private:
 struct RuntimeMetrics {
     std::uint32_t uptime_ms{};
     DurationStats frame;  // one LVGL render of the changed areas, flushing included
+    DurationStats flush_wait;  // per frame: the time LVGL waited for the panel's transfers
+    std::uint64_t flushed_pixels{};  // sent to the panel over the window's frames
     DurationStats loop;   // one pass of the main loop under the display lock
     std::uint32_t presence_frame_ms{};  // the last Synapse frame's drawing time
     bool presence_reduced{};

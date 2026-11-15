@@ -62,4 +62,23 @@ std::uint8_t axp2101_adc_control(std::uint8_t current) noexcept;
 // Battery detection control (0x68) with detection on, the other bits kept.
 std::uint8_t axp2101_battery_detection(std::uint8_t current) noexcept;
 
+// The PWR key on the PMU's PWRON pin (the owner's request on the first flash,
+// 2026-11-14: a press wakes or sleeps the screen, a hold switches off, and
+// held while off it switches on). 0x27 [IRQ_OFF_ON_LEVEL_CTRL]: a long press is
+// reported after 1.5 s, the chip forces off at 6 s, and 1 s switches it on;
+// the other bits kept.
+std::uint8_t axp2101_power_key_timing(std::uint8_t current) noexcept;
+// Interrupt enable 2 (0x41) with the key's short and long presses on.
+std::uint8_t axp2101_power_key_irq_enable(std::uint8_t current) noexcept;
+struct PowerKeyPresses {
+    bool short_press{false};
+    bool long_press{false};
+};
+// Interrupt status 2 (0x49): the key's presses since its last clear.
+PowerKeyPresses axp2101_power_key_presses(std::uint8_t status2) noexcept;
+// The key's bits of interrupt status 2, written back to clear them.
+constexpr std::uint8_t kAxp2101PowerKeyIrqBits = 0x0C;
+// Common configuration (0x10) with bit 0 set: the PMU switches the board off.
+std::uint8_t axp2101_power_off_command(std::uint8_t current) noexcept;
+
 }  // namespace aura

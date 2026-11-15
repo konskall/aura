@@ -8,6 +8,7 @@
 #include "aura/display_power.hpp"
 #include "aura/esp32_aoraton_account.hpp"
 #include "aura/aura_frame_worker.hpp"
+#include "aura/aura_mercury_view.hpp"
 #include "aura/aura_theme.hpp"
 #include "aura/aura_ui.hpp"
 #include "aura/cloud_assistant.hpp"
@@ -41,6 +42,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -52,19 +54,44 @@
 namespace {
 constexpr const char* kTag = "aura";
 
-// Synapse draws its frames on the second core, below LVGL's priority, so the UI
-// never waits for one (the LVGL task floats; Wi-Fi, BLE and this task use core 0).
-// The first boot on a board must report what the simulator cannot: frame and
+// Synapse draws its frames on a worker, so the UI never waits for one
+// (start_frame_worker). The first boot on a board must report what the simulator cannot: frame and
 // loop times, Synapse's cost and the free memory, on the serial console every
 // 10 s for two minutes and every minute after. Touched under the display lock
 // only (LVGL's render events fire in its task while it holds the lock).
 aura::RuntimeMetrics metrics;
 std::int64_t render_started_us = 0;
 
-void on_render_start(lv_event_t*) { render_started_us = esp_timer_get_time(); }
+// Per frame: the time spent waiting for the panel's transfers, and the pixels
+// sent, to tell drawing from sending and a small change from a full screen.
+std::int64_t flush_wait_started_us = 0;
+std::uint32_t frame_wait_us = 0;
+std::uint64_t frame_pixels = 0;
+
+void on_render_start(lv_event_t*) {
+    render_started_us = esp_timer_get_time();
+    frame_wait_us = 0;
+    frame_pixels = 0;
+}
+
+void on_flush_start(lv_event_t* event) {
+    if (const auto* area = static_cast<const lv_area_t*>(lv_event_get_param(event))) {
+        frame_pixels += lv_area_get_size(area);
+    }
+}
+
+void on_flush_wait_start(lv_event_t*) { flush_wait_started_us = esp_timer_get_time(); }
+
+void on_flush_wait_finish(lv_event_t*) {
+    if (flush_wait_started_us > 0) {
+        frame_wait_us += static_cast<std::uint32_t>(esp_timer_get_time() - flush_wait_started_us);
+    }
+}
 
 void on_render_ready(lv_event_t*) {
     if (render_started_us > 0) metrics.frame.add(static_cast<std::uint32_t>(esp_timer_get_time() - render_started_us));
+    metrics.flush_wait.add(frame_wait_us);
+    metrics.flushed_pixels += frame_pixels;
 }
 
 void report_metrics(aura::AuraUi& ui, std::uint64_t& presence_frames, std::uint32_t window_ms,
@@ -86,7 +113,10 @@ void report_metrics(aura::AuraUi& ui, std::uint64_t& presence_frames, std::uint3
     ESP_LOGI(kTag, "metrics %s", aura::format_runtime_metrics(metrics).c_str());
     // The UI loop's stack: the least ever left free (CONFIG_ESP_MAIN_TASK_STACK_SIZE).
     const auto stack_free = static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr));
-    ESP_LOGI(kTag, "stack main_min_free=%u", stack_free);
+    // The LVGL task's (16 KiB, aura_display.c), for the same reason.
+    static TaskHandle_t lvgl_task = xTaskGetHandle("lvgl");
+    const auto lvgl_free = lvgl_task ? static_cast<unsigned>(uxTaskGetStackHighWaterMark(lvgl_task)) : 0U;
+    ESP_LOGI(kTag, "stack main_min_free=%u lvgl_min_free=%u", stack_free, lvgl_free);
     // The same numbers on Ρυθμίσεις → Σύστημα → Διαγνωστικά.
     char text[256];
     std::snprintf(text, sizeof(text), strings.diagnostics_device_format,
@@ -97,6 +127,8 @@ void report_metrics(aura::AuraUi& ui, std::uint64_t& presence_frames, std::uint3
                   static_cast<unsigned>(metrics.psram_free / 1024U), stack_free);
     ui.set_device_metrics(text);
     metrics.frame.reset();
+    metrics.flush_wait.reset();
+    metrics.flushed_pixels = 0;
     metrics.loop.reset();
 }
 
@@ -121,6 +153,9 @@ std::unique_ptr<aura::CloudWorker> start_cloud_worker() {
     worker.thread_name = "aura_cloud";
     worker.stack_size = 12288;
     worker.prio = 4;
+    // Groq and Azure over HTTPS only, never the flash: the stack lives in PSRAM
+    // (internal RAM ran out on the first flash, 2026-11-14).
+    worker.stack_alloc_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
     esp_pthread_set_cfg(&worker);
     auto started = std::make_unique<aura::CloudWorker>();
     const esp_pthread_cfg_t defaults = esp_pthread_get_default_config();
@@ -142,16 +177,96 @@ const aura::l10n::CompanionStrings& companion_strings(aura::InterfaceLanguage la
                                                           aura::l10n::companion_el_gr();
 }
 
+// Synapse draws its frames on the first core, beside this loop (the same
+// priority: they take turns every millisecond) and below Wi-Fi, Bluetooth and
+// the audio. The second core belongs to LVGL, which spent 55-70 ms showing
+// each of Synapse's frames (measured on the board, 2026-11-14): sharing that
+// core, Synapse waited for LVGL and LVGL for Synapse.
 void start_frame_worker() {
     esp_pthread_cfg_t worker = esp_pthread_get_default_config();
     worker.thread_name = "synapse";
-    worker.pin_to_core = 1;
-    worker.prio = 2;
+    worker.pin_to_core = 0;
+    worker.prio = 1;
     worker.stack_size = 4096;
     esp_pthread_set_cfg(&worker);
     aura::ui::FrameWorker::start_shared();
     const esp_pthread_cfg_t defaults = esp_pthread_get_default_config();
     esp_pthread_set_cfg(&defaults);
+}
+
+// Half of each of Synapse's frames is drawn on the second core, below LVGL:
+// with Synapse's rows going to the panel straight, LVGL draws a few rows a
+// frame there and leaves the core idle most of the time (2026-11-15).
+void start_frame_helper() {
+    esp_pthread_cfg_t helper = esp_pthread_get_default_config();
+    helper.thread_name = "synapse2";
+    helper.pin_to_core = 1;
+    helper.prio = 1;
+    helper.stack_size = 4096;
+    esp_pthread_set_cfg(&helper);
+    aura::ui::FrameWorker::start_helper();
+    const esp_pthread_cfg_t defaults = esp_pthread_get_default_config();
+    esp_pthread_set_cfg(&defaults);
+}
+
+// Synapse's middle rows go to the panel straight (aura::ui::SynapseOutput):
+// LVGL then draws only the band's top and bottom rows of each frame, not all
+// of it in PSRAM the frame was drawn in. The worker's two strips are internal
+// RAM, which the view gathers its light in and the panel's DMA reads; the
+// helper's two are PSRAM, its light kept in the data cache and copied to the
+// panel's DMA as LVGL's own bands are (the internal RAM has no room for four).
+// Sent under LVGL's lock.
+class PanelSynapseOutput final : public aura::ui::SynapseOutput {
+public:
+    bool start(std::size_t bytes) {
+        for (std::size_t index = 0; index < strips_.size(); ++index) {
+            const std::uint32_t caps = index < 2 ? (MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL) : MALLOC_CAP_SPIRAM;
+            strips_[index] = heap_caps_malloc(bytes, caps);
+            if (strips_[index] == nullptr) {
+                for (auto& taken : strips_) {
+                    heap_caps_free(taken);
+                    taken = nullptr;
+                }
+                return false;
+            }
+        }
+        bytes_ = bytes;
+        return true;
+    }
+    void* strip(int index, std::size_t bytes) override {
+        return bytes <= bytes_ ? strips_[static_cast<std::size_t>(index & 3)] : nullptr;
+    }
+    bool lock(std::uint32_t timeout_ms) override {
+        return aura_board_display_lock(static_cast<std::int32_t>(timeout_ms));
+    }
+    void unlock() override { aura_board_display_unlock(); }
+    bool send(int left, int top, int columns, int rows, const void* pixels) override {
+        return aura_board_display_draw(left, top, left + columns, top + rows, pixels);
+    }
+
+private:
+    std::array<void*, 4> strips_{};
+    std::size_t bytes_{};
+};
+PanelSynapseOutput synapse_panel;
+
+// After the services have started, so their start-up peaks keep the internal
+// RAM they had (64 KiB free, 38 KiB at the least, on the board, 2026-11-14).
+// Synapse's worker wakes this loop when it has drawn a frame: the loop shows
+// it at once and begins the next once its rest is over. Waiting out its 33 ms
+// passes, the loop showed 6.9 frames a second of 85 ms ones (2026-11-15).
+void wake_loop(void* task) { xTaskNotifyGive(static_cast<TaskHandle_t>(task)); }
+
+void start_synapse_output() {
+    // A strip's light, six rows of 8-bit blue, green and red; finished, the
+    // same memory holds the panel's RGB565 rows.
+    constexpr std::size_t bytes = static_cast<std::size_t>(aura::ui::AuraMercuryView::width) *
+                                  aura::ui::AuraMercuryView::strip_rows * 3U;
+    if (synapse_panel.start(bytes)) {
+        aura::ui::set_synapse_output(&synapse_panel);
+    } else {
+        ESP_LOGW(kTag, "Synapse goes through LVGL: no internal RAM for its strips");
+    }
 }
 
 // The project's public values from config/aoraton.local.json at build time
@@ -180,12 +295,29 @@ extern "C" void app_main(void) {
     }
     if (nvs != ESP_OK) ESP_LOGE(kTag, "NVS unavailable: %s", esp_err_to_name(nvs));
 
-    // As bsp_display_start(), but LVGL draws bands tall enough for the header's glass.
+    // As bsp_display_start(), but LVGL draws bands tall enough for the header's
+    // glass, and the panel stays dark until AURA's own first screen is drawn.
     lv_display_t* display = aura_board_display_start(aura::ui::tokens::DEVICE_DRAW_ROWS);
     if (display == nullptr) {
         ESP_LOGE(kTag, "BSP display initialization failed");
         return;
     }
+    // The brand's start-up screen is the first thing the panel shows (it showed
+    // two seconds of white before, the owner, 2026-11-14); its bar follows the
+    // services below as they start, and ui.create() fills it.
+    static aura::AuraUi ui;
+    if (aura_board_display_lock(-1)) {
+        ui.show_startup(display);
+        aura_board_display_unlock();
+    }
+    aura_board_display_reveal(100);
+    const auto boot_step = [](int percent) {
+        if (aura_board_display_lock(100)) {
+            ui.set_boot_progress(percent);
+            aura_board_display_unlock();
+        }
+    };
+    boot_step(8);
 
     // The board's clock keeps UTC across restarts, so the time is known before
     // Wi-Fi; SNTP corrects it once connected (the clock is written after each sync).
@@ -204,6 +336,7 @@ extern "C" void app_main(void) {
     const bool board_power_ready = board_power.start();
     ESP_LOGI(kTag, "Board clock %s, power manager %s", board_clock_ready ? "ready" : "unavailable",
              board_power_ready ? "ready" : "unavailable");
+    boot_step(18);
 
     static aura::AssistantController controller;
     static aura::DeviceStatusModel device_status;
@@ -241,7 +374,6 @@ extern "C" void app_main(void) {
     static aura::firmware::Esp32WeatherBackend weather_backend;
     static aura::firmware::Esp32Network network;
     static aura::WifiModel wifi;
-    static aura::AuraUi ui;
     static aura::firmware::Esp32Companion companion(audio, device_status);
     // The internet radio (the owner's request, 2026-11-06): stations stream
     // through the audio backend's continuous channel; favourites on the card.
@@ -270,14 +402,19 @@ extern "C" void app_main(void) {
     companion.set_cloud_key_sink(&cloud_keys);
     companion.set_aoraton_link(&aoraton_link);
     const bool audio_ready = audio.initialize();
+    boot_step(30);
     const bool weather_backend_ready = weather_backend.initialize();
     if (weather_backend_ready) weather.set_refresh_interval(weather_backend.refresh_interval());
+    boot_step(38);
     const bool network_started = network.start();
+    boot_step(50);
     ESP_LOGI(kTag, "Audio backend initialization: %s", audio_ready ? "ready" : "unavailable");
     ESP_LOGI(kTag, "Weather backend initialization: %s",
              weather_backend_ready && weather_backend.configured() ? "ready" : "unavailable");
     ESP_LOGI(kTag, "Network: %s", network_started ? "Wi-Fi radio started" : "radio unavailable");
+    companion.set_power_key(board_power_ready ? &board_power : nullptr);
     companion.start();
+    boot_step(68);
     if (audio_ready) radio = std::make_unique<aura::firmware::Esp32RadioService>(audio);
     if (const std::string saved = companion.load_text("radio.txt");
         !saved.empty() && !radio_model.restore_favorites(saved)) {
@@ -314,6 +451,10 @@ extern "C" void app_main(void) {
     }
 
     start_frame_worker();
+    aura::ui::FrameWorker::shared()->set_finished(wake_loop, xTaskGetCurrentTaskHandle());
+    start_frame_helper();
+    start_synapse_output();
+    boot_step(76);
 
     // Listening for a question: from the talk target, after a spoken answer
     // (continuous conversation) and when the owner speaks over one (barge-in).
@@ -332,7 +473,7 @@ extern "C" void app_main(void) {
 
     // LVGL callbacks run in the BSP's LVGL task while it holds the display lock;
     // the loop below touches the same models only under that lock as well.
-    if (bsp_display_lock(0)) {
+    if (aura_board_display_lock(-1)) {
         aura::AuraUiCallbacks callbacks;
         callbacks.on_local_time = [network_started](std::int64_t timestamp) -> std::optional<aura::LocalDateTime> {
             if (!network_started) return std::nullopt;
@@ -524,8 +665,11 @@ extern "C" void app_main(void) {
         ui.apply_radio(radio_model.snapshot());
         lv_display_add_event_cb(display, on_render_start, LV_EVENT_RENDER_START, nullptr);
         lv_display_add_event_cb(display, on_render_ready, LV_EVENT_RENDER_READY, nullptr);
+        lv_display_add_event_cb(display, on_flush_start, LV_EVENT_FLUSH_START, nullptr);
+        lv_display_add_event_cb(display, on_flush_wait_start, LV_EVENT_FLUSH_WAIT_START, nullptr);
+        lv_display_add_event_cb(display, on_flush_wait_finish, LV_EVENT_FLUSH_WAIT_FINISH, nullptr);
         ESP_LOGI(kTag, "UI ready %lu ms after boot", static_cast<unsigned long>(esp_timer_get_time() / 1000));
-        bsp_display_unlock();
+        aura_board_display_unlock();
     }
 
     // Starts, or restarts with new keys, the assistant. Under the display lock.
@@ -593,9 +737,9 @@ extern "C" void app_main(void) {
         ESP_LOGI(kTag, "Assistant: Groq answers%s", assistant.speech->tts_available("el") ? ", Azure speaks" : "");
     };
     std::uint32_t assistant_keys = cloud_keys.generation();
-    if (bsp_display_lock(0)) {
+    if (aura_board_display_lock(-1)) {
         start_assistant();
-        bsp_display_unlock();
+        aura_board_display_unlock();
     }
 
     // (Re)starts the account with the project settings the PC sent last or,
@@ -623,13 +767,17 @@ extern "C" void app_main(void) {
     std::uint32_t storage_ms = 50000;  // the first look 10 s after boot
     bool at_full_speed = full_speed != nullptr;
     TickType_t previous = xTaskGetTickCount();
+    TickType_t ticked = previous;  // the UI's last tick
     std::uint32_t unapplied_ms = 0;
     std::uint32_t status_ms = 1000;
     for (;;) {
         const TickType_t now = xTaskGetTickCount();
         unapplied_ms += static_cast<std::uint32_t>((now - previous) * portTICK_PERIOD_MS);
         previous = now;
-        if (bsp_display_lock(pdMS_TO_TICKS(25))) {
+        // LVGL's frames take 50-150 ms on the board (the first flash,
+        // 2026-11-14): waiting only 25 ms skipped most of the loop's work while
+        // the screen moved, and each miss logged an error.
+        if (aura_board_display_lock(200)) {
             const std::int64_t pass_started_us = esp_timer_get_time();
             const std::uint32_t elapsed_ms = std::min<std::uint32_t>(unapplied_ms, 1000);
             unapplied_ms = 0;
@@ -833,6 +981,7 @@ extern "C" void app_main(void) {
                     companion.set_clock(local_time, now_time);
                 }
             }
+            ticked = xTaskGetTickCount();
             ui.tick(elapsed_ms);
             ui.apply(controller.snapshot());
             ui.apply_status(device_status.snapshot());
@@ -849,7 +998,7 @@ extern "C" void app_main(void) {
                 report_metrics(ui, presence_frames, metrics_ms, companion_strings(companion.language()));
                 metrics_ms = 0;
             }
-            bsp_display_unlock();
+            aura_board_display_unlock();
         }
         // Confirmed power actions can block, restart or enter deep sleep. They
         // must never execute while the single LVGL/BSP display lock is held.
@@ -864,6 +1013,16 @@ extern "C" void app_main(void) {
             if (at_full_speed) esp_pm_lock_acquire(full_speed);
             else esp_pm_lock_release(full_speed);
         }
-        vTaskDelay(pdMS_TO_TICKS(aura::host_loop_interval_ms(mode)));
+        // While the screen is lit, no longer than Synapse's rest before its
+        // next frame (the rest began at the UI's tick: the pass since counts),
+        // and woken as soon as its worker has drawn one.
+        const std::uint32_t interval = aura::host_loop_interval_ms(mode);
+        std::uint32_t sleep_ms = interval;
+        if (aura::needs_full_speed(mode)) {
+            const std::uint32_t due = ui.next_tick_ms();
+            const auto spent = static_cast<std::uint32_t>((xTaskGetTickCount() - ticked) * portTICK_PERIOD_MS);
+            sleep_ms = std::min(interval, due > spent ? due - spent : 0U);
+        }
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(sleep_ms));
     }
 }

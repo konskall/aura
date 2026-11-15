@@ -4,6 +4,7 @@ namespace aura::ui {
 namespace {
 
 std::atomic<FrameWorker*> shared_worker{nullptr};
+std::atomic<FrameWorker*> helper_worker{nullptr};
 
 }  // namespace
 
@@ -36,6 +37,12 @@ void FrameWorker::wait_idle() {
     idle_.wait(lock, [this] { return !busy_.load(std::memory_order_relaxed); });
 }
 
+void FrameWorker::set_finished(Job finished, void* context) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    finished_ = finished;
+    finished_context_ = context;
+}
+
 void FrameWorker::run() {
     std::unique_lock<std::mutex> lock(mutex_);
     for (;;) {
@@ -50,6 +57,13 @@ void FrameWorker::run() {
         context_ = nullptr;
         busy_.store(false, std::memory_order_release);
         idle_.notify_all();
+        // After busy() is false, so whoever it wakes finds the worker free.
+        if (const Job finished = finished_) {
+            void* const finished_context = finished_context_;
+            lock.unlock();
+            finished(finished_context);
+            lock.lock();
+        }
     }
 }
 
@@ -60,6 +74,14 @@ void FrameWorker::start_shared() {
     // Lives for the whole program: presences may draw on it until the very end.
     static FrameWorker worker;
     shared_worker.store(&worker, std::memory_order_release);
+}
+
+FrameWorker* FrameWorker::helper() noexcept { return helper_worker.load(std::memory_order_acquire); }
+
+void FrameWorker::start_helper() {
+    if (helper_worker.load(std::memory_order_acquire)) return;
+    static FrameWorker worker;
+    helper_worker.store(&worker, std::memory_order_release);
 }
 
 }  // namespace aura::ui

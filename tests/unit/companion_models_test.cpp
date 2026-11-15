@@ -545,21 +545,56 @@ void motion_tests() {
             if (gesture != ImuGesture::None && seen && *seen == ImuGesture::None) *seen = gesture;
         }
     };
+    // AURA rests on a desk, standing on any edge or lying flat (ImuSample's
+    // frame: +y is the top edge, +z out of the screen; a reading is "up").
+    // Picking it up wakes it however it is held; the phone-style rule (the
+    // screen had to end tilted up towards the face) never fired on the board,
+    // held upright or stood on its side (the first flash, 2026-11-14).
     ImuGesture seen = ImuGesture::None;
-    feed(0.0F, -1.0F, 0.0F, 25, &seen);  // hanging at the side
-    for (int step = 0; step < 10; ++step) {  // lift and turn towards the face
-        const float angle = static_cast<float>(step) / 10.0F * 1.1F;
-        t += 20;
-        const auto gesture = detector.push({0.25F, -std::cos(angle) + 0.3F, std::sin(angle) + 0.2F, t});
-        if (gesture != ImuGesture::None && seen == ImuGesture::None) seen = gesture;
-    }
-    feed(0.0F, -0.45F, 0.89F, 20, &seen);  // settled, screen towards the viewer
-    expect(seen == ImuGesture::Raise, "lifting the device is a raise");
+    // Standing upright on the desk, then lifted (the hand's push) and held a
+    // little tilted back.
+    feed(0.0F, 1.0F, 0.0F, 50, &seen);
+    expect(seen == ImuGesture::None, "standing still on the desk does nothing");
+    feed(0.0F, 1.22F, 0.08F, 6, &seen);
+    feed(0.0F, 0.97F, 0.25F, 20, &seen);
+    expect(seen == ImuGesture::Raise, "picking up the upright device is a raise");
     seen = ImuGesture::None;
-    feed(0.0F, -0.45F, 0.89F, 50, &seen);
+    feed(0.0F, 0.97F, 0.25F, 60, &seen);
     expect(seen == ImuGesture::None, "holding still is not another raise");
-    feed(0.0F, 0.0F, 1.0F, 30, &seen);  // flat on a table
+    // Put down flat (handling it may count), then lying still does nothing.
+    feed(0.0F, 0.0F, 1.0F, 50, nullptr);
+    feed(0.0F, 0.0F, 1.0F, 100, &seen);
     expect(seen == ImuGesture::None, "lying flat does nothing");
+    // Picked up from flat and turned towards the face.
+    for (int step = 1; step <= 10; ++step) {
+        const float angle = static_cast<float>(step) / 10.0F * 0.9F;
+        feed(0.0F, std::sin(angle), std::cos(angle), 1, &seen);
+    }
+    feed(0.0F, 0.78F, 0.62F, 20, &seen);
+    expect(seen == ImuGesture::Raise, "picking up the device lying flat is a raise");
+    // Standing on its right edge (the screen turned), then lifted.
+    feed(-1.0F, 0.0F, 0.0F, 90, nullptr);
+    seen = ImuGesture::None;
+    feed(-1.2F, 0.05F, 0.1F, 6, &seen);
+    feed(-0.95F, 0.0F, 0.3F, 20, &seen);
+    expect(seen == ImuGesture::Raise, "picking it up from any edge is a raise");
+    // A knock on the desk shakes it for a sample or two.
+    feed(-0.95F, 0.0F, 0.3F, 90, nullptr);
+    seen = ImuGesture::None;
+    feed(-1.4F, 0.2F, 0.5F, 2, &seen);
+    feed(-0.95F, 0.0F, 0.3F, 30, &seen);
+    expect(seen == ImuGesture::None, "a knock on the desk is not a raise");
+    // Carried around without a pause: one raise, once it has been handled a while.
+    feed(0.0F, 1.0F, 0.0F, 50, nullptr);
+    int raises = 0;
+    for (int step = 0; step < 150; ++step) {
+        const float sway = 0.3F * std::sin(static_cast<float>(step) * 0.5F);
+        t += 20;
+        if (detector.push({sway, 0.9F, 0.3F + sway, t}) == ImuGesture::Raise) ++raises;
+    }
+    expect(raises == 1, "moving without a pause raises once");
+    // At rest flat, then turned face down: that mutes it, never a raise first.
+    feed(0.0F, 0.0F, 1.0F, 60, nullptr);
     seen = ImuGesture::None;
     feed(0.0F, 0.0F, -1.0F, 60, &seen);
     expect(seen == ImuGesture::FaceDown && detector.face_down(), "face down after a moment");
@@ -576,10 +611,12 @@ void motion_tests() {
     display.tick(999);
     expect(display.snapshot().mode == DisplayMode::Active, "active until the timeout");
     display.tick(1000);
-    expect(display.snapshot().mode == DisplayMode::Dimmed && display.snapshot().brightness_percent == 30, "dims");
+    // The first flash (2026-11-14): the always-on clock at 12% was too dark to
+    // read on the AMOLED; the owner chose 30%, and 50% for the dimmed screen.
+    expect(display.snapshot().mode == DisplayMode::Dimmed && display.snapshot().brightness_percent == 50, "dims");
     display.tick(1500);
     expect(display.snapshot().mode == DisplayMode::AlwaysOn, "then the always-on clock");
-    expect(display.snapshot().brightness_percent == 12, "the always-on clock at full brightness setting");
+    expect(display.snapshot().brightness_percent == 30, "the always-on clock at full brightness setting");
 
     // Dimming never brightens a screen the owner set darker than the dim level.
     DisplayPowerModel dark;
@@ -1071,6 +1108,11 @@ void metrics_tests() {
     metrics.uptime_ms = 12345;
     metrics.frame.add(12300);
     metrics.frame.add(40000);
+    // The first flash (2026-11-14): how much of a frame waits for the panel's
+    // transfer, and how many pixels a frame sends.
+    metrics.flush_wait.add(4000);
+    metrics.flush_wait.add(6000);
+    metrics.flushed_pixels = 2 * 115200;
     metrics.loop.add(1200);
     metrics.presence_frame_ms = 180;
     metrics.presence_reduced = true;
@@ -1082,7 +1124,7 @@ void metrics_tests() {
     metrics.psram_min_free = 5900 * 1024;
     metrics.psram_largest = 4000 * 1024;
     const auto line = format_runtime_metrics(metrics);
-    expect(line == "t=12.3 s | frame avg 26.1 max 40.0 ms n=2 | loop avg 1.2 max 1.2 ms n=1 | "
+    expect(line == "t=12.3 s | frame avg 26.1 max 40.0 ms n=2 wait 5.0 ms 115 kpx | loop avg 1.2 max 1.2 ms n=1 | "
                    "synapse 180 ms reduced 1.8 fps | internal free 120 min 95 largest 60 KiB | "
                    "psram free 6100 min 5900 largest 4000 KiB",
            "one readable line per report");
@@ -1107,7 +1149,82 @@ void power_tests() {
            "on USB power realtime stays on");
 }
 
+// The screen turns with the device (the owner's request on the first flash,
+// 2026-11-14): the edge nearest the ground becomes the bottom.
+void orientation_tests() {
+    using namespace aura;
+    OrientationTracker tracker;
+    std::uint32_t t = 0;
+    int changes = 0;
+    auto hold = [&](float ax, float ay, float az, std::uint32_t ms) {
+        for (std::uint32_t spent = 0; spent < ms; spent += 20) {
+            t += 20;
+            if (tracker.push({ax, ay, az, t})) ++changes;
+        }
+    };
+    expect(tracker.rotation() == ScreenRotation::Bottom, "the screen starts upright");
+    hold(0.0F, 1.0F, 0.0F, 1000);
+    expect(tracker.rotation() == ScreenRotation::Bottom && changes == 0, "standing upright keeps it upright");
+
+    // Turned clockwise: the right edge is down, "up" points to the left edge.
+    hold(-1.0F, 0.0F, 0.0F, 400);
+    expect(tracker.rotation() == ScreenRotation::Bottom, "a turn must settle before the screen follows");
+    hold(-1.0F, 0.0F, 0.0F, 400);
+    expect(tracker.rotation() == ScreenRotation::Right && changes == 1, "then the right edge is the bottom");
+
+    // Near the diagonal the screen holds; well past it, it follows.
+    const float rad = 3.14159265F / 180.0F;
+    hold(-std::sin(40.0F * rad), std::cos(40.0F * rad), 0.0F, 2000);
+    expect(tracker.rotation() == ScreenRotation::Right, "5 degrees past the diagonal is not a turn");
+    hold(-std::sin(20.0F * rad), std::cos(20.0F * rad), 0.0F, 1000);
+    expect(tracker.rotation() == ScreenRotation::Bottom && changes == 2, "well past it the screen turns back");
+
+    // Lying flat, or shaken, the screen keeps its rotation.
+    hold(-1.0F, 0.0F, 0.0F, 1000);
+    expect(tracker.rotation() == ScreenRotation::Right && changes == 3, "turned again");
+    hold(0.05F, 0.1F, 1.0F, 2000);
+    expect(tracker.rotation() == ScreenRotation::Right, "lying flat keeps the last rotation");
+    hold(0.0F, -2.0F, 0.3F, 1000);
+    expect(tracker.rotation() == ScreenRotation::Right, "a shake is not a turn");
+
+    // Upside down, and the left edge down.
+    hold(0.0F, -1.0F, 0.0F, 1000);
+    expect(tracker.rotation() == ScreenRotation::Top, "the top edge down");
+    hold(1.0F, 0.0F, 0.0F, 1000);
+    expect(tracker.rotation() == ScreenRotation::Left, "the left edge down");
+
+    // Locked, it never turns; unlocked, it follows again.
+    tracker.set_locked(true);
+    hold(0.0F, 1.0F, 0.0F, 2000);
+    expect(tracker.rotation() == ScreenRotation::Left, "a locked screen keeps its rotation");
+    tracker.set_locked(false);
+    hold(0.0F, 1.0F, 0.0F, 1000);
+    expect(tracker.rotation() == ScreenRotation::Bottom, "unlocked, it follows the device again");
+
+    // A touch on the panel lands on the content drawn under it.
+    auto touched = [](ScreenRotation rotation, int x, int y) {
+        rotate_touch_point(rotation, 480, x, y);
+        return std::make_pair(x, y);
+    };
+    expect(touched(ScreenRotation::Bottom, 10, 20) == std::make_pair(10, 20), "upright: unchanged");
+    expect(touched(ScreenRotation::Top, 10, 20) == std::make_pair(469, 459), "upside down: both reversed");
+    // Right edge down: the content's top runs along the panel's left edge.
+    expect(touched(ScreenRotation::Right, 0, 0) == std::make_pair(479, 0), "right: the panel's corner");
+    expect(touched(ScreenRotation::Right, 470, 100) == std::make_pair(379, 470), "right: the content's bottom");
+    // Left edge down: the content's top runs along the panel's right edge.
+    expect(touched(ScreenRotation::Left, 0, 0) == std::make_pair(0, 479), "left: the panel's corner");
+    expect(touched(ScreenRotation::Left, 10, 100) == std::make_pair(100, 469), "left: the content's bottom");
+
+    // The lock is a display setting and survives a restart.
+    DisplaySettings locked;
+    locked.rotation_locked = true;
+    expect(parse_display_settings(serialize_display_settings(locked)).rotation_locked &&
+               !parse_display_settings(serialize_display_settings(DisplaySettings{})).rotation_locked,
+           "the rotation lock round-trips");
+}
+
 int main() {
+    orientation_tests();
     sound_tests();
     power_tests();
     metrics_tests();

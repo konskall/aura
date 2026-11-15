@@ -99,6 +99,26 @@ void power_tests() {
            "the ADC channels AURA reads, with TS detection off");
     expect(aura::axp2101_battery_detection(0x00) == 0x01 && aura::axp2101_battery_detection(0xF0) == 0xF1,
            "battery detection on, other bits kept");
+
+    // The PWR key (the owner's request on the first flash, 2026-11-14): a long
+    // press is reported after 1.5 s (AURA then switches off cleanly), the chip's
+    // own forced off waits 6 s, and held for 1 s the key switches the board on.
+    // 0x27: IRQLEVEL bits 5-4, OFFLEVEL bits 3-2, ONLEVEL bits 1-0.
+    expect(aura::axp2101_power_key_timing(0x00) == 0x16 && aura::axp2101_power_key_timing(0xFF) == 0xD6,
+           "the key's timing: 1.5 s long press, 6 s forced off, 1 s on; the other bits kept");
+    // 0x41: the key's short (bit 3) and long (bit 2) presses raise interrupts.
+    expect(aura::axp2101_power_key_irq_enable(0x00) == 0x0C && aura::axp2101_power_key_irq_enable(0xF1) == 0xFD,
+           "the key's short and long presses enabled, the other interrupts kept");
+    // 0x49: the presses seen since the last clear.
+    const auto short_press = aura::axp2101_power_key_presses(0x08);
+    const auto long_press = aura::axp2101_power_key_presses(0x04);
+    const auto other = aura::axp2101_power_key_presses(0xF3);
+    expect(short_press.short_press && !short_press.long_press && long_press.long_press && !long_press.short_press &&
+               !other.short_press && !other.long_press,
+           "the key's presses read from interrupt status 2, other events ignored");
+    // 0x10 bit 0: switch the board off.
+    expect(aura::axp2101_power_off_command(0x00) == 0x01 && aura::axp2101_power_off_command(0x14) == 0x15,
+           "switching off sets bit 0 and keeps the rest");
 }
 
 }  // namespace

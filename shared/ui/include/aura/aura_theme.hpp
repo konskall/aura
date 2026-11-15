@@ -41,6 +41,10 @@ inline std::uint32_t amber = 0xFFCB3F;
 inline std::uint32_t pink = 0xFF579E;
 inline std::uint32_t coral = 0xFF6B78;
 inline std::uint32_t toggle_on = 0x178BFF;  // a switch's track when on
+// The two ends of the AURA wordmark's gradient (shared/assets/branding/source/
+// Aura_Selas.svg): the brand's own colours, which no look changes.
+constexpr std::uint32_t brand_start = 0x1CE8ED;
+constexpr std::uint32_t brand_end = 0x9C64EE;
 
 constexpr int display_width = 480;
 constexpr int display_height = 480;
@@ -101,6 +105,7 @@ const lv_font_t* font_clock();     // Light 96: digits and ':' only
 // Signature screens only (aura_ui_<look>.inl): their larger numerals.
 const lv_font_t* font_numerals_small();
 const lv_font_t* font_numerals_large();
+const lv_font_t* font_ambient_clock();  // the always-on clock, filling the panel
 const lv_font_t* font_hero();      // the largest numerals (Home clock); the large numerals unless set
 const lv_font_t* font_brand();     // Space Grotesk 26: "AURA" only
 // The text roles above come from the active appearance's font set.

@@ -42,6 +42,10 @@ void transfer_list_add(std::vector<TransferFile>& files, TransferFile file, bool
 bool transfer_filename_valid(std::string_view name);
 bool transfer_address_valid(std::string_view address);
 bool transfer_private_ipv4(std::string_view address);
+// An IPv6 peer address that carries an IPv4 one (::ffff:a.b.c.d), as the
+// device's dual-stack HTTP server reports IPv4 clients: `ipv4` gets its text.
+// False for a native IPv6 address.
+bool transfer_mapped_ipv4(const std::array<std::uint8_t, 16>& ipv6, std::string& ipv4);
 std::string transfer_percent_decode(std::string_view value);
 const char* transfer_error_code(TransferError error);
 struct TransferSnapshot {
@@ -93,6 +97,17 @@ public:
     virtual ~ITransferReader() = default;
     virtual int read(std::uint8_t* data, std::size_t capacity) = 0;
 };
+// A download on its way to the PC (the owner's request, 2026-11-14): the
+// transport sends the response's start, then the file as it is read. A whole
+// file never sits in memory: up to 16 MB, more than the device keeps free.
+class ITransferWriter {
+public:
+    virtual ~ITransferWriter() = default;
+    // Status 200 and an attachment named `name` of `bytes` bytes; false when the
+    // connection is gone.
+    virtual bool begin(const std::string& name, std::uint64_t bytes) = 0;
+    virtual bool write(const std::uint8_t* data, std::size_t size) = 0;
+};
 class ITransferStorage {
 public:
     virtual ~ITransferStorage() = default;
@@ -106,12 +121,24 @@ public:
         return TransferError::Storage;
     }
     virtual TransferError erase(TransferArea, const std::string&) { return TransferError::Storage; }
+    // A stored file for a download: open it and tell its size, read it in
+    // order (0 at its end, negative on an error), then close it.
+    virtual TransferError open_download(TransferArea, const std::string&, std::uint64_t&) {
+        return TransferError::Storage;
+    }
+    virtual int read_download(std::uint8_t*, std::size_t) { return -1; }
+    virtual void close_download() {}
 };
 struct TransferResponse {
     int status{200};
     std::string body;
     bool html{false};
+    // A download the writer has already sent: the transport sends nothing more.
+    bool sent{false};
 };
+// Content-Disposition for a downloaded file: an ASCII name for old clients and
+// the exact UTF-8 one (RFC 6266/5987). `name` is a valid transfer filename.
+std::string transfer_attachment_header(std::string_view name);
 class TransferProtocol {
 public:
     // `keys`, when the platform keeps the assistant's keys (the device), takes
@@ -121,9 +148,14 @@ public:
     TransferProtocol(TransferSession& session, ITransferStorage& storage, std::function<std::uint64_t()> clock,
                      ICloudKeySink* keys = nullptr, IAoratonLinkEndpoint* aoraton = nullptr)
         : session_(session), storage_(storage), clock_(std::move(clock)), keys_(keys), aoraton_(aoraton) {}
-    TransferResponse handle(const TransferRequest& request, ITransferReader& reader);
+    // `writer`, when the transport can stream a response, sends downloads
+    // (POST /api/download); without one they are refused.
+    TransferResponse handle(const TransferRequest& request, ITransferReader& reader,
+                            ITransferWriter* writer = nullptr);
 
 private:
+    TransferResponse download(TransferArea area, const std::string& name, std::uint64_t ticket,
+                              ITransferWriter& writer);
     TransferResponse store_keys(const TransferRequest& request, ITransferReader& reader);
     TransferResponse aoraton_request(const TransferRequest& request, ITransferReader& reader);
     TransferResponse phone_request(const TransferRequest& request);

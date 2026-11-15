@@ -52,10 +52,13 @@ every transfer response's CSP allows `data:` images and nothing from elsewhere.
 
 After code login, **Αποθηκευμένα στη συσκευή / Saved on the device** lists photos
 or other files, 128 per page. Select the destination, refresh or use Next page.
+Press **Λήψη / Download** beside a file to save it on the PC or phone under its
+own name: photos come back exactly as they were sent, other files byte for byte
+(`POST /api/download`, streamed as it is read; the owner's request, 2026-11-14).
 Press Delete beside an exact filename, then confirm it in the dialog. Cancel
 does nothing. Deletion is permanent; directories, settings and other storage
-areas cannot be listed/deleted. No file content can be downloaded through this API.
-Deleting a photo refreshes the gallery and clears a removed ambient selection.
+areas cannot be listed, downloaded or deleted. Deleting a photo refreshes the
+gallery and clears a removed ambient selection.
 
 The lease ends after ten minutes, even during a transfer. **Διακοπή πρόσβασης**,
 expiry, reboot/reset and device Wi-Fi loss revoke access. Five incorrect codes
@@ -67,8 +70,11 @@ Uploads involve no cloud, assistant or AI bridge.
 
 This is a local HTTP service, not encrypted transport. Use trusted local Wi-Fi.
 Host/Origin/private-peer checks and a memory-only bearer protect the upload API.
-Listings/deletion require the same bearer as uploads and are scoped only to
-`photos`/`files`; downloads, settings and other device actions are unavailable.
+Listings, downloads and deletion require the same bearer as uploads and are
+scoped only to ordinary files in `photos`/`files`; a download is an attachment
+(`application/octet-stream`, `nosniff`), never shown in the page. Settings and
+other device actions are unavailable. A download that stops early (Stop, expiry,
+a lost connection) fails in the browser rather than saving a cut file.
 See [ADR 0008](ADR/0008-local-file-transfer.md).
 
 The Windows simulator advertises an active private Wi-Fi/Ethernet IPv4 address;

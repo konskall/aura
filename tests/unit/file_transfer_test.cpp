@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
 using namespace aura;
 namespace {
 void expect(bool value, const char* message) {
@@ -62,7 +63,126 @@ struct Store : ITransferStorage {
         staged.clear();
         cancelled = true;
     }
+    // Downloads: "files/<name>" and "photos/<name>", read 1000 bytes at a time.
+    std::map<std::string, std::vector<std::uint8_t>> files;
+    std::vector<std::uint8_t> reading;
+    std::size_t read_at{0};
+    bool open{false}, fail_read{false};
+    int closes{0};
+    TransferError open_download(TransferArea area, const std::string& name, std::uint64_t& bytes) override {
+        const auto found = files.find((area == TransferArea::Photos ? "photos/" : "files/") + name);
+        if (found == files.end()) return TransferError::Missing;
+        reading = found->second;
+        read_at = 0;
+        open = true;
+        bytes = reading.size();
+        return TransferError::None;
+    }
+    int read_download(std::uint8_t* out, std::size_t capacity) override {
+        if (fail_read) return -1;
+        const auto n = std::min({capacity, reading.size() - read_at, std::size_t{1000}});
+        std::copy_n(reading.data() + read_at, n, out);
+        read_at += n;
+        return static_cast<int>(n);
+    }
+    void close_download() override {
+        open = false;
+        ++closes;
+    }
 };
+struct Writer : ITransferWriter {
+    std::string name;
+    std::uint64_t announced{0};
+    std::vector<std::uint8_t> body;
+    bool began{false};
+    std::function<void()> on_write;
+    bool begin(const std::string& file, std::uint64_t bytes) override {
+        began = true;
+        name = file;
+        announced = bytes;
+        return true;
+    }
+    bool write(const std::uint8_t* data, std::size_t size) override {
+        if (on_write) {
+            auto fn = std::move(on_write);
+            fn();
+        }
+        body.insert(body.end(), data, data + size);
+        return true;
+    }
+};
+
+// Downloads (the owner's request, 2026-11-14): a stored file goes back to the
+// signed-in PC, streamed as it is read; only a valid name in a known area, and
+// only within the session.
+void download_tests() {
+    std::uint64_t now = 1000;
+    TransferSession session;
+    Store store;
+    TransferProtocol protocol(session, store, [&] { return now; });
+    std::array<std::uint8_t, 36> entropy{};
+    entropy.fill(53);
+    expect(session.start(entropy, now), "start with supplied test entropy");
+    session.ready(session.snapshot().generation, "http://127.0.0.1:8788", now);
+    const auto bearer = "Bearer " + session.login(session.snapshot().pin, now);
+    std::vector<std::uint8_t> contents(10000);
+    for (std::size_t index = 0; index < contents.size(); ++index) contents[index] = static_cast<std::uint8_t>(index * 7);
+    store.files["files/DEMO σημειώσεις.txt"] = contents;
+    store.files["photos/DEMO.png"] = {1, 2, 3};
+    auto ask = [&](const std::string& body, const std::string& authorization, ITransferWriter* writer,
+                   const char* method = "POST") {
+        TransferRequest request;
+        request.local_peer = true;
+        request.host = "127.0.0.1:8788";
+        request.method = method;
+        request.path = "/api/download";
+        request.content_type = "application/json";
+        request.authorization = authorization;
+        request.length = body.size();
+        Reader reader(body);
+        return protocol.handle(request, reader, writer);
+    };
+    const std::string wanted = "{\"area\":\"files\",\"name\":\"DEMO σημειώσεις.txt\"}";
+    Writer refused;
+    expect(ask(wanted, "", &refused).status == 401 && !refused.began && !store.open,
+           "a download needs the session's code");
+    expect(ask(wanted, bearer, &refused, "GET").status == 405 && !refused.began, "a download is a POST");
+    Writer writer;
+    const auto sent = ask(wanted, bearer, &writer);
+    expect(sent.sent && writer.began && writer.name == "DEMO σημειώσεις.txt" && writer.announced == contents.size() &&
+               writer.body == contents && store.closes == 1 && !store.open,
+           "a stored file is streamed whole under its own name, then closed");
+    Writer photo;
+    expect(ask("{\"area\":\"photos\",\"name\":\"DEMO.png\"}", bearer, &photo).sent &&
+               photo.body == std::vector<std::uint8_t>{1, 2, 3},
+           "a photo downloads as it was sent");
+    Writer missing;
+    expect(ask("{\"area\":\"files\",\"name\":\"DEMO missing.txt\"}", bearer, &missing).status == 404 &&
+               !missing.began,
+           "a missing file is 404, nothing sent");
+    for (const char* bad : {"{\"area\":\"files\",\"name\":\"../clock.txt\"}", "{\"area\":\"files\",\"name\":\".transfer\"}",
+                            "{\"area\":\"system\",\"name\":\"DEMO.txt\"}", "{\"area\":\"files\"}",
+                            "{\"area\":\"files\",\"name\":\"DEMO σημειώσεις.txt\",\"more\":\"x\"}",
+                            "{\"area\":\"photos\",\"name\":\"DEMO.txt\"}"}) {
+        Writer rejected;
+        expect(ask(bad, bearer, &rejected).status == 400 && !rejected.began,
+               "only a valid name in a known area is sent");
+    }
+    expect(ask(wanted, bearer, nullptr).status == 501, "a transport that cannot stream refuses downloads");
+    store.fail_read = true;
+    Writer broken;
+    expect(ask(wanted, bearer, &broken).sent && broken.body.empty() && !store.open,
+           "a read error ends the download and closes the file");
+    store.fail_read = false;
+    Writer interrupted;
+    interrupted.on_write = [&] { session.stop(); };
+    expect(ask(wanted, bearer, &interrupted).sent && interrupted.body.size() < contents.size() && !store.open,
+           "Stop ends a download and closes the file");
+    expect(session.snapshot().completed == 0, "downloads never count as received files");
+    expect(transfer_attachment_header("DEMO α b.txt") ==
+               "attachment; filename=\"DEMO _ b.txt\"; filename*=UTF-8''DEMO%20%CE%B1%20b.txt",
+           "the attachment carries an ASCII name and the exact UTF-8 one");
+}
 }  // namespace
 // The owner's PC sends the assistant's keys over the same code-protected
 // session; the device keeps them (the sink) and never echoes them.
@@ -414,9 +534,56 @@ void aoraton_phone_tests() {
     expect(pieces == 38, "the wordmark's 12 paths, 17 stops, 5 gradients and 4 clips were compared");
 }
 
+// The file transfer page in AURA's look (the owner's request, 2026-11-14): its
+// wordmark, unaltered, in the page itself; nothing from elsewhere; and a
+// login that gives up, and says so, when the device does not answer (the
+// owner's first try waited forever on a disabled button).
+void transfer_page_tests() {
+    const std::string page(l10n::transfer_page());
+    expect(page.find("<svg class=\"aura\" viewBox=\"64 400 1136 420\" role=\"img\" aria-label=\"Aura\">") !=
+               std::string::npos,
+           "the transfer page shows Aura's wordmark");
+    std::ifstream source_file(AURA_WORDMARK_SVG, std::ios::binary);
+    const std::string source{std::istreambuf_iterator<char>(source_file), {}};
+    std::size_t pieces = 0;
+    for (const std::string_view open : {" d=\"", "<stop", "<linearGradient", "<clipPath"}) {
+        for (auto at = source.find(open); at != std::string::npos; at = source.find(open, at + 1)) {
+            const auto end = source.find(open.front() == ' ' ? '"' : '>', at + open.size());
+            expect(page.find(source.substr(at, end + 1 - at)) != std::string::npos,
+                   "the transfer page's wordmark is unaltered");
+            ++pieces;
+        }
+    }
+    expect(pieces == 38, "every piece of the transfer page's wordmark was compared");
+    // Its one <link> is an empty icon in the page, so the browser does not ask
+    // the device for /favicon.ico (its server keeps two connections).
+    constexpr std::string_view icon = "<link rel=\"icon\" href=\"data:,\">";
+    const auto link = page.find("<link");
+    expect(page.find("src=\"http") == std::string::npos && page.find("url(http") == std::string::npos &&
+               page.find("@import") == std::string::npos && link != std::string::npos &&
+               page.compare(link, icon.size(), icon) == 0 && page.find("<link", link + 1) == std::string::npos,
+           "the transfer page takes nothing from elsewhere, not even an icon");
+    expect(page.find("AbortController") != std::string::npos && page.find("signal:") != std::string::npos &&
+               page.find("timeout:") != std::string::npos,
+           "a request the device does not answer gives up and says so");
+    expect(page.find("lang=\"el\"") != std::string::npos && page.find("en:{") != std::string::npos,
+           "the transfer page speaks Greek and English");
+    // Downloads (the owner's request, 2026-11-14): every stored file has a
+    // button that asks /api/download with the session's code and saves the
+    // answer under the file's own name, in both languages.
+    expect(page.find("'/api/download'") != std::string::npos &&
+               page.find("Authorization:'Bearer '+token") != std::string::npos &&
+               page.find("link.download=name") != std::string::npos &&
+               page.find("URL.revokeObjectURL") != std::string::npos &&
+               page.find("download:'Λήψη'") != std::string::npos && page.find("download:'Download'") != std::string::npos,
+           "each stored file can be downloaded from the transfer page");
+}
+
 int main() {
     aoraton_link_tests();
     aoraton_phone_tests();
+    transfer_page_tests();
+    download_tests();
     for (auto name : {"DEMO φωτογραφία.jpg", "DEMO notes.txt", "DEMO 20%.pdf"})
         expect(transfer_filename_valid(name), "safe Unicode filename accepted");
     for (auto name : {"../x", ".hidden", "a/b", "a\\b", "x:", "a\n.txt", "a.", "a ", "CON.txt", "CON .txt", "lpt1.csv",
@@ -430,6 +597,18 @@ int main() {
     for (auto url : {"http://8.8.8.8:80", "http://aura.test:8788", "http://192.168.1.2:0", "http://192.168.1.2:8788/x",
                      "https://192.168.1.2:8"})
         expect(!transfer_address_valid(url), "nonlocal or ambiguous endpoints rejected");
+    // The device's HTTP server listens on an IPv6 socket, so an IPv4 client's
+    // address arrives as ::ffff:a.b.c.d. Read as plain IPv4 it was nonsense, and
+    // every request from the owner's network was refused as "auth" (the first
+    // flash, 2026-11-14).
+    {
+        const std::array<std::uint8_t, 16> mapped{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 192, 168, 1, 23};
+        std::string ipv4;
+        expect(transfer_mapped_ipv4(mapped, ipv4) && ipv4 == "192.168.1.23" && transfer_private_ipv4(ipv4),
+               "an IPv4-mapped IPv6 peer reads as its IPv4 address");
+        const std::array<std::uint8_t, 16> native{0xFE, 0x80, 0, 0, 0, 0, 0, 0, 0x12, 0x34, 0, 0, 0, 0, 0, 1};
+        expect(!transfer_mapped_ipv4(native, ipv4), "a native IPv6 peer is not an IPv4 one");
+    }
     TransferRequest parsed;
     expect(parse_transfer_headers("POST /api/upload HTTP/1.1\r\nHost: 127.0.0.1:8788\r\nContent-Length: 3\r\n\r\n",
                                   parsed) &&

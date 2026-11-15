@@ -55,12 +55,158 @@ void check_lvgl_memory(const std::string& defaults) {
     // LVGL's own pool is a fixed 64 KiB on the device; the transient layers of a
     // transformed widget alone take 28-427 KiB, so an allocation failed there and
     // LVGL silently skipped the widget. Through the C library, LVGL allocates from
-    // the system heap: small blocks stay in internal RAM and blocks larger than
-    // CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL go to PSRAM.
+    // the system heap, which puts them in PSRAM (check_internal_ram).
     expect(has_line(defaults, "CONFIG_LV_USE_CLIB_MALLOC=y"), "LVGL allocates through the C library (heap + PSRAM)");
     expect(!has_line(defaults, "CONFIG_LV_USE_BUILTIN_MALLOC=y"), "LVGL's fixed builtin pool is not selected");
     expect(!mentions(defaults, "CONFIG_LV_MEM_SIZE"), "no LVGL pool size remains configured");
     expect(has_line(defaults, "CONFIG_SPIRAM_USE_MALLOC=y"), "malloc() can return PSRAM");
+}
+
+// The first flash (2026-11-14): the board ran out of internal RAM at boot, and a
+// task stack, a mutex and the Bluetooth controller could not be allocated.
+// malloc() takes PSRAM first, whatever the size; 64 KiB stay for allocations
+// that must be internal or DMA-capable; Wi-Fi's buffers live in PSRAM and its
+// code out of IRAM, which shares internal RAM with the heap.
+void check_internal_ram(const std::string& defaults) {
+    expect(has_line(defaults, "CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0"), "malloc() never prefers internal RAM");
+    expect(has_line(defaults, "CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536"),
+           "64 KiB of internal RAM stay for stacks, FreeRTOS objects and DMA");
+    expect(has_line(defaults, "CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y"), "Wi-Fi and lwIP buffers in PSRAM");
+    expect(has_line(defaults, "CONFIG_ESP_WIFI_IRAM_OPT=n") && has_line(defaults, "CONFIG_ESP_WIFI_RX_IRAM_OPT=n"),
+           "Wi-Fi's code stays out of IRAM");
+    expect(has_line(defaults, "CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288"), "the UI loop's 12 KiB stack");
+}
+
+// The BSP 2.0.1's bsp_display_lock() returns esp_lv_adapter_lock()'s esp_err_t
+// as a bool: false exactly when the lock was taken. On the first flash the UI
+// was never built and the screen stayed white. The firmware takes LVGL's lock
+// through aura_board_display_lock() only.
+void check_display_lock(const std::string& root) {
+    for (const char* file : {"/firmware/main/app_main.cpp",
+                             "/firmware/components/aura_companion/src/esp32_companion.cpp",
+                             "/firmware/components/aura_board/src/aura_display.c"}) {
+        const std::string text = read_file(root + file);
+        expect(text.find("bsp_display_lock(") == std::string::npos,
+               std::string(file) + ": no bsp_display_lock(), whose result is inverted");
+    }
+}
+
+// Two seconds of white at every start (the owner, 2026-11-14): the BSP's
+// sequence lit the panel at full brightness with whatever its memory held, and
+// LVGL then drew its default near-white screen until the UI was built. The
+// panel now starts dark (its sequence without 29h, the brightness at 0); the
+// brand's start-up screen is drawn before any service starts, and only then
+// does the panel light.
+// The text without its // and /* */ comments: a check that a call is gone
+// must not see the comments that tell its story.
+std::string without_comments(const std::string& text) {
+    std::string code;
+    for (std::size_t index = 0; index < text.size();) {
+        if (text.compare(index, 2, "//") == 0) {
+            index = text.find('\n', index);
+            if (index == std::string::npos) break;
+        } else if (text.compare(index, 2, "/*") == 0) {
+            const auto end = text.find("*/", index + 2);
+            index = end == std::string::npos ? text.size() : end + 2;
+        } else {
+            code += text[index++];
+        }
+    }
+    return code;
+}
+
+void check_dark_start(const std::string& root) {
+    constexpr auto none = std::string::npos;
+    const std::string display =
+        without_comments(read_file(root + "/firmware/components/aura_board/src/aura_display.c"));
+    const auto table = display.find("kPanelStart[] = {");
+    const std::string start = table == none ? std::string{} : display.substr(table, display.find("};", table) - table);
+    expect(start.find("{0x11, ") != none && start.find("{0x51, (uint8_t[]){0x00}, 1, 0}") != none,
+           "the panel wakes at brightness 0");
+    expect(!start.empty() && start.find("{0x29") == none, "the panel's start leaves it switched off");
+    expect(display.find("bsp_display_new(") == none && display.find("bsp_display_brightness") == none,
+           "the BSP's lit start is not used");
+    const std::string companion =
+        without_comments(read_file(root + "/firmware/components/aura_companion/src/esp32_companion.cpp"));
+    expect(companion.find("bsp_display_brightness") == none,
+           "the brightness goes through aura_board_display_set_brightness(), the panel AURA started");
+    const std::string main = read_file(root + "/firmware/main/app_main.cpp");
+    const auto shown = main.find("ui.show_startup(display)");
+    const auto lit = main.find("aura_board_display_reveal(");
+    const auto audio = main.find("audio.initialize()");
+    const auto created = main.find("ui.create(display");
+    expect(shown != none && lit != none && audio != none && created != none && shown < lit && lit < audio &&
+               audio < created,
+           "the start-up screen is drawn, then the panel lit, before the services start and the UI is built");
+}
+
+// Synapse's middle rows go to the panel straight (LVGL spent 47-72 ms on each
+// of its frames, 2026-11-14): from two strips of internal RAM the panel's DMA
+// reads, taken once the services have started and before the UI is built.
+void check_synapse_panel_output(const std::string& root) {
+    constexpr auto none = std::string::npos;
+    const std::string main = without_comments(read_file(root + "/firmware/main/app_main.cpp"));
+    const auto worker = main.find("start_frame_worker();\n");
+    const auto helper = main.find("start_frame_helper();\n");
+    const auto output = main.find("start_synapse_output();");
+    const auto created = main.find("ui.create(display");
+    expect(worker != none && helper != none && output != none && created != none && worker < helper &&
+               helper < output && output < created,
+           "Synapse's panel output starts after its worker, its helper and the services, before the UI");
+    expect(main.find("index < 2 ? (MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL) : MALLOC_CAP_SPIRAM") != none &&
+               main.find("aura::ui::set_synapse_output(&synapse_panel)") != none,
+           "the worker's strips are internal RAM the panel's DMA reads, the helper's PSRAM");
+    // The helper draws on the second core, below LVGL's task there.
+    const auto helper_start = main.find("void start_frame_helper()");
+    const auto helper_started = main.find("aura::ui::FrameWorker::start_helper();", helper_start);
+    const std::string helper_config = helper_start == none || helper_started == none
+                                          ? std::string{}
+                                          : main.substr(helper_start, helper_started - helper_start);
+    expect(helper_config.find("helper.pin_to_core = 1;") != none && helper_config.find("helper.prio = 1;") != none,
+           "Synapse's helper draws on the second core, below LVGL");
+    expect(main.find("return aura_board_display_lock(") != none && main.find("aura_board_display_draw(") != none,
+           "Synapse's strips go to the panel under LVGL's lock");
+    const std::string display =
+        without_comments(read_file(root + "/firmware/components/aura_board/src/aura_display.c"));
+    expect(display.find("esp_lcd_panel_draw_bitmap(s_panel, x1, y1, x2, y2, pixels)") != none,
+           "the strips go to the panel AURA started");
+    // The loop shows a drawn frame and begins the next without waiting out
+    // its 33 ms (it drew 6.9 frames a second from 85 ms ones, 2026-11-15):
+    // the worker wakes it, and it sleeps no longer than Synapse's rest, while
+    // the screen is lit.
+    const auto woken = main.find("aura::ui::FrameWorker::shared()->set_finished(wake_loop, xTaskGetCurrentTaskHandle());");
+    expect(woken != none && worker < woken && woken < created && main.find("xTaskNotifyGive(") != none,
+           "Synapse's worker wakes the loop when a frame is drawn");
+    const auto lit = main.find("if (aura::needs_full_speed(mode)) {\n            const std::uint32_t due = ui.next_tick_ms();");
+    const auto counted = main.find("sleep_ms = std::min(interval, due > spent ? due - spent : 0U);", lit);
+    expect(lit != none && counted != none && main.find("ticked = xTaskGetTickCount();\n            ui.tick(elapsed_ms);") != none &&
+               main.find("ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(sleep_ms));") != none &&
+               main.find("vTaskDelay(pdMS_TO_TICKS(aura::host_loop_interval_ms(mode)));") == none,
+           "the loop sleeps until Synapse's next tick, less the pass since it, or a frame drawn, while lit");
+}
+
+void check_transfer_server(const std::string& root) {
+    // With its two connections taken (the browser keeps idle ones open), ESP-IDF's
+    // server stops listening unless it may close the least recently used one: the
+    // login's request (a new connection) then waited forever (the first flash,
+    // 2026-11-14; esp_http_server/src/httpd_main.c).
+    const std::string text = read_file(root + "/firmware/components/aura_companion/src/esp32_file_transfer.cpp");
+    expect(text.find("config.lru_purge_enable = true;") != std::string::npos,
+           "the file transfer server makes room for a new connection");
+    // Downloads (the owner's request, 2026-11-14) stream through the server's
+    // chunks; a cut one ends with the connection, never with HTTP's last chunk.
+    expect(text.find("protocol.handle(r, reader, &writer)") != std::string::npos &&
+               text.find("written_ == announced_ ? httpd_resp_send_chunk(request_, nullptr, 0) : ESP_FAIL") !=
+                   std::string::npos,
+           "the device streams downloads and never ends a cut one as complete");
+}
+
+void check_network_name(const std::string& defaults) {
+    // The name the router lists for AURA (DHCP option 12); ESP-IDF's default is
+    // "espressif" (the owner's request on the first flash, 2026-11-14). Host
+    // names allow only letters, digits and hyphens, so no spaces.
+    expect(has_line(defaults, "CONFIG_LWIP_LOCAL_HOSTNAME=\"Aura-Ai-Assistant\""),
+           "the router lists AURA as Aura-Ai-Assistant, not espressif");
 }
 
 void check_power(const std::string& defaults) {
@@ -167,6 +313,12 @@ int main() {
     const std::string root = AURA_REPO_DIR;
     const std::string defaults = read_file(root + "/firmware/sdkconfig.defaults");
     check_lvgl_memory(defaults);
+    check_internal_ram(defaults);
+    check_display_lock(root);
+    check_dark_start(root);
+    check_synapse_panel_output(root);
+    check_network_name(defaults);
+    check_transfer_server(root);
     check_power(defaults);
     check_security(defaults, read_file(root + "/firmware/sdkconfig.production.defaults"));
     check_partitions(defaults, read_file(root + "/firmware/partitions.csv"),

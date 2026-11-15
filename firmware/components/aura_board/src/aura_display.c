@@ -4,6 +4,21 @@
 // instead of 50. LVGL draws the screen one buffer-high band at a time, and the
 // header's glass can blur only what its band holds, so one band must hold the
 // whole capsule (rows 8-87; aura::ui::tokens::DEVICE_DRAW_ROWS).
+//
+// The SPI driver cannot send from PSRAM: it copies each transfer into a
+// temporary buffer in internal RAM first, as large as the transfer. The BSP
+// allows a whole frame per transfer, so a 100-row band took 96 KB of internal
+// RAM, and on the first flash (2026-11-14) the board ran out of it at boot.
+// Transfers are therefore kPanelTransferRows rows; the panel IO queues three,
+// so at most about 17 KB is in flight. (psram_dma_direct, the DMA reading PSRAM
+// itself, underflows at the panel's 40 MHz: tried on the board, frames failed.)
+//
+// The panel itself starts as the BSP's bsp_display_new() starts it, except that
+// it stays dark: the BSP's sequence lit it at full brightness with whatever its
+// memory held, and LVGL then drew its default near-white screen until the UI was
+// built, two seconds of white at every start (the owner, 2026-11-14). Here the
+// panel lights only once AURA's own first screen is in its memory
+// (aura_board_display_reveal).
 #include "aura_display.h"
 
 #include <stdint.h>
@@ -11,6 +26,8 @@
 // In the BSP's own order: its display header needs esp_err_t declared first.
 #include "esp_err.h"
 #include "esp_log.h"
+#include "driver/spi_master.h"
+#include "esp_lcd_co5300.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lv_adapter.h"
@@ -19,6 +36,66 @@
 #include "bsp/touch.h"
 
 static const char* TAG = "aura_display";
+
+// Rows per SPI transfer (960 bytes each); see the top of this file.
+enum { kPanelTransferRows = 6 };
+
+// The BSP 2.0.1's start-up sequence for the CO5300 (esp32_s3_touch_amoled_2_16.c,
+// lcd_init_cmds), with two changes: the brightness (51h) starts at 0, not FFh,
+// and the display-on command (29h, and the 600 ms after it) is left out, so the
+// panel stays dark until aura_board_display_reveal() sends it.
+static const co5300_lcd_init_cmd_t kPanelStart[] = {
+    {0x11, (uint8_t[]){0x00}, 0, 600},  // sleep out
+    {0xFE, (uint8_t[]){0x20}, 1, 0},
+    {0x19, (uint8_t[]){0x10}, 1, 0},
+    {0x1C, (uint8_t[]){0xA0}, 1, 0},
+    {0xFE, (uint8_t[]){0x00}, 1, 0},
+    {0xC4, (uint8_t[]){0x80}, 1, 0},
+    {0x3A, (uint8_t[]){0x55}, 1, 0},
+    {0x35, (uint8_t[]){0x00}, 1, 0},
+    {0x53, (uint8_t[]){0x20}, 1, 0},
+    {0x51, (uint8_t[]){0x00}, 1, 0},  // brightness 0 (the BSP: FFh)
+    {0x63, (uint8_t[]){0xFF}, 1, 0},
+    {0x2A, (uint8_t[]){0x00, 0x00, 0x01, 0xDF}, 4, 0},
+    {0x2B, (uint8_t[]){0x00, 0x00, 0x01, 0xDF}, 4, 0},
+    {0x36, (uint8_t[]){0xA0}, 1, 0},
+};
+
+// bsp_display_new() step for step, with kPanelStart and without its display-on.
+// The BSP's own panel handle stays empty, so its brightness functions are not
+// used: aura_board_display_set_brightness() replaces them.
+static esp_err_t new_dark_panel(int max_transfer_sz, esp_lcd_panel_handle_t* ret_panel,
+                                esp_lcd_panel_io_handle_t* ret_io) {
+    const spi_bus_config_t bus = CO5300_PANEL_BUS_QSPI_CONFIG(BSP_LCD_PCLK, BSP_LCD_DATA0, BSP_LCD_DATA1,
+                                                              BSP_LCD_DATA2, BSP_LCD_DATA3, max_transfer_sz);
+    esp_err_t result = spi_bus_initialize(BSP_LCD_SPI_NUM, &bus, SPI_DMA_CH_AUTO);
+    if (result != ESP_OK) return result;
+    esp_lcd_panel_io_spi_config_t io_config = CO5300_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, NULL, NULL);
+    io_config.trans_queue_depth = 3;
+    static const co5300_vendor_config_t vendor = {
+        .init_cmds = kPanelStart,
+        .init_cmds_size = sizeof(kPanelStart) / sizeof(kPanelStart[0]),
+        .flags = {.use_qspi_interface = 1},
+    };
+    esp_lcd_panel_io_handle_t io = NULL;
+    result = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BSP_LCD_SPI_NUM, &io_config, &io);
+    if (result != ESP_OK) return result;
+    const esp_lcd_panel_dev_config_t panel_config = {
+        .reset_gpio_num = BSP_LCD_RST,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .bits_per_pixel = BSP_LCD_BITS_PER_PIXEL,
+        .vendor_config = (void*)&vendor,
+    };
+    esp_lcd_panel_handle_t panel = NULL;
+    result = esp_lcd_new_panel_co5300(io, &panel_config, &panel);
+    if (result != ESP_OK) return result;
+    if ((result = esp_lcd_panel_reset(panel)) != ESP_OK || (result = esp_lcd_panel_init(panel)) != ESP_OK) {
+        return result;
+    }
+    *ret_panel = panel;
+    *ret_io = io;
+    return ESP_OK;
+}
 
 // The CO5300 takes areas that start on even and end on odd coordinates (as the
 // BSP's rounder does).
@@ -32,6 +109,81 @@ static void round_to_panel(lv_event_t* event) {
     area->y1 = (y1 >> 1) << 1;
     area->x2 = ((x2 >> 1) << 1) + 1;
     area->y2 = ((y2 >> 1) << 1) + 1;
+}
+
+// The screen's rotation (the owner's request on the first flash, 2026-11-14).
+// The adapter does not rotate an "OTHER" panel, so the panel itself turns
+// (MADCTL, as the BSP's bsp_display_rotation_set() writes it) and each touch
+// is turned back into the content's coordinates.
+static esp_lcd_panel_io_handle_t s_panel_io = NULL;
+static esp_lcd_panel_handle_t s_panel = NULL;
+static lv_indev_read_cb_t s_touch_read = NULL;
+static volatile int s_rotation = 0;
+// Lit by aura_board_display_reveal(); until then a brightness waits for it.
+static bool s_revealed = false;
+static int s_brightness_percent = 100;
+
+// MADCTL per rotation: the start-up sequence's 0xA0 upright, then the BSP's
+// own values (0x00, 0x60, 0xC0, 0xA0 for its 0/90/180/270). 0x60 is the half
+// turn; which of 0xC0 and 0x00 puts the content's bottom on the right edge
+// needs the board (NEEDS HARDWARE).
+static const uint8_t kMadctl[4] = {0xA0, 0xC0, 0x60, 0x00};
+
+static void rotated_touch_read(lv_indev_t* indev, lv_indev_data_t* data) {
+    s_touch_read(indev, data);
+    int32_t x = data->point.x;
+    int32_t y = data->point.y;
+    aura_board_rotate_touch(s_rotation, BSP_LCD_H_RES, &x, &y);
+    data->point.x = x;
+    data->point.y = y;
+}
+
+void aura_board_display_set_rotation(int rotation) {
+    if (s_panel_io == NULL || rotation < 0 || rotation > 3 || rotation == s_rotation) return;
+    const uint8_t madctl = kMadctl[rotation];
+    // A QSPI write (0x02) of command 0x36, the memory access control.
+    const int command = (0x02 << 24) | (0x36 << 8);
+    if (esp_lcd_panel_io_tx_param(s_panel_io, command, &madctl, 1) != ESP_OK) return;
+    s_rotation = rotation;
+    lv_obj_invalidate(lv_screen_active());
+    lv_obj_invalidate(lv_layer_top());
+    lv_obj_invalidate(lv_layer_sys());
+    ESP_LOGI(TAG, "rotation %d (MADCTL 0x%02X)", rotation, madctl);
+}
+
+bool aura_board_display_lock(int32_t timeout_ms) { return esp_lv_adapter_lock(timeout_ms) == ESP_OK; }
+
+void aura_board_display_unlock(void) { esp_lv_adapter_unlock(); }
+
+bool aura_board_display_draw(int x1, int y1, int x2, int y2, const void* pixels) {
+    return s_panel != NULL && pixels != NULL && esp_lcd_panel_draw_bitmap(s_panel, x1, y1, x2, y2, pixels) == ESP_OK;
+}
+
+// As the BSP's bsp_display_brightness_set(): a QSPI write (0x02) of 51h.
+static bool send_brightness(int percent) {
+    const uint8_t level = (uint8_t)(percent * 255 / 100);
+    const int command = (0x02 << 24) | (0x51 << 8);
+    return esp_lcd_panel_io_tx_param(s_panel_io, command, &level, 1) == ESP_OK;
+}
+
+bool aura_board_display_set_brightness(int percent) {
+    if (s_panel_io == NULL || percent < 0 || percent > 100) return false;
+    s_brightness_percent = percent;
+    return !s_revealed || send_brightness(percent);
+}
+
+void aura_board_display_reveal(int brightness_percent) {
+    if (s_panel == NULL || !aura_board_display_lock(-1)) return;
+    if (!s_revealed) {
+        // The whole screen drawn and sent now. The panel IO sends a command only
+        // after the pixels queued before it, so the panel lights on this frame.
+        lv_obj_invalidate(lv_screen_active());
+        lv_refr_now(NULL);
+        if (esp_lcd_panel_disp_on_off(s_panel, true) == ESP_OK) s_revealed = true;
+        else ESP_LOGE(TAG, "the panel did not switch on");
+    }
+    aura_board_display_set_brightness(brightness_percent);
+    aura_board_display_unlock();
 }
 
 lv_display_t* aura_board_display_start(int draw_rows) {
@@ -52,14 +204,19 @@ lv_display_t* aura_board_display_start(int draw_rows) {
     // The LVGL task runs the touch callbacks, which build whole screens: 16 KiB
     // instead of the adapter's 8 KiB (internal RAM, measured on the first boot).
     cfg.lv_adapter_cfg.task_stack_size = 16 * 1024;
+    // On the second core: the audio task and the radio's decoder run on the
+    // first at priorities 5 and 4, and LVGL's task (priority 6) drawing a 70-140 ms
+    // frame there starved them; the radio stuttered while the screen moved
+    // (the first flash, 2026-11-14). Synapse's worker draws on the first core,
+    // below them all (app_main's start_frame_worker()).
+    cfg.lv_adapter_cfg.task_core_id = 1;
     if (esp_lv_adapter_init(&cfg.lv_adapter_cfg) != ESP_OK) return NULL;
 
-    const bsp_display_config_t panel_cfg = {
-        .max_transfer_sz = BSP_LCD_H_RES * BSP_LCD_V_RES * BSP_LCD_BITS_PER_PIXEL / 8,
-    };
     esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_panel_io_handle_t io = NULL;
-    if (bsp_display_new(&panel_cfg, &panel, &io) != ESP_OK) return NULL;
+    if (new_dark_panel(BSP_LCD_H_RES * kPanelTransferRows * BSP_LCD_BITS_PER_PIXEL / 8, &panel, &io) != ESP_OK) {
+        return NULL;
+    }
 
     const esp_lv_adapter_display_config_t display_cfg = {
         .panel = panel,
@@ -83,9 +240,18 @@ lv_display_t* aura_board_display_start(int draw_rows) {
     esp_lcd_touch_handle_t touch = NULL;
     if (bsp_touch_new(&cfg, &touch) != ESP_OK || touch == NULL) return NULL;
     const esp_lv_adapter_touch_config_t touch_cfg = ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(display, touch);
-    if (esp_lv_adapter_register_touch(&touch_cfg) == NULL) return NULL;
+    lv_indev_t* touch_input = esp_lv_adapter_register_touch(&touch_cfg);
+    if (touch_input == NULL) return NULL;
+    // Touches reach LVGL through the rotation (aura_board_display_set_rotation).
+    s_touch_read = lv_indev_get_read_cb(touch_input);
+    if (s_touch_read != NULL) lv_indev_set_read_cb(touch_input, rotated_touch_read);
+    s_panel_io = io;
+    s_panel = panel;
 
-    if (bsp_display_brightness_init() != ESP_OK) return NULL;
+    // Black, not the default theme's near-white, should LVGL draw before AURA's
+    // first screen (the panel is still dark then, but its memory keeps it).
+    lv_obj_set_style_bg_color(lv_screen_active(), lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
     if (esp_lv_adapter_start() != ESP_OK) return NULL;
     ESP_LOGI(TAG, "LVGL draws %d rows at a time", draw_rows);
     return display;

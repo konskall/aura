@@ -30,6 +30,9 @@ LV_FONT_DECLARE(aura_font_robotoflex_semibold_32);
 LV_FONT_DECLARE(aura_font_robotoflex_light_cond_64);
 LV_FONT_DECLARE(aura_font_robotoflex_light_cond_116);
 LV_FONT_DECLARE(aura_font_robotoflex_light_cond_204);
+LV_FONT_DECLARE(aura_font_plex_light_150);
+LV_FONT_DECLARE(aura_font_notoserif_extralight_164);
+LV_FONT_DECLARE(aura_font_manrope_extralight_148);
 LV_FONT_DECLARE(aura_font_notoserif_light_72);
 LV_FONT_DECLARE(aura_font_notoserif_extralight_96);
 LV_FONT_DECLARE(aura_font_manrope_light_72);
@@ -56,16 +59,18 @@ constexpr Palette kPalettes[] = {
 const FontSet kFonts[] = {
     {&aura_font_plex_regular_22, &aura_font_plex_regular_26, &aura_font_plex_medium_28,
      &aura_font_plex_semibold_32, &aura_font_plex_light_72, &aura_font_plex_light_96,
-     &aura_font_plex_light_72, &aura_font_plex_light_96, nullptr},
+     &aura_font_plex_light_72, &aura_font_plex_light_96, nullptr, &aura_font_plex_light_150},
     {&aura_font_commissioner_regular_22, &aura_font_commissioner_regular_26, &aura_font_commissioner_medium_28,
      &aura_font_notoserif_regular_32, &aura_font_notoserif_light_72, &aura_font_notoserif_extralight_96,
-     &aura_font_notoserif_light_84, &aura_font_notoserif_extralight_128, nullptr},
+     &aura_font_notoserif_light_84, &aura_font_notoserif_extralight_128, nullptr,
+     &aura_font_notoserif_extralight_164},
     {&aura_font_manrope_medium_22, &aura_font_manrope_medium_26, &aura_font_manrope_semibold_28,
      &aura_font_manrope_bold_32, &aura_font_manrope_light_72, &aura_font_manrope_extralight_96,
-     &aura_font_manrope_light_80, &aura_font_manrope_extralight_116, nullptr},
+     &aura_font_manrope_light_80, &aura_font_manrope_extralight_116, nullptr, &aura_font_manrope_extralight_148},
     {&aura_font_robotoflex_medium_22, &aura_font_robotoflex_regular_26, &aura_font_robotoflex_semibold_cond_28,
      &aura_font_robotoflex_semibold_32, &aura_font_robotoflex_light_cond_64, &aura_font_robotoflex_light_cond_96,
-     &aura_font_robotoflex_light_cond_64, &aura_font_robotoflex_light_cond_116, &aura_font_robotoflex_light_cond_204},
+     &aura_font_robotoflex_light_cond_64, &aura_font_robotoflex_light_cond_116, &aura_font_robotoflex_light_cond_204,
+     &aura_font_robotoflex_light_cond_204},
 };
 
 // The component kit of each look (spec, "Phases" 3-5). Every hero centre stays

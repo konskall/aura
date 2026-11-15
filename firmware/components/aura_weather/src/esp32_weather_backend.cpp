@@ -8,6 +8,7 @@
 #include "nvs_flash.h"
 
 #include "freertos/task.h"
+#include "esp_heap_caps.h"
 
 #include <algorithm>
 #include <cctype>
@@ -602,7 +603,10 @@ bool Esp32WeatherBackend::request(const WeatherLocation& location) {
     xSemaphoreGive(result_mutex_);
     pending_operation_ = Operation::Fetch;
     pending_location_ = location;
-    if (xTaskCreate(worker_entry, "aura-weather", 8192, this, 4, nullptr) != pdPASS) {
+    // HTTPS and JSON only; the location is saved to NVS by the caller: the
+    // worker's stack lives in PSRAM.
+    if (xTaskCreateWithCaps(worker_entry, "aura-weather", 8192, this, 4, nullptr,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         busy_ = false;
         return false;
     }
@@ -626,7 +630,8 @@ bool Esp32WeatherBackend::request_search(std::string query, InterfaceLanguage la
     pending_operation_ = Operation::Search;
     pending_query_ = std::move(query);
     pending_language_ = language;
-    if (xTaskCreate(worker_entry, "aura-geocode", 8192, this, 4, nullptr) != pdPASS) {
+    if (xTaskCreateWithCaps(worker_entry, "aura-geocode", 8192, this, 4, nullptr,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         busy_ = false;
         return false;
     }
@@ -649,7 +654,7 @@ void Esp32WeatherBackend::worker_entry(void* context) {
         }
     }
     self->busy_ = false;
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);
 }
 
 WeatherGeocodingResult Esp32WeatherBackend::search(const std::string& query,

@@ -48,6 +48,8 @@ struct FontSet {
     const lv_font_t* numerals_small;
     const lv_font_t* numerals_large;
     const lv_font_t* hero;
+    // The always-on clock, filling the panel (the first flash, 2026-11-14).
+    const lv_font_t* ambient_clock;
 };
 
 enum class RowStyle : std::uint8_t { Platter, Glass, Hairline };

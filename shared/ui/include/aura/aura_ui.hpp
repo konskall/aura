@@ -284,8 +284,22 @@ public:
     void apply_sound(const SoundSettings& settings);
     // A dark, switched-off screen; a long press asks the platform to power on.
     void power_off();
+    // The volume after a press of a volume key, briefly (0-100 %).
+    void show_volume(int percent);
     // The start-up screen, then Home. Nothing else is shown until it ends.
     void boot();
+    // The device's own start, before create(): from the first frame, the
+    // brand's screen (the wordmark, the core and a bar; no words, since the
+    // language is still on the card, and the brand's colours whatever the look).
+    // The platform moves the bar (set_boot_progress) as its services start;
+    // create() fills it and then shows Home. Nothing else is shown meanwhile.
+    void show_startup(lv_display_t* display);
+    // A restart, factory reset or card format confirmed on the device: its
+    // screen until the board restarts, never Home after it. The platform moves
+    // the bar as it finishes its work.
+    void show_system_progress(SystemAction action);
+    // The bar of the start-up or the system screen: 0-100 %.
+    void set_boot_progress(int percent);
     // Forgets the choices the UI keeps itself (factory reset).
     void reset_preferences();
     // May be called before create() to restore the persisted choice without a
@@ -310,6 +324,10 @@ public:
     void show_message(const char* text, bool error);
     void set_input_amplitude(float amplitude, bool simulated);
     void tick(std::uint32_t elapsed_ms);
+    // How long the board's loop may sleep before the presence wants its next
+    // tick, when it draws on a worker (0: now); ui::PresenceView::no_tick for
+    // none before the loop's own pace.
+    std::uint32_t next_tick_ms() const noexcept;
     void show(UiView view);
     // The device cannot open Google's page: its sign-in button opens File
     // transfer for the PC helper instead (ADR 0010).

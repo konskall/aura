@@ -7,6 +7,7 @@
 #include "aura/aura_stars_view.hpp"
 #include "aura/aura_presence.hpp"
 #include "aura/aura_theme.hpp"
+#include "aura/aura_ui.hpp"
 #include "aura/strings.hpp"
 #include "aura/visual_strings.hpp"
 #include "aura/companion_strings.hpp"
@@ -17,14 +18,20 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <initializer_list>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -239,6 +246,19 @@ void check_appearance_fonts() {
             // The new looks also print the weather temperature with them.
             expect(appearance == Appearance::Halo || font == fonts.clock || carries(font, {0xB0}),
                    "the signature numerals carry the degree sign");
+        }
+        // The always-on clock fills the panel (the owner's request on the first
+        // flash, 2026-11-14): larger than the 96 px clock, and the widest time,
+        // "08:08", still within 420 px of the 480 px screen.
+        expect(fonts.ambient_clock != nullptr &&
+                   carries(fonts.ambient_clock, {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', ' '}),
+               "the always-on clock carries the digits and the colon itself");
+        if (fonts.ambient_clock) {
+            expect(lv_font_get_line_height(fonts.ambient_clock) > lv_font_get_line_height(fonts.clock),
+                   "the always-on clock is larger than the ordinary clock");
+            const std::int32_t widest = 4 * lv_font_get_glyph_width(fonts.ambient_clock, '8', '8') +
+                                        lv_font_get_glyph_width(fonts.ambient_clock, ':', '0');
+            expect(widest <= 420, "the widest always-on time fits the screen with a margin");
         }
     }
 }
@@ -896,6 +916,20 @@ float synapse_difference(const lv_image_dsc_t& left, const lv_image_dsc_t& right
     return total / static_cast<float>(aura::ui::AuraMercuryView::width * aura::ui::AuraMercuryView::height);
 }
 
+// How sharp a frame is: the mean difference in light between neighbouring
+// pixels, across and down. Blurred lines spread it out.
+float synapse_sharpness(const lv_image_dsc_t& frame) {
+    float total = 0.0F;
+    for (int y = 0; y + 1 < aura::ui::AuraMercuryView::height; ++y) {
+        for (int x = 0; x + 1 < aura::ui::AuraMercuryView::width; ++x) {
+            const float here = synapse_luminance(frame, x, y);
+            total += std::abs(here - synapse_luminance(frame, x + 1, y)) +
+                     std::abs(here - synapse_luminance(frame, x, y + 1));
+        }
+    }
+    return total / static_cast<float>((aura::ui::AuraMercuryView::width - 1) * (aura::ui::AuraMercuryView::height - 1));
+}
+
 // Synapse never takes more than a third of the time it draws in, on any device:
 // a slower one draws fewer, then lighter frames, and with a worker the UI thread
 // does not draw at all.
@@ -913,6 +947,13 @@ void check_synapse_pacing() {
     expect(AuraMercuryView::paced_wait(150) == 300,
            "a slow frame leaves twice its drawing time idle, with no frame-rate floor that would starve the UI");
     expect(AuraMercuryView::paced_wait(5000) == 2000, "an extreme stall still lets Synapse move every 3 s");
+    // On a worker the UI thread never draws: the board's worker draws below
+    // every other task of its core, so Synapse may draw four fifths of the
+    // time there. Waiting as long as it drew halved the board's frames (2.3 a
+    // second at ~205 ms, 2026-11-15).
+    expect(AuraMercuryView::worker_wait(0) == 50 && AuraMercuryView::worker_wait(30) == 20 &&
+               AuraMercuryView::worker_wait(150) == 37 && AuraMercuryView::worker_wait(5000) == 250,
+           "on a worker, Synapse draws at most four fifths of the time");
     expect(AuraMercuryView::next_quality(SynapseQuality::Full, AuraMercuryView::reduce_above_ms) ==
                SynapseQuality::Full &&
                AuraMercuryView::next_quality(SynapseQuality::Full, AuraMercuryView::reduce_above_ms + 1) ==
@@ -997,6 +1038,655 @@ void check_synapse_pacing() {
     async->tick(50);
     async.reset();  // while the worker may still draw: the view waits for it
     expect(!worker.busy(), "a view never leaves the worker drawing into freed memory");
+    lv_obj_clean(screen);
+
+    // A return to a Synapse screen, with a worker: the last frame shows at once
+    // and the worker draws the next. On the board a frame takes ~330 ms, and
+    // drawing it in attach() held the display lock and froze touch on every
+    // return (the first flash, 2026-11-14).
+    auto returning = std::make_unique<AuraMercuryView>(nullptr, &worker);
+    returning->attach(screen, 240, 246);
+    expect(returning->frame_count() == 1, "the first visit draws its frame at once, never blank");
+    returning->detach();
+    lv_obj_clean(screen);
+    returning->attach(screen, 240, 246);
+    expect(returning->frame_count() == 0, "a return shows the last frame and does not draw on the caller's thread");
+    worker.wait_idle();
+    returning->tick(1);
+    expect(returning->frame_count() == 1, "the next tick shows the frame the worker drew");
+    returning.reset();
+    expect(!worker.busy(), "a returned view never leaves the worker drawing into freed memory");
+    lv_obj_clean(screen);
+}
+
+// The board's loop sleeps between its passes (33 ms and its own work): Synapse
+// waited there for its frame to be seen, and again for the next to begin,
+// drawing 6.9 frames a second from 85 ms frames (measured 2026-11-15). The
+// worker now says when it has drawn one, and Synapse when it wants its tick.
+void check_synapse_next_tick() {
+    using aura::ui::AuraMercuryView;
+    using aura::ui::FrameWorker;
+    using aura::ui::PresenceView;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+
+    FrameWorker worker;
+    std::atomic<int> finished{0};
+    worker.set_finished([](void* count) { static_cast<std::atomic<int>*>(count)->fetch_add(1); }, &finished);
+    expect(worker.submit([](void*) {}, nullptr), "the worker takes a job");
+    for (int wait = 0; wait < 1000 && finished.load() == 0; ++wait) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(finished.load() == 1 && !worker.busy(), "the worker says when it has finished a job, once it is free");
+
+    auto view = std::make_unique<AuraMercuryView>(nullptr, &worker);
+    expect(view->next_tick_ms() == PresenceView::no_tick, "a view not shown wants no tick");
+    view->attach(screen, 240, 246);
+    expect(view->next_tick_ms() == 0, "after a visit's first frame the next begins on the first tick");
+    view->tick(0);
+    worker.wait_idle();
+    for (int wait = 0; wait < 1000 && finished.load() < 2; ++wait) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(view->next_tick_ms() == 0, "a frame the worker has drawn wants its tick at once");
+    const auto frames = view->frame_count();
+    view->tick(0);
+    const std::uint32_t waiting = view->next_tick_ms();
+    expect(view->frame_count() == frames + 1 && waiting > 0 && waiting != PresenceView::no_tick,
+           "that tick shows it, and the next frame waits out its own rest");
+    view->tick(waiting - 1);
+    expect(view->next_tick_ms() == 1, "the wait counts down with the ticks");
+    view->tick(1);
+    expect(view->frame_count() == frames + 1, "the tick that ends the wait begins the next frame");
+    worker.wait_idle();
+    view->set_reduced_motion(true);
+    expect(view->next_tick_ms() == PresenceView::no_tick, "with reduced motion Synapse wants no tick");
+    view.reset();
+    lv_obj_clean(screen);
+
+    // Without a worker (the simulator) the UI's own 33 ms set the pace.
+    auto alone = std::make_unique<AuraMercuryView>(nullptr, nullptr);
+    alone->attach(screen, 240, 246);
+    expect(alone->next_tick_ms() == PresenceView::no_tick, "a view drawing on the UI thread asks for no early tick");
+    alone.reset();
+    lv_obj_clean(screen);
+}
+
+// The board's Synapse (the owner's request after the first flash, 2026-11-14:
+// it took ~340 ms a frame there): the light gathered at half resolution and
+// scaled up smoothly, without the orbit traces and the web between the paths,
+// and with half the sparks. It keeps the presentation's picture, a little
+// softer, for under 30 % of the work.
+void check_synapse_device_profile() {
+    using aura::ui::AuraMercuryView;
+    using aura::ui::PresenceState;
+    using aura::ui::SynapseProfile;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+
+    expect(instant_synapse()->profile() == SynapseProfile::Presentation &&
+               std::make_unique<AuraMercuryView>()->profile() == SynapseProfile::Presentation,
+           "the simulator draws the approved presentation in full");
+
+    const PresenceState states[] = {PresenceState::Idle, PresenceState::Listening, PresenceState::Thinking,
+                                    PresenceState::Speaking};
+    const char* names[] = {"idle", "listening", "thinking", "speaking"};
+    for (int state = 0; state < 4; ++state) {
+        auto presentation = instant_synapse();
+        auto device = instant_synapse();
+        device->set_profile(SynapseProfile::Device);
+        expect(device->profile() == SynapseProfile::Device, "the board's profile can be chosen");
+        for (auto* view : {presentation.get(), device.get()}) {
+            view->set_state(states[state]);
+            view->set_level(state == 1 || state == 3 ? 0.5F : 0.0F);
+        }
+        auto* presentation_image = presentation->attach(screen, 240, 246);
+        auto* device_image = device->attach(screen, 240, 246);
+        for (int step = 0; step < 120; ++step) {
+            presentation->tick(50);
+            device->tick(50);
+        }
+        const auto& shown = *static_cast<const lv_image_dsc_t*>(lv_image_get_src(device_image));
+        const auto& full = *static_cast<const lv_image_dsc_t*>(lv_image_get_src(presentation_image));
+        expect(shown.header.w == 480 && shown.header.h == 252 && shown.header.cf == LV_COLOR_FORMAT_RGB565,
+               "the device frame fills the same 480 x 252 frame, in the board's RGB565 on every display");
+        // The presentation's light, band by band, with room for the softer
+        // scale-up and the layers left out.
+        std::array<std::array<float, 4>, 5> totals{};
+        std::array<std::array<int, 4>, 5> counts{};
+        constexpr float bands[] = {0.0F, 15.0F, 40.0F, 80.0F, 130.0F, 240.0F};
+        for (int y = 0; y < AuraMercuryView::height; ++y) {
+            for (int x = 0; x < AuraMercuryView::width; ++x) {
+                const float dx = static_cast<float>(x) + 0.5F - 240.0F;
+                const float dy = static_cast<float>(y) + 0.5F - 126.0F;
+                if (std::abs(dy) > 100.0F) continue;
+                const float distance = std::hypot(dx, dy);
+                int band = 0;
+                while (band < 5 && distance >= bands[band + 1]) ++band;
+                if (band == 5) continue;
+                const int quadrant = (dx >= 0.0F ? 1 : 0) + (dy >= 0.0F ? 2 : 0);
+                totals[static_cast<std::size_t>(band)][static_cast<std::size_t>(quadrant)] +=
+                    synapse_luminance(shown, x, y);
+                ++counts[static_cast<std::size_t>(band)][static_cast<std::size_t>(quadrant)];
+            }
+        }
+        for (int band = 0; band < 5; ++band) {
+            for (int quadrant = 0; quadrant < 4; ++quadrant) {
+                const float mean = totals[static_cast<std::size_t>(band)][static_cast<std::size_t>(quadrant)] /
+                                   static_cast<float>(counts[static_cast<std::size_t>(band)]
+                                                            [static_cast<std::size_t>(quadrant)]);
+                const float reference = kSynapseReference[state][band][quadrant];
+                if (std::abs(mean - reference) > reference * 0.25F + 6.0F) {
+                    std::cerr << "device Synapse " << names[state] << " band " << band << " quadrant " << quadrant
+                              << ": " << mean << " against " << reference << '\n';
+                    expect(false, "the device frame keeps the presentation's light in every state");
+                }
+            }
+        }
+        // Measured: 3.9 (idle) to 5.3 (speaking) levels, mostly the sharp
+        // lines one pixel across and the RGB565 dither; a misplaced or missing
+        // layer differs far more.
+        const float difference = synapse_difference(shown, full);
+        if (difference > 6.5F) std::cerr << "device Synapse " << names[state] << " differs by " << difference << '\n';
+        expect(difference <= 6.5F, "the device frame looks like the presentation");
+        // Its lines are as sharp as the presentation's (the owner found the
+        // first device frame, gathered at half resolution, blurred: it had
+        // ~55 % of the presentation's sharpness; this one 127-134 %, its
+        // dither included).
+        const float sharpness = synapse_sharpness(shown);
+        const float reference_sharpness = synapse_sharpness(full);
+        if (sharpness < reference_sharpness * 0.9F) {
+            std::cerr << "device Synapse " << names[state] << " sharpness " << sharpness << " against "
+                      << reference_sharpness << '\n';
+        }
+        expect(sharpness >= reference_sharpness * 0.9F, "the device frame's lines are not blurred");
+        // Every pixel at full resolution, the lattice's halo from every fourth
+        // step: 47-50 % of the presentation's pixels (measured 2026-11-15),
+        // all of them in fast memory on the board. The presentation's whole
+        // lattice would be 100 %.
+        if (device->frame_work() * 10 > presentation->frame_work() * 6) {
+            std::cerr << "device Synapse work " << device->frame_work() << " against "
+                      << presentation->frame_work() << '\n';
+        }
+        expect(device->frame_work() * 10 <= presentation->frame_work() * 6,
+               "the device frame takes under 60 % of the presentation's work");
+        presentation->detach();
+        device->detach();
+        lv_obj_clean(screen);
+    }
+
+    // It still answers the voice: the resonance ticks are the voice meter.
+    auto meter = instant_synapse();
+    meter->set_profile(SynapseProfile::Device);
+    meter->set_state(PresenceState::Listening);
+    meter->attach(screen, 240, 246);
+    for (int step = 0; step < 7; ++step) meter->tick(50);
+    const auto quiet = meter->frame_signature();
+    meter->set_level(1.0F);
+    for (int step = 0; step < 7; ++step) meter->tick(50);
+    expect(meter->frame_signature() != quiet, "the device frame follows the voice level");
+    meter->detach();
+    lv_obj_clean(screen);
+}
+
+// The board's square root inside the device frame's loops (its sqrtf runs from
+// flash): close enough that no pixel's light moves by a level.
+void check_synapse_estimated_root() {
+    using aura::ui::AuraMercuryView;
+    expect(AuraMercuryView::estimated_root(0.0F) == 0.0F && AuraMercuryView::estimated_root(-4.0F) == 0.0F,
+           "the board's square root of nothing is nothing");
+    float worst = 0.0F;
+    for (float value = 1e-4F; value < 3.0e5F; value *= 1.0137F) {
+        const float exact = std::sqrt(value);
+        worst = std::max(worst, std::abs(AuraMercuryView::estimated_root(value) - exact) / exact);
+    }
+    if (worst > 1e-5F) std::cerr << "estimated root: relative error " << worst << '\n';
+    expect(worst <= 1e-5F, "the board's square root lies within 1e-5 of the root");
+}
+
+// The board's reciprocal and inverse root inside the device frame's loops (it
+// divides floats in a call into ROM): no pixel's light moves by a level.
+void check_synapse_estimated_reciprocal() {
+    using aura::ui::AuraMercuryView;
+    float worst = 0.0F;
+    for (float value = 1e-6F; value < 1e6F; value *= 1.0137F) {
+        for (const float sign : {1.0F, -1.0F}) {
+            const float exact = 1.0F / (sign * value);
+            worst = std::max(worst, std::abs(AuraMercuryView::estimated_reciprocal(sign * value) - exact) /
+                                        std::abs(exact));
+        }
+    }
+    if (worst > 1e-6F) std::cerr << "estimated reciprocal: relative error " << worst << '\n';
+    expect(worst <= 1e-6F, "the board's reciprocal lies within 1e-6 of it, of either sign");
+    float worst_root = 0.0F;
+    for (float value = 1e-4F; value < 3.0e5F; value *= 1.0137F) {
+        const float exact = 1.0F / std::sqrt(value);
+        worst_root = std::max(worst_root, std::abs(AuraMercuryView::estimated_inverse_root(value) - exact) / exact);
+    }
+    if (worst_root > 1e-5F) std::cerr << "estimated inverse root: relative error " << worst_root << '\n';
+    expect(worst_root <= 1e-5F && AuraMercuryView::estimated_inverse_root(0.0F) == 0.0F &&
+               AuraMercuryView::estimated_inverse_root(-4.0F) == 0.0F,
+           "the board's inverse root lies within 1e-5 of it, and nothing for nothing");
+}
+
+// The device frame drawn six rows at a time (for the panel) is exactly the
+// frame drawn in one piece: no shape is lost where two strips meet, so no line
+// shows a seam every six rows.
+void check_synapse_strips_seamless() {
+    using aura::ui::AuraMercuryView;
+    using aura::ui::PresenceState;
+    using aura::ui::SynapseProfile;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+    for (const auto state : {PresenceState::Idle, PresenceState::Listening, PresenceState::Speaking}) {
+        auto strips = instant_synapse();
+        auto whole = instant_synapse();
+        whole->set_strip_height(AuraMercuryView::height);
+        for (auto* view : {strips.get(), whole.get()}) {
+            view->set_profile(SynapseProfile::Device);
+            view->set_state(state);
+            view->set_level(0.7F);
+        }
+        auto* strips_image = strips->attach(screen, 240, 246);
+        auto* whole_image = whole->attach(screen, 240, 246);
+        const auto& strips_frame = *static_cast<const lv_image_dsc_t*>(lv_image_get_src(strips_image));
+        const auto& whole_frame = *static_cast<const lv_image_dsc_t*>(lv_image_get_src(whole_image));
+        for (int step = 0; step < 12; ++step) {
+            strips->tick(50);
+            whole->tick(50);
+            expect(std::memcmp(strips_frame.data, whole_frame.data, strips_frame.data_size) == 0 &&
+                       strips->frame_work() == whole->frame_work(),
+                   "the device frame drawn in six-row strips is exactly the frame drawn whole");
+        }
+        strips->detach();
+        whole->detach();
+        lv_obj_clean(screen);
+    }
+}
+
+// A panel for Synapse's direct output: it keeps every strip sent, and can hold
+// the worker inside lock() until the check lets it go on.
+class FakePanel final : public aura::ui::SynapseOutput {
+public:
+    struct Strip {
+        int left;
+        int top;
+        int columns;
+        int rows;
+        bool locked;
+        std::vector<std::uint8_t> pixels;
+    };
+
+    void* strip(int index, std::size_t bytes) override {
+        auto& memory = memory_[static_cast<std::size_t>(index & 3)];
+        if (memory.size() < bytes) memory.resize(bytes);
+        return memory.data();
+    }
+    bool lock(std::uint32_t) override {
+        {
+            std::unique_lock<std::mutex> guard(gate_);
+            waiting_ = true;
+            changed_.notify_all();
+            changed_.wait(guard, [this] { return open_; });
+            waiting_ = false;
+        }
+        // LVGL's lock: one sender at a time (the worker and its helper both send).
+        exclusive_.lock();
+        locked_ = true;
+        return true;
+    }
+    void unlock() override {
+        locked_ = false;
+        exclusive_.unlock();
+    }
+    bool send(int left, int top, int columns, int rows, const void* pixels) override {
+        const auto* bytes = static_cast<const std::uint8_t*>(pixels);
+        const auto size = static_cast<std::size_t>(columns) * static_cast<std::size_t>(rows) * 2U;
+        sent_.push_back({left, top, columns, rows, locked_, std::vector<std::uint8_t>(bytes, bytes + size)});
+        return true;
+    }
+    // The next lock() waits until open(); held() returns once the worker waits there.
+    void hold() {
+        std::lock_guard<std::mutex> guard(gate_);
+        open_ = false;
+    }
+    void held() {
+        std::unique_lock<std::mutex> guard(gate_);
+        changed_.wait(guard, [this] { return waiting_; });
+    }
+    void open() {
+        {
+            std::lock_guard<std::mutex> guard(gate_);
+            open_ = true;
+        }
+        changed_.notify_all();
+    }
+    // Read once the worker is idle.
+    const std::vector<Strip>& sent() const { return sent_; }
+
+private:
+    std::array<std::vector<std::uint8_t>, 4> memory_;
+    std::vector<Strip> sent_;
+    std::mutex exclusive_;
+    std::mutex gate_;
+    std::condition_variable changed_;
+    bool open_{true};
+    bool waiting_{false};
+    bool locked_{false};
+};
+
+// One frame on the worker: Synapse hands it over, the worker draws it, the next
+// tick shows it, and LVGL draws what was invalidated.
+void synapse_worker_frame(aura::ui::AuraMercuryView& view, aura::ui::FrameWorker& worker) {
+    view.tick(50);
+    worker.wait_idle();
+    view.tick(0);
+    lv_refr_now(nullptr);
+}
+
+// Whether the last of `frames` frames on the worker went to the panel straight
+// (the first after a change waits for LVGL to draw it).
+bool synapse_goes_straight(aura::ui::AuraMercuryView& view, aura::ui::FrameWorker& worker, int frames = 2) {
+    for (int step = 1; step < frames; ++step) synapse_worker_frame(view, worker);
+    const auto direct = view.direct_frames();
+    synapse_worker_frame(view, worker);
+    return view.direct_frames() == direct + 1;
+}
+
+// The strips of the last direct frame: its middle rows, each once, under the
+// lock, and exactly the frame shown with each pixel's high byte first (a
+// worker and its helper send theirs in turns).
+bool synapse_strips_match(const FakePanel& panel, std::size_t first, const lv_image_dsc_t& frame, int top) {
+    using aura::ui::AuraMercuryView;
+    constexpr int strips = (AuraMercuryView::direct_bottom - AuraMercuryView::direct_top) / AuraMercuryView::strip_rows;
+    if (panel.sent().size() != first + strips) return false;
+    std::vector<const FakePanel::Strip*> sent;
+    for (std::size_t index = first; index < panel.sent().size(); ++index) sent.push_back(&panel.sent()[index]);
+    std::sort(sent.begin(), sent.end(), [](const auto* left, const auto* right) { return left->top < right->top; });
+    const auto* pixels = reinterpret_cast<const std::uint16_t*>(frame.data);
+    for (int index = 0; index < strips; ++index) {
+        const auto& strip = *sent[static_cast<std::size_t>(index)];
+        const int row = AuraMercuryView::direct_top + index * AuraMercuryView::strip_rows;
+        if (strip.left != 0 || strip.top != top + row || strip.columns != AuraMercuryView::width ||
+            strip.rows != AuraMercuryView::strip_rows || !strip.locked) {
+            return false;
+        }
+        for (int y = 0; y < AuraMercuryView::strip_rows; ++y) {
+            for (int x = 0; x < AuraMercuryView::width; ++x) {
+                const std::uint16_t shown = pixels[static_cast<std::size_t>((row + y) * AuraMercuryView::width + x)];
+                const auto at = static_cast<std::size_t>((y * AuraMercuryView::width + x) * 2);
+                if (strip.pixels[at] != (shown >> 8) || strip.pixels[at + 1] != (shown & 0xFFU)) return false;
+            }
+        }
+    }
+    return true;
+}
+
+// The board's Synapse sends the middle rows of each frame to the panel itself,
+// strip by strip while it draws them, where nothing LVGL draws lies over them:
+// LVGL then draws only the band's top and bottom rows (it spent 47-72 ms on
+// each of Synapse's frames, 2026-11-14). Anything LVGL draws over those rows
+// keeps the whole frame for LVGL.
+void check_synapse_direct_output() {
+    using aura::ui::AuraMercuryView;
+    using aura::ui::SynapseProfile;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+    FakePanel panel;
+    aura::ui::set_synapse_output(&panel);
+    aura::ui::FrameWorker worker;
+    synapse_draw_ms = 0;
+    auto view = std::make_unique<AuraMercuryView>(synapse_test_clock, &worker);
+    view->set_profile(SynapseProfile::Device);
+    view->set_state(aura::ui::PresenceState::Speaking);
+    view->set_level(0.5F);
+    auto* image = view->attach(screen, 240, 246);
+    // The same frames drawn on the ticking thread, which never sends: drawn
+    // behind the first, so it never lies over it.
+    auto plain = instant_synapse();
+    plain->set_profile(SynapseProfile::Device);
+    plain->set_state(aura::ui::PresenceState::Speaking);
+    plain->set_level(0.5F);
+    auto* plain_image = plain->attach(screen, 240, 246);
+    lv_refr_now(nullptr);
+    const auto& frame = *static_cast<const lv_image_dsc_t*>(lv_image_get_src(image));
+    const auto& plain_frame = *static_cast<const lv_image_dsc_t*>(lv_image_get_src(plain_image));
+
+    // The first frame on the worker goes to LVGL whole (Synapse was just
+    // shown); after it LVGL has drawn the band, and the rows go straight.
+    synapse_worker_frame(*view, worker);
+    plain->tick(50);
+    lv_refr_now(nullptr);
+    expect(panel.sent().empty() && view->direct_frames() == 0, "a frame just shown goes to LVGL whole");
+    for (int step = 0; step < 3; ++step) {
+        const std::size_t before = panel.sent().size();
+        synapse_worker_frame(*view, worker);
+        expect(synapse_strips_match(panel, before, frame, 120),
+               "Synapse sends its middle rows to the panel, strip by strip, exactly as shown");
+        // The plain frame's own redraw lies under the rows too: LVGL draws it
+        // before the next frame goes.
+        plain->tick(50);
+        lv_refr_now(nullptr);
+    }
+    expect(view->direct_frames() == 3, "every frame after the first goes to the panel straight");
+    expect(std::memcmp(frame.data, plain_frame.data, frame.data_size) == 0,
+           "the frame shown is the same whether its rows went to the panel or not");
+
+    // A label over those rows keeps the frames for LVGL; above them it does not.
+    auto* label = lv_label_create(screen);
+    lv_label_set_text(label, "AURA");
+    lv_obj_set_pos(label, 100, 220);
+    auto before = panel.sent().size();
+    expect(!synapse_goes_straight(*view, worker, 3) && panel.sent().size() == before,
+           "a label over the middle rows keeps Synapse's frames for LVGL");
+    lv_obj_set_pos(label, 100, 124);
+    expect(synapse_goes_straight(*view, worker), "a label over the band's top lets the middle rows go straight");
+    lv_obj_set_pos(label, 100, 220);
+    lv_obj_set_hidden(label, true);
+    expect(synapse_goes_straight(*view, worker), "a hidden label lies over nothing");
+    lv_obj_delete(label);
+
+    // Home's talk button lies over the halo: clear until it is pressed.
+    auto* talk = lv_button_create(screen);
+    lv_obj_remove_style_all(talk);
+    lv_obj_set_style_bg_opa(talk, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_opa(talk, LV_OPA_10, LV_STATE_PRESSED);
+    lv_obj_set_size(talk, 224, 224);
+    lv_obj_set_pos(talk, 128, 148);
+    expect(synapse_goes_straight(*view, worker), "a clear button over the halo lets the rows go straight");
+    lv_obj_add_state(talk, LV_STATE_PRESSED);
+    before = panel.sent().size();
+    expect(!synapse_goes_straight(*view, worker, 3) && panel.sent().size() == before,
+           "the pressed button's veil keeps the frames for LVGL");
+    lv_obj_remove_state(talk, LV_STATE_PRESSED);
+    expect(synapse_goes_straight(*view, worker), "released, the rows go straight again");
+
+    // Invalidated while the worker draws: the rest of the frame goes to LVGL.
+    panel.hold();
+    before = panel.sent().size();
+    const auto direct = view->direct_frames();
+    view->tick(50);
+    panel.held();
+    lv_obj_invalidate(talk);
+    panel.open();
+    worker.wait_idle();
+    view->tick(0);
+    lv_refr_now(nullptr);
+    expect(panel.sent().size() == before && view->direct_frames() == direct,
+           "LVGL invalidating the rows during a frame keeps that frame for LVGL");
+    lv_obj_delete(talk);
+    expect(synapse_goes_straight(*view, worker), "the next frames go straight again");
+
+    // Leaving the screen stops a frame mid-way: nothing more reaches the panel.
+    panel.hold();
+    before = panel.sent().size();
+    view->tick(50);
+    panel.held();
+    view->detach();
+    plain->detach();
+    lv_obj_clean(screen);
+    panel.open();
+    worker.wait_idle();
+    expect(panel.sent().size() == before, "a frame drawn while the screen changes sends nothing");
+    view.reset();
+    aura::ui::set_synapse_output(nullptr);
+}
+
+// With a helper (the board's other core), the worker draws the even strips and
+// the helper the odd ones: the same frame, and the same rows to the panel.
+void check_synapse_helper_shares_strips() {
+    using aura::ui::AuraMercuryView;
+    using aura::ui::SynapseProfile;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+    FakePanel panel;
+    aura::ui::set_synapse_output(&panel);
+    aura::ui::FrameWorker worker;
+    aura::ui::FrameWorker helper;
+    synapse_draw_ms = 0;
+    auto shared = std::make_unique<AuraMercuryView>(synapse_test_clock, &worker, &helper);
+    auto alone = instant_synapse();
+    alone->set_strip_height(AuraMercuryView::height);
+    for (auto* view : {shared.get(), alone.get()}) {
+        view->set_profile(SynapseProfile::Device);
+        view->set_state(aura::ui::PresenceState::Speaking);
+        view->set_level(0.6F);
+    }
+    auto* shared_image = shared->attach(screen, 240, 246);
+    auto* alone_image = alone->attach(screen, 240, 246);  // behind the other: it never lies over it
+    lv_refr_now(nullptr);
+    const auto& shared_frame = *static_cast<const lv_image_dsc_t*>(lv_image_get_src(shared_image));
+    const auto& alone_frame = *static_cast<const lv_image_dsc_t*>(lv_image_get_src(alone_image));
+    std::size_t before = 0;
+    for (int step = 0; step < 4; ++step) {
+        before = panel.sent().size();
+        synapse_worker_frame(*shared, worker);
+        alone->tick(50);
+        lv_refr_now(nullptr);
+        expect(std::memcmp(shared_frame.data, alone_frame.data, shared_frame.data_size) == 0,
+               "with a helper the device frame is exactly the frame drawn whole");
+    }
+    expect(shared->direct_frames() >= 2 && synapse_strips_match(panel, before, shared_frame, 120),
+           "with a helper the middle rows still go to the panel, each once and exactly as shown");
+    shared->detach();
+    alone->detach();
+    lv_obj_clean(screen);
+    shared.reset();
+    aura::ui::set_synapse_output(nullptr);
+}
+
+// On Home, Halo's layout leaves those rows clear: the date line lies over the
+// band's top, the hint under its bottom, and the talk button is clear.
+void check_synapse_direct_on_home() {
+    using aura::ui::AuraMercuryView;
+    ensure_lvgl();
+    auto* previous = lv_display_get_default();
+    static std::uint8_t buffer[480 * 48 * 2];
+    auto* display = lv_display_create(480, 480);
+    lv_display_set_buffers(display, buffer, nullptr, sizeof(buffer), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, [](lv_display_t* target, const lv_area_t*, std::uint8_t*) {
+        lv_display_flush_ready(target);
+    });
+    lv_display_set_default(display);
+    auto owner = std::make_unique<aura::AuraUi>();
+    auto& face = *owner;
+    face.create(display, aura::AuraUiCallbacks{});
+    aura::DeviceStatusSnapshot status;
+    status.clock_valid = true;
+    status.hour = 19;
+    status.minute = 30;
+    status.date_valid = true;
+    status.year = 2026;
+    status.month = 11;
+    status.day = 15;
+    status.weekday = 0;
+    face.apply_status(status);
+    face.show(aura::UiView::Home);
+    lv_refr_now(display);
+
+    // Halo's own Synapse draws the presentation here: the board's takes its place.
+    lv_obj_t* halo = nullptr;
+    const std::function<void(lv_obj_t*)> find = [&](lv_obj_t* object) {
+        for (std::uint32_t index = 0; index < lv_obj_get_child_count(object) && !halo; ++index) {
+            auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+            if (lv_obj_check_type(child, &lv_image_class) && lv_obj_get_width(child) == AuraMercuryView::width &&
+                lv_obj_get_height(child) == AuraMercuryView::height) {
+                halo = child;
+            }
+            find(child);
+        }
+    };
+    find(face.root());
+    expect(halo != nullptr, "Home shows Halo's Synapse");
+    FakePanel panel;
+    aura::ui::set_synapse_output(&panel);
+    aura::ui::FrameWorker worker;
+    auto view = std::make_unique<AuraMercuryView>(synapse_test_clock, &worker);
+    view->set_profile(aura::ui::SynapseProfile::Device);
+    if (halo) {
+        lv_obj_set_hidden(halo, true);
+        view->attach(lv_obj_get_parent(halo), 240, 246);
+        lv_refr_now(display);
+        for (int step = 0; step < 3; ++step) synapse_worker_frame(*view, worker);
+    }
+    expect(view->direct_frames() == 2 && !panel.sent().empty() && panel.sent().front().top == 150,
+           "on Home, Synapse's middle rows go to the panel straight");
+    // So do the assistant's screens, once they have faded in: the title and
+    // caption lie above the band, the buttons below it. Back on a screen, the
+    // worker's frame shows first and the next waits for LVGL to draw the band.
+    for (const auto state : {aura::AssistantState::Listening, aura::AssistantState::Thinking}) {
+        view->detach();
+        aura::AssistantSnapshot snapshot;
+        snapshot.state = state;
+        snapshot.sequence = static_cast<std::uint64_t>(state) + 10U;
+        face.apply(snapshot);
+        for (int step = 0; step < 10; ++step) {
+            lv_tick_inc(50);
+            lv_timer_handler();
+        }
+        halo = nullptr;
+        find(face.root());
+        expect(halo != nullptr, "the assistant's screen shows Halo's Synapse");
+        lv_obj_set_hidden(halo, true);
+        view->attach(lv_obj_get_parent(halo), 240, 246);
+        lv_refr_now(display);
+        expect(synapse_goes_straight(*view, worker, 3), "on the assistant's screens the middle rows go straight");
+    }
+    view->detach();
+    view.reset();
+    aura::ui::set_synapse_output(nullptr);
+    lv_screen_load(lv_obj_create(nullptr));
+    lv_obj_delete(face.root());
+    owner.reset();
+    lv_display_set_default(previous);
+    lv_display_delete(display);
+    aura::ui::set_active_appearance(aura::Appearance::Halo);
+}
+
+// The firmware builds the UI, and Halo's Synapse with it, before it starts the
+// shared worker (app_main's static AuraUi). The view looks the worker up when
+// it is shown: on the first flash it kept none, drew every ~340 ms frame on the
+// UI thread with the display locked, and froze the whole board. Runs last: the
+// shared worker, once started, serves every later view in this process.
+void check_synapse_finds_shared_worker() {
+    using aura::ui::AuraMercuryView;
+    using aura::ui::FrameWorker;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+    expect(FrameWorker::shared() == nullptr, "no shared worker before the platform starts one");
+    auto view = std::make_unique<AuraMercuryView>();  // as AuraUi makes it, before the worker
+    FrameWorker::start_shared();
+    view->attach(screen, 240, 246);
+    expect(view->buffer_bytes() == static_cast<std::size_t>(2 * 480 * 252 * 3),
+           "a view made before the shared worker started draws on it, with a second frame");
+    const auto attached = view->frame_count();
+    view->tick(50);
+    expect(view->frame_count() == attached, "the UI thread hands the frame to the worker, it does not draw it");
+    FrameWorker::shared()->wait_idle();
+    view->tick(1);
+    expect(view->frame_count() == attached + 1, "the next tick shows the frame the worker drew");
+    view.reset();
+    expect(!FrameWorker::shared()->busy(), "the view never leaves the worker drawing into freed memory");
     lv_obj_clean(screen);
 }
 
@@ -1143,6 +1833,204 @@ void check_header_glass_bands() {
     lv_display_delete(display);
 }
 
+// The objects of `type` under `root` that are shown (no hidden object above them).
+void shown_of(lv_obj_t* root, const lv_obj_class_t* type, std::vector<lv_obj_t*>& found) {
+    if (lv_obj_is_hidden(root)) return;
+    if (lv_obj_check_type(root, type)) found.push_back(root);
+    for (std::uint32_t index = 0; index < lv_obj_get_child_count(root); ++index) {
+        shown_of(lv_obj_get_child(root, static_cast<int32_t>(index)), type, found);
+    }
+}
+
+std::vector<lv_obj_t*> shown_of(lv_obj_t* root, const lv_obj_class_t* type) {
+    std::vector<lv_obj_t*> found;
+    shown_of(root, type, found);
+    return found;
+}
+
+bool shows_text(lv_obj_t* root, const char* text) {
+    for (auto* label : shown_of(root, &lv_label_class)) {
+        if (std::strcmp(lv_label_get_text(label), text) == 0) return true;
+    }
+    return false;
+}
+
+bool shows_wordmark(lv_obj_t* root) {
+    for (auto* image : shown_of(root, &lv_image_class)) {
+        if (lv_image_get_src(image) == &aura_brand_aura_hero) return true;
+    }
+    return false;
+}
+
+// The device's own start (the owner, 2026-11-14: two seconds of white at every
+// start). Before create() the brand's screen shows: no words, since the
+// language is still on the card, and the brand's colours whatever the look the
+// card holds. The platform moves its bar; create() fills it, then Home shows.
+// A restart the owner confirms on the device holds its screen until the board
+// restarts, never Home.
+void check_startup_screen() {
+    using aura::UiView;
+    namespace ui = aura::ui;
+    ensure_lvgl();
+    auto* previous = lv_display_get_default();
+    static std::uint8_t buffer[480 * 48 * 2];
+    auto* display = lv_display_create(480, 480);
+    lv_display_set_buffers(display, buffer, nullptr, sizeof(buffer), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, [](lv_display_t* target, const lv_area_t*, std::uint8_t*) {
+        lv_display_flush_ready(target);
+    });
+    lv_display_set_default(display);
+    const auto& halo = ui::palette_for(aura::Appearance::Halo);
+    const auto brand_bar = [&halo](lv_obj_t* bar) {
+        return same_color(lv_obj_get_style_bg_color(bar, LV_PART_MAIN), halo.surface_high) &&
+               same_color(lv_obj_get_style_bg_color(bar, LV_PART_INDICATOR), ui::tokens::brand_start) &&
+               same_color(lv_obj_get_style_bg_grad_color(bar, LV_PART_INDICATOR), ui::tokens::brand_end) &&
+               lv_obj_get_style_bg_grad_dir(bar, LV_PART_INDICATOR) == LV_GRAD_DIR_HOR;
+    };
+
+    auto owner = std::make_unique<aura::AuraUi>();
+    auto& face = *owner;
+    face.set_appearance(aura::Appearance::Marble);  // a look the card may hold
+    face.show_startup(display);
+    expect(face.view() == UiView::Boot && face.root() != nullptr && lv_screen_active() == face.root(),
+           "the start-up screen shows before the UI is created");
+    auto bars = shown_of(face.root(), &lv_bar_class);
+    expect(bars.size() == 1 && lv_bar_get_value(bars.front()) == 0, "the start-up screen has one bar, empty");
+    expect(shown_of(face.root(), &lv_label_class).empty(),
+           "the start-up screen has no words: the language is still on the card");
+    expect(shows_wordmark(face.root()), "the start-up screen shows the AURA wordmark");
+    expect(bars.size() == 1 && brand_bar(bars.front()),
+           "the start-up bar fills in the wordmark's gradient on Halo's track, whatever the look");
+    face.set_boot_progress(40);
+    bars = shown_of(face.root(), &lv_bar_class);
+    expect(bars.size() == 1 && lv_bar_get_value(bars.front()) == 40, "the platform moves the start-up bar");
+    face.set_boot_progress(140);
+    bars = shown_of(face.root(), &lv_bar_class);
+    expect(bars.size() == 1 && lv_bar_get_value(bars.front()) == 100, "the bar never passes full");
+    face.set_boot_progress(40);
+    // The card's language and look arrive before create(): the screen stays as it was.
+    face.set_language(aura::InterfaceLanguage::English);
+    face.set_appearance(aura::Appearance::Graphite);
+    bars = shown_of(face.root(), &lv_bar_class);
+    expect(face.view() == UiView::Boot && shown_of(face.root(), &lv_label_class).empty() &&
+               shows_wordmark(face.root()) && bars.size() == 1 && lv_bar_get_value(bars.front()) == 40 &&
+               brand_bar(bars.front()),
+           "the language and the look from the card leave the start-up screen as it was");
+    face.show(UiView::Settings);
+    expect(face.view() == UiView::Boot, "nothing opens over the start-up screen");
+
+    face.create(display, aura::AuraUiCallbacks{});
+    expect(face.view() == UiView::Boot, "create() first fills the start-up bar");
+    int last = 40;
+    bool rising = true;
+    for (int step = 0; step < 40 && face.view() == UiView::Boot; ++step) {
+        face.tick(50);
+        bars = shown_of(face.root(), &lv_bar_class);
+        if (face.view() == UiView::Boot && bars.size() == 1) {
+            const auto value = static_cast<int>(lv_bar_get_value(bars.front()));
+            rising = rising && value >= last;
+            last = value;
+        }
+    }
+    expect(face.view() == UiView::Home, "then Home, within two seconds");
+    expect(rising && last >= 90, "the bar fills from where the platform left it");
+
+    // A restart confirmed on the device: its screen until the board restarts.
+    face.show_system_progress(aura::SystemAction::Restart);
+    expect(face.view() == UiView::Boot &&
+               shows_text(face.root(), aura::l10n::companion_en_us().system_restarting),
+           "a confirmed restart shows its screen, in the card's language");
+    bars = shown_of(face.root(), &lv_bar_class);
+    expect(bars.size() == 1 && lv_bar_get_value(bars.front()) == 0, "the restart bar starts empty");
+    for (int step = 0; step < 100; ++step) face.tick(100);
+    expect(face.view() == UiView::Boot, "the restart screen stays until the board restarts, never Home");
+    face.set_boot_progress(70);
+    bars = shown_of(face.root(), &lv_bar_class);
+    expect(bars.size() == 1 && lv_bar_get_value(bars.front()) == 70, "the platform moves the restart bar");
+    face.show(UiView::Settings);
+    expect(face.view() == UiView::Boot, "nothing opens over the restart screen");
+
+    // The screen's objects go before the UI that handles their events.
+    lv_screen_load(lv_obj_create(nullptr));
+    lv_obj_delete(face.root());
+    owner.reset();
+    lv_display_set_default(previous);
+    lv_display_delete(display);
+    ui::set_active_appearance(aura::Appearance::Halo);
+}
+
+// The row (a label's parent) whose title is `title`.
+lv_obj_t* row_titled(lv_obj_t* root, const char* title) {
+    for (auto* label : shown_of(root, &lv_label_class)) {
+        if (std::strcmp(lv_label_get_text(label), title) == 0) return lv_obj_get_parent(label);
+    }
+    return nullptr;
+}
+
+bool row_switch_on(lv_obj_t* row) {
+    if (!row) return false;
+    const auto switches = shown_of(row, &lv_switch_class);
+    return switches.size() == 1 && lv_obj_has_state(switches.front(), LV_STATE_CHECKED);
+}
+
+// Ρυθμίσεις → Οθόνη on the board (the owner, 2026-11-14): the rotation lock's
+// switch never moved, since a change of the lock alone did not draw the screen
+// again (the lock itself did change), and Reduced motion opened Settings, where
+// it lived before the settings were grouped. Both stay on Οθόνη and show the change.
+void check_display_settings_follow() {
+    using aura::UiView;
+    ensure_lvgl();
+    auto* previous = lv_display_get_default();
+    static std::uint8_t buffer[480 * 48 * 2];
+    auto* display = lv_display_create(480, 480);
+    lv_display_set_buffers(display, buffer, nullptr, sizeof(buffer), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, [](lv_display_t* target, const lv_area_t*, std::uint8_t*) {
+        lv_display_flush_ready(target);
+    });
+    lv_display_set_default(display);
+
+    auto owner = std::make_unique<aura::AuraUi>();
+    auto& face = *owner;
+    aura::DisplaySnapshot display_state;
+    aura::AuraUiCallbacks callbacks;
+    callbacks.on_display_settings = [&display_state](const aura::DisplaySettings& settings) {
+        display_state.settings = settings;  // as the platform keeps it, and reports it back
+        ++display_state.sequence;
+    };
+    face.create(display, std::move(callbacks));
+    aura::CompanionCapabilities capabilities;
+    capabilities.imu = true;
+    face.set_capabilities(capabilities);
+    display_state.sequence = 1;
+    face.apply_display(display_state);
+    face.show(UiView::DisplaySettings);
+    const auto& words = aura::l10n::companion_el_gr();
+    auto* lock_row = row_titled(face.root(), words.rotation_lock_title);
+    expect(lock_row && !row_switch_on(lock_row), "the rotation lock starts off, its title whole");
+    if (lock_row) lv_obj_send_event(lock_row, LV_EVENT_CLICKED, nullptr);
+    expect(display_state.settings.rotation_locked, "a tap on the rotation lock locks the rotation");
+    face.apply_display(display_state);
+    expect(face.view() == UiView::DisplaySettings &&
+               row_switch_on(row_titled(face.root(), words.rotation_lock_title)),
+           "the rotation lock's switch shows the lock");
+
+    face.tick(200);  // past the double-tap guard
+    auto* motion_row = row_titled(face.root(), aura::l10n::visual_el_gr().reduced_motion);
+    const bool reduced_before = face.reduced_motion();
+    if (motion_row) lv_obj_send_event(motion_row, LV_EVENT_CLICKED, nullptr);
+    expect(motion_row && face.reduced_motion() != reduced_before, "a tap on Reduced motion changes it");
+    expect(face.view() == UiView::DisplaySettings, "Reduced motion stays on Οθόνη, where its row is");
+    expect(row_switch_on(row_titled(face.root(), aura::l10n::visual_el_gr().reduced_motion)) == face.reduced_motion(),
+           "its switch shows the change");
+
+    lv_screen_load(lv_obj_create(nullptr));
+    lv_obj_delete(face.root());
+    owner.reset();
+    lv_display_set_default(previous);
+    lv_display_delete(display);
+    aura::ui::set_active_appearance(aura::Appearance::Halo);
+}
+
 int main() {
     check_aura_logo_asset(aura_brand_aura_compact, 144, 53);
     check_aura_logo_asset(aura_brand_aura_hero, 176, 65);
@@ -1267,8 +2155,19 @@ int main() {
 
     check_synapse();
     check_synapse_pacing();
+    check_synapse_device_profile();
+    check_synapse_estimated_root();
+    check_synapse_estimated_reciprocal();
+    check_synapse_next_tick();
+    check_synapse_strips_seamless();
+    check_synapse_direct_output();
+    check_synapse_helper_shares_strips();
+    check_synapse_direct_on_home();
     check_header_glass();
     check_header_glass_bands();
+    check_startup_screen();
+    check_display_settings_follow();
+    check_synapse_finds_shared_worker();  // last: it starts the process's shared worker
 
     std::cout << "ui_assets_test: PASS\n";
     return 0;
