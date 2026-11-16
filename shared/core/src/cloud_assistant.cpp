@@ -18,7 +18,10 @@ namespace {
 constexpr const char* kGroqChatUrl = "https://api.groq.com/openai/v1/chat/completions";
 constexpr const char* kGroqTranscriptionUrl = "https://api.groq.com/openai/v1/audio/transcriptions";
 constexpr const char* kTranscriptionModel = "whisper-large-v3-turbo";
-constexpr const char* kAzureOutputFormat = "audio-24khz-48kbitrate-mono-mp3";
+// 16 kHz, the microphone's rate: the board's speaker and microphone share one
+// I2S clock, and barge-in records while the answer plays. At 24 kHz the
+// speaker never opened beside it (2026-11-16). The PC bridge keeps 24 kHz.
+constexpr const char* kAzureOutputFormat = "audio-16khz-32kbitrate-mono-mp3";
 // The bridge's speech limits (bridge/src/speech.mjs speechLimits).
 constexpr std::size_t kMaxWavBytes = 1100000;
 constexpr std::size_t kMinWavSamples = 4800;

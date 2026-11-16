@@ -165,6 +165,16 @@ private:
     OrientationTracker orientation_;
     int applied_rotation_{0};
     VoiceRecorder recorder_;
+    // The microphone's raw level over a spoken question, for the log: some
+    // questions on the board came back from Whisper as its words for silence
+    // (2026-11-16). Numbers only, never the sound.
+    struct InputLevel {
+        std::uint32_t samples{0};
+        std::uint32_t zeros{0};
+        std::int32_t peak{0};
+        double energy{0.0};
+    };
+    InputLevel question_level_{};
     bool recording_question_{false};
     std::function<void(std::vector<std::uint8_t>, bool)> question_sink_;
     bool recording_message_{false};

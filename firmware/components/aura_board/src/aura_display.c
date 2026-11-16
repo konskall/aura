@@ -22,10 +22,13 @@
 #include "aura_display.h"
 
 #include <stdint.h>
+#include <string.h>
 
 // In the BSP's own order: its display header needs esp_err_t declared first.
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "driver/spi_master.h"
 #include "esp_lcd_co5300.h"
 #include "esp_lcd_panel_io.h"
@@ -94,6 +97,43 @@ static esp_err_t new_dark_panel(int max_transfer_sz, esp_lcd_panel_handle_t* ret
     }
     *ret_panel = panel;
     *ret_io = io;
+    return ESP_OK;
+}
+
+// LVGL's pixels live in PSRAM, which the SPI driver cannot send: for every
+// transfer it allocated a buffer of internal RAM as large as the transfer, and
+// with the microphone open or a TLS connection starting there was none left
+// («Draw bitmap failed: ESP_ERR_NO_MEM», 188 times in a minute, the screen
+// standing still; 2026-11-16). The pixels now go through two strips of internal
+// RAM taken once at start, kPanelTransferRows rows each: one is filled while the
+// other is sent. The panel IO waits for the transfers in flight before each
+// command it sends, so a strip is free again once the draw after its own has
+// begun. Each draw is copied whole before it returns, so LVGL may reuse its
+// buffer however early the panel IO reports a transfer done.
+static uint8_t* s_bounce[2] = {NULL, NULL};
+static size_t s_bounce_bytes = 0;
+static int s_bounce_next = 0;
+
+static esp_err_t bounce_draw_bitmap(lv_display_t* disp, esp_lcd_panel_handle_t panel, int x_start, int y_start,
+                                    int x_end, int y_end, const void* color_map, void* user_ctx) {
+    (void)disp;
+    (void)user_ctx;
+    const size_t row_bytes = (size_t)(x_end - x_start) * (BSP_LCD_BITS_PER_PIXEL / 8);
+    // Whole rows, an even number: the panel takes areas from an even row.
+    const int rows_per_strip = row_bytes == 0 ? 0 : (int)(s_bounce_bytes / row_bytes) & ~1;
+    if (s_bounce[0] == NULL || rows_per_strip < 2 || esp_ptr_dma_capable(color_map)) {
+        return esp_lcd_panel_draw_bitmap(panel, x_start, y_start, x_end, y_end, color_map);
+    }
+    const uint8_t* source = (const uint8_t*)color_map;
+    for (int y = y_start; y < y_end; y += rows_per_strip) {
+        const int rows = y_end - y < rows_per_strip ? y_end - y : rows_per_strip;
+        uint8_t* strip = s_bounce[s_bounce_next];
+        s_bounce_next ^= 1;
+        memcpy(strip, source, (size_t)rows * row_bytes);
+        const esp_err_t result = esp_lcd_panel_draw_bitmap(panel, x_start, y, x_end, y + rows, strip);
+        if (result != ESP_OK) return result;
+        source += (size_t)rows * row_bytes;
+    }
     return ESP_OK;
 }
 
@@ -217,6 +257,16 @@ lv_display_t* aura_board_display_start(int draw_rows) {
     if (new_dark_panel(BSP_LCD_H_RES * kPanelTransferRows * BSP_LCD_BITS_PER_PIXEL / 8, &panel, &io) != ESP_OK) {
         return NULL;
     }
+    // The two strips LVGL's pixels go through (bounce_draw_bitmap), before the
+    // services take the internal RAM.
+    s_bounce_bytes = BSP_LCD_H_RES * kPanelTransferRows * BSP_LCD_BITS_PER_PIXEL / 8;
+    for (int i = 0; i < 2; ++i) s_bounce[i] = heap_caps_malloc(s_bounce_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (s_bounce[0] == NULL || s_bounce[1] == NULL) {
+        heap_caps_free(s_bounce[0]);
+        heap_caps_free(s_bounce[1]);
+        s_bounce[0] = s_bounce[1] = NULL;
+        ESP_LOGW(TAG, "no internal RAM for the panel's strips: LVGL's pixels go through the SPI driver's buffers");
+    }
 
     const esp_lv_adapter_display_config_t display_cfg = {
         .panel = panel,
@@ -236,6 +286,12 @@ lv_display_t* aura_board_display_start(int draw_rows) {
     lv_display_t* display = esp_lv_adapter_register_display(&display_cfg);
     if (display == NULL) return NULL;
     lv_display_add_event_cb(display, round_to_panel, LV_EVENT_INVALIDATE_AREA, NULL);
+    if (s_bounce[0] != NULL) {
+        const esp_lv_adapter_draw_bitmap_callbacks_t draw = {.custom_draw_bitmap = bounce_draw_bitmap};
+        if (esp_lv_adapter_set_draw_bitmap_callbacks(display, &draw, NULL) != ESP_OK) {
+            ESP_LOGW(TAG, "the panel's strips were not taken: LVGL's pixels go through the SPI driver's buffers");
+        }
+    }
 
     esp_lcd_touch_handle_t touch = NULL;
     if (bsp_touch_new(&cfg, &touch) != ESP_OK || touch == NULL) return NULL;

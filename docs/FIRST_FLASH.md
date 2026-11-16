@@ -102,9 +102,9 @@ Then try, on the talk target:
   the timer);
 - «Βάλε Σφαίρα» (the radio plays without asking the assistant);
 - after a spoken answer, ask a follow-up without touching anything (Ήχος →
-  continuous conversation), and once speak over an answer to stop it
-  (barge-in; if it ever cuts an answer by itself, turn it off in Ήχος and note
-  it);
+  «Συνεχής συνομιλία»), and once speak over an answer to stop it
+  («Διακοπή με τη φωνή»; if it ever cuts an answer by itself, turn it off in
+  Ήχος and note it);
 - a voice note with the card in: its words appear under it after a few
   seconds;
 - «Στείλε στην Οικογένεια ότι αργώ» once Aoraton is signed in: Aoraton's

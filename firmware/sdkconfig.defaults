@@ -24,6 +24,11 @@ CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_ESP_WIFI_IRAM_OPT=n
 CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+# An upload keeps 16 KB in flight, not ESP-IDF's 5760 bytes: a question's
+# recording reached Groq at 20-58 KB/s, one window a round trip, and with
+# Bluetooth on the radio dozes, so a round trip took 100-250 ms (2026-11-16).
+# The buffers are lwIP's, in PSRAM.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=16384
 # The name the router lists for AURA (sent with DHCP), instead of ESP-IDF's
 # "espressif" (the owner's request, 2026-11-14). Host names allow only letters,
 # digits and hyphens: no spaces.

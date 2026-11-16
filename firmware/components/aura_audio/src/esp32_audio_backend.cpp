@@ -13,7 +13,10 @@
 namespace aura::firmware {
 namespace {
 constexpr char kTag[] = "aura_audio";
-constexpr std::size_t kMaxPcmSamples = 256U * 1024U;
+// 30 s at 24 kHz (PSRAM). It was 256 Ki samples, 16.4 s at 16 kHz: a 21 s
+// answer was refused and never heard (2026-11-16); answers now come in pieces
+// of 11-13 s (VoiceAssistantTurn), and this leaves room for a slow voice.
+constexpr std::size_t kMaxPcmSamples = 24000U * 30U;
 constexpr std::size_t kChunkSamples = 512;
 // The radio's ring: three seconds of its own format (576 KiB at 48 kHz stereo).
 constexpr std::size_t kStreamSeconds = 3;

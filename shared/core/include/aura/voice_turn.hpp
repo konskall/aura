@@ -4,6 +4,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -62,8 +63,9 @@ public:
     // The spoken answer is playing (or about to): the host may listen for
     // speech over it (barge-in).
     bool speaking() const noexcept { return reply_playing_; }
-    // The owner stopped the voice: no follow-up.
-    void stop_speaking() noexcept { reply_playing_ = false; }
+    // The owner stopped the voice: the pieces still to come are dropped, and
+    // there is no follow-up.
+    void stop_speaking() noexcept;
 
     // The talk target was pressed (or, `automatic`, a follow-up or a barge-in
     // started): the assistant listens (the host starts its microphone).
@@ -104,6 +106,13 @@ private:
     bool reply_playing_{false};
     bool reply_started_{false};
     std::uint64_t reply_since_ms_{0};
+    // A long answer is spoken in pieces (speech_pieces): the board's speaker
+    // takes about 16 s at once, and a 21 s answer was never heard
+    // (2026-11-16). One piece is fetched ahead while another plays.
+    std::vector<std::string> speech_parts_;
+    std::size_t next_part_{0};
+    std::string speech_language_;
+    std::optional<PcmClip> next_clip_;
     std::string action_question_;
     std::string action_refused_;
     std::string empty_answer_;

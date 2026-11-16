@@ -13,6 +13,10 @@ param(
 # it carries transferred files, so use a trusted Wi-Fi.
 
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 adds "Expect: 100-continue" to every POST, and the
+# device answers such a request with 400 Bad Request (found on the board,
+# 2026-11-16); curl, Node and browsers do not send it for a small body.
+[System.Net.ServicePointManager]::Expect100Continue = $false
 $repo = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'aura-env.ps1')
 Import-AuraLocalEnv -Path (Join-Path $repo '.env')

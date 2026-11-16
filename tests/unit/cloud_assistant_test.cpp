@@ -272,8 +272,10 @@ void speech_tests() {
     expect(tts.url == "https://westeurope.tts.speech.microsoft.com/cognitiveservices/v1" &&
                header(tts, "Ocp-Apim-Subscription-Key") == kKeys.azure_speech_key &&
                header(tts, "Content-Type") == "application/ssml+xml" &&
-               header(tts, "X-Microsoft-OutputFormat") == "audio-24khz-48kbitrate-mono-mp3",
-           "Azure's synthesis endpoint, key header and the bridge's output format");
+               header(tts, "X-Microsoft-OutputFormat") == "audio-16khz-32kbitrate-mono-mp3",
+           "Azure's synthesis endpoint, key header and the microphone's 16 kHz: the board's speaker and "
+           "microphone share one I2S clock, and barge-in records while the answer plays (at 24 kHz the "
+           "speaker never opened, 2026-11-16)");
     expect(tts.body == "<speak version=\"1.0\" xml:lang=\"el-GR\"><voice name=\"el-GR-NestorasNeural\">"
                        "Γεια σου &amp; &lt;καλώς&gt; ήρθες</voice></speak>",
            "the text is escaped inside the bridge's SSML");

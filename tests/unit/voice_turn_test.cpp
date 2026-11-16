@@ -10,6 +10,7 @@
 #include "aura/sounds.hpp"
 #include "aura/voice_turn.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <future>
@@ -350,6 +351,98 @@ int main() {
     settle(turn);
     turn.cancel();
     expect(!turn.speaking(), "cancelling ends the spoken answer");
+
+    // A long answer is spoken in pieces: the board's speaker takes about 16 s
+    // at once, and a 21 s answer was never heard (2026-11-16). The first piece
+    // is the first sentence, so the voice starts soon; the next is fetched while
+    // one plays; listening again waits for the last.
+    std::string long_answer;
+    for (int i = 1; i <= 12; ++i) {
+        if (!long_answer.empty()) long_answer += ' ';
+        long_answer += "Αυτή είναι η πρόταση " + std::to_string(i) + " μιας μεγάλης απάντησης.";
+    }
+    const auto code_points = [](const std::string& text) {
+        std::size_t count = 0;
+        for (const unsigned char byte : text) count += (byte & 0xC0U) != 0x80U ? 1U : 0U;
+        return count;
+    };
+    const auto without_spaces = [](std::string text) {
+        text.erase(std::remove(text.begin(), text.end(), ' '), text.end());
+        return text;
+    };
+    // Plays each piece to its end, as the speaker would; how many were played.
+    const auto speak_out = [&] {
+        int pieces = 0;
+        for (int guard = 0; guard < 40 && turn.speaking(); ++guard) {
+            audio.state = aura::AudioState::Playing;
+            settle(turn);
+            audio.state = aura::AudioState::Ready;
+            const int before = audio.played;
+            settle(turn);
+            pieces += audio.played - before;
+        }
+        return pieces;
+    };
+    controller.dispatch({aura::EventType::Reset});
+    audio.state = aura::AudioState::Ready;
+    provider.reply = {true, long_answer, {}};
+    std::size_t spoken_at = speech.spoken.size();
+    int played_at = audio.played;
+    int listened_at = listened_again;
+    turn.ask("Πες μου πολλά");
+    settle(turn);
+    expect(audio.played == played_at + 1 && speech.spoken.size() == spoken_at + 2 && turn.speaking(),
+           "a long answer: its first piece plays while the next is fetched");
+    expect(speech.spoken[spoken_at] == "Αυτή είναι η πρόταση 1 μιας μεγάλης απάντησης.",
+           "the first piece is the first sentence");
+    const int later = speak_out();
+    std::string joined;
+    bool short_pieces = true;
+    for (std::size_t i = spoken_at; i < speech.spoken.size(); ++i) {
+        joined += speech.spoken[i];
+        short_pieces = short_pieces && code_points(speech.spoken[i]) <= 160U;
+    }
+    expect(speech.spoken.size() - spoken_at >= 3 && short_pieces,
+           "the rest goes in pieces of at most 160 characters (11-13 s of speech)");
+    expect(without_spaces(joined) == without_spaces(long_answer), "every word is spoken, once and in order");
+    expect(audio.played - played_at == static_cast<int>(speech.spoken.size() - spoken_at) &&
+               later == static_cast<int>(speech.spoken.size() - spoken_at) - 1,
+           "each piece plays once the one before has finished");
+    expect(!turn.speaking() && listened_again == listened_at + 1, "it listens again once, after the last piece");
+
+    // A sentence too long for one piece is cut between words.
+    std::string run_on;
+    for (int i = 0; i < 60; ++i) run_on += (i ? " " : "") + std::string("λέξη");
+    controller.dispatch({aura::EventType::Reset});
+    provider.reply = {true, run_on, {}};
+    spoken_at = speech.spoken.size();
+    turn.ask("Πες κάτι χωρίς τελεία");
+    settle(turn);
+    speak_out();
+    bool whole_words = true;
+    for (std::size_t i = spoken_at; i < speech.spoken.size(); ++i) {
+        const auto& piece = speech.spoken[i];
+        whole_words = whole_words && code_points(piece) <= 160U && piece.rfind("λέξη", 0) == 0 &&
+                      piece.size() >= 8 && piece.compare(piece.size() - 8, 8, "λέξη") == 0;
+    }
+    expect(speech.spoken.size() - spoken_at >= 2 && whole_words &&
+               without_spaces([&] {
+                   std::string all;
+                   for (std::size_t i = spoken_at; i < speech.spoken.size(); ++i) all += speech.spoken[i];
+                   return all;
+               }()) == without_spaces(run_on),
+           "a run-on sentence is cut between words");
+
+    // Stopping the voice drops the pieces still to come.
+    controller.dispatch({aura::EventType::Reset});
+    provider.reply = {true, long_answer, {}};
+    played_at = audio.played;
+    listened_at = listened_again;
+    turn.ask("Πες μου πολλά");
+    settle(turn);
+    turn.stop_speaking();
+    expect(speak_out() == 0 && audio.played == played_at + 1 && listened_again == listened_at,
+           "stopping the voice drops the rest, and nothing listens again");
 
     // A confirmed action is carried out by the shared executor.
     aura::ClockServicesModel clock;

@@ -201,6 +201,51 @@ void check_transfer_server(const std::string& root) {
            "the device streams downloads and never ends a cut one as complete");
 }
 
+// Ήχος → «Ακρόαση φωνής» speaks the preview phrase in the chosen voice. The UI
+// disables the button when no one handles it, and the firmware never did: on
+// the board it could not be pressed (the owner, 2026-11-16).
+void check_voice_preview(const std::string& root) {
+    constexpr auto none = std::string::npos;
+    const std::string main = without_comments(read_file(root + "/firmware/main/app_main.cpp"));
+    const auto handled = main.find("callbacks.on_voice_preview = ");
+    const auto created = main.find("ui.create(display");
+    expect(handled != none && created != none && handled < created,
+           "the device handles «Ακρόαση φωνής» before the UI is built");
+    expect(main.find(".voice_preview_phrase") != none && main.find("assistant_voice_id(voice)") != none,
+           "the preview speaks the preview phrase in the voice it was pressed for");
+}
+
+// LVGL's pixels live in PSRAM, which the SPI driver cannot send: it allocated a
+// buffer of internal RAM for every transfer, and with the microphone open or a
+// TLS connection starting there was none («Draw bitmap failed: ESP_ERR_NO_MEM»,
+// the screen stood still, 2026-11-16). They go through two strips of internal
+// RAM taken once at start; the microphone's capture task keeps its stack in
+// PSRAM.
+void check_panel_memory(const std::string& root) {
+    constexpr auto none = std::string::npos;
+    const std::string display =
+        without_comments(read_file(root + "/firmware/components/aura_board/src/aura_display.c"));
+    const auto taken = display.find("heap_caps_malloc(s_bounce_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL)");
+    const auto used = display.find("esp_lv_adapter_set_draw_bitmap_callbacks(display, &draw, NULL)");
+    expect(taken != none && used != none && taken < used,
+           "LVGL's pixels reach the panel through strips of internal RAM taken once at start");
+    expect(display.find("esp_ptr_dma_capable(color_map)") != none,
+           "pixels already in internal RAM (Synapse's strips) go to the panel as they are");
+    const std::string microphone =
+        without_comments(read_file(root + "/firmware/components/aura_companion/src/esp32_microphone.cpp"));
+    expect(microphone.find("xTaskCreateWithCaps(&Esp32Microphone::task, \"aura_mic\"") != none &&
+               microphone.find("MALLOC_CAP_SPIRAM") != none && microphone.find("vTaskDeleteWithCaps(nullptr)") != none,
+           "the microphone's capture task keeps its stack in PSRAM");
+}
+
+// A question's recording reached Groq at 20-58 KB/s: one TCP window of 5760
+// bytes a round trip, and with Bluetooth on the Wi-Fi radio must doze, so a
+// round trip took 100-250 ms (2026-11-16). 16 KB in flight; lwIP's buffers live
+// in PSRAM (CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP).
+void check_upload_window(const std::string& defaults) {
+    expect(has_line(defaults, "CONFIG_LWIP_TCP_SND_BUF_DEFAULT=16384"), "an upload keeps 16 KB in flight");
+}
+
 void check_network_name(const std::string& defaults) {
     // The name the router lists for AURA (DHCP option 12); ESP-IDF's default is
     // "espressif" (the owner's request on the first flash, 2026-11-14). Host
@@ -317,6 +362,9 @@ int main() {
     check_display_lock(root);
     check_dark_start(root);
     check_synapse_panel_output(root);
+    check_voice_preview(root);
+    check_panel_memory(root);
+    check_upload_window(defaults);
     check_network_name(defaults);
     check_transfer_server(root);
     check_power(defaults);

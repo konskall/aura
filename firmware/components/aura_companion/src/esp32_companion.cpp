@@ -18,6 +18,7 @@
 #include "nvs_flash.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <new>
 #include <string>
@@ -279,6 +280,7 @@ bool Esp32Companion::begin_question() {
     decline_action();
     // A question ends by itself when the speaker stops (VoiceRecorder's turn mode).
     recorder_.start(VoiceRecorder::Mode::Turn);
+    question_level_ = {};
     recording_question_ = true;
     voice_.state = VoiceCaptureState::Recording;
     voice_.purpose = VoicePurpose::Assistant;
@@ -295,7 +297,14 @@ void Esp32Companion::end_question() {
     microphone_.drain(samples_);
     if (!samples_.empty()) recorder_.append(samples_.data(), samples_.size());
     const bool heard = recorder_.speech_detected();
+    const auto recorded_ms = recorder_.elapsed_ms();
     auto wav = recorder_.finish_wav();
+    const auto& level = question_level_;
+    ESP_LOGI(kTag, "question: %u ms recorded, speech %s; input peak %d, rms %u, %u%% zero, %u samples",
+             static_cast<unsigned>(recorded_ms), heard ? "heard" : "not heard", static_cast<int>(level.peak),
+             static_cast<unsigned>(level.samples == 0 ? 0.0 : std::sqrt(level.energy / level.samples)),
+             static_cast<unsigned>(level.samples == 0 ? 0U : level.zeros * 100U / level.samples),
+             static_cast<unsigned>(level.samples));
     voice_.state = VoiceCaptureState::Idle;
     voice_.level = 0.0F;
     ++voice_.sequence;
@@ -553,6 +562,16 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
     if (recording_note_ || recording_question_ || recording_message_) {
         samples_.clear();
         microphone_.drain(samples_);
+        if (recording_question_) {
+            auto& level = question_level_;
+            for (const std::int16_t sample : samples_) {
+                const std::int32_t magnitude = sample < 0 ? -static_cast<std::int32_t>(sample) : sample;
+                level.peak = std::max(level.peak, magnitude);
+                level.energy += static_cast<double>(sample) * sample;
+                if (sample == 0) ++level.zeros;
+            }
+            level.samples += static_cast<std::uint32_t>(samples_.size());
+        }
         if (!samples_.empty()) recorder_.append(samples_.data(), samples_.size());
         voice_.level = recorder_.level();
         voice_.elapsed_ms = recorder_.elapsed_ms();

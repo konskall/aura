@@ -2,6 +2,7 @@
 
 #include "bsp/esp-bsp.h"
 #include "esp_codec_dev.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
@@ -20,6 +21,15 @@ namespace {
 constexpr const char* kTag = "aura-mic";
 constexpr std::size_t kMaxPending = 16000 * 2;  // two seconds
 constexpr const char* kRoot = "/sdcard/aura";
+
+// The internal RAM the panel's transfers need while the microphone is open:
+// with it open the panel's transfers found none (2026-11-16, «Draw bitmap
+// failed: ESP_ERR_NO_MEM» while listening).
+void log_internal_ram(const char* when) {
+    ESP_LOGI(kTag, "microphone %s: internal %u KiB, DMA block %u KiB", when,
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024U),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL) / 1024U));
+}
 
 }  // namespace
 
@@ -51,23 +61,29 @@ bool Esp32Microphone::start() {
         pending_.clear();
     }
     running_ = true;
-    if (xTaskCreate(&Esp32Microphone::task, "aura_mic", 4096, this, 5, nullptr) != pdPASS) {
+    // The capture task's stack lives in PSRAM: it never touches the flash, and
+    // internal RAM is what the panel's transfers and the I2S buffers need while
+    // the microphone is open (2026-11-16).
+    if (xTaskCreateWithCaps(&Esp32Microphone::task, "aura_mic", 4096, this, 5, nullptr,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         running_ = false;
         esp_codec_dev_close(codec);
         xSemaphoreGive(lifecycle_);
         return false;
     }
+    log_internal_ram("on");
     return true;
 }
 
 bool Esp32Microphone::stop() {
-    running_ = false;
+    const bool was_running = running_.exchange(false);
     if (!lifecycle_) return true;
     if (xSemaphoreTake(lifecycle_, pdMS_TO_TICKS(1500)) != pdTRUE) {
         ESP_LOGE(kTag, "capture task did not stop within 1500 ms");
         return false;
     }
     xSemaphoreGive(lifecycle_);
+    if (was_running) log_internal_ram("off");
     return true;
 }
 
@@ -87,7 +103,7 @@ void Esp32Microphone::task(void* argument) {
     }
     esp_codec_dev_close(codec);
     xSemaphoreGive(self->lifecycle_);
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);
 }
 
 void Esp32Microphone::drain(std::vector<std::int16_t>& output) {

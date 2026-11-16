@@ -42,10 +42,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
+#include <future>
 #include <memory>
 #include <sys/time.h>
 #include <string>
@@ -399,6 +401,8 @@ extern "C" void app_main(void) {
     static std::unique_ptr<aura::CloudWorker> cloud_worker = start_cloud_worker();
     static CloudAssistant assistant;
     static aura::InterfaceLanguage assistant_language = aura::InterfaceLanguage::Greek;
+    // Ήχος → «Ακρόαση φωνής»: the preview phrase on its way from Azure.
+    static std::future<aura::SpeechResult> voice_preview;
     companion.set_cloud_key_sink(&cloud_keys);
     companion.set_aoraton_link(&aoraton_link);
     const bool audio_ready = audio.initialize();
@@ -646,6 +650,15 @@ extern "C" void app_main(void) {
             controller.dispatch({aura::EventType::Retry, {}, 0});
             if (assistant.turn && !prompt.empty()) assistant.turn->ask(prompt);
         };
+        // Ήχος → «Ακρόαση φωνής»: the preview phrase in the voice it was pressed
+        // for, spoken by Azure like an answer (the simulator's preview_voice). The
+        // loop plays it once it arrives.
+        callbacks.on_voice_preview = [](aura::AssistantVoice voice) {
+            const char* language = aura::interface_language_code(companion.language());
+            if (!assistant.speech || !assistant.speech->tts_available(language)) return;
+            voice_preview = assistant.speech->synthesize(companion_strings(companion.language()).voice_preview_phrase,
+                                                         language, aura::assistant_voice_id(voice));
+        };
         companion.set_question_sink([](std::vector<std::uint8_t> wav, bool heard) {
             if (assistant.turn) assistant.turn->finish_listening(std::move(wav), heard);
         });
@@ -858,6 +871,11 @@ extern "C" void app_main(void) {
                 assistant.turn->set_voice(aura::assistant_voice_id(companion.sound().assistant_voice));
                 assistant.turn->set_follow_up(companion.sound().continuous_conversation);
                 assistant.turn->poll();
+                if (voice_preview.valid() &&
+                    voice_preview.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+                    const auto spoken = voice_preview.get();
+                    if (spoken.ok) audio.play_pcm(spoken.clip);
+                }
                 // Barge-in: the microphone listens while the answer is spoken (not
                 // while it is paused, so a paused answer does not keep it open).
                 companion.set_barge_monitor(assistant.turn->speaking() && companion.sound().barge_in &&
