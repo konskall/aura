@@ -2,7 +2,7 @@
 
 **A Greek-first AI companion for a 480 × 480 AMOLED ESP32-S3 device.** One shared C++17 core and LVGL interface run in two places: a native Windows simulator you can use today, and ESP-IDF firmware for the Waveshare ESP32-S3-Touch-AMOLED-2.16 board.
 
-> **Status: version 1.0.0 (November 2026), ready for its first flash.** The simulator is feature-complete, with photos, local file transfer, realtime messages, a glass header in every look and Halo's Σύναψη drawn 1:1 from its approved design. It passes the full automated suite. The firmware compiles cleanly with ESP-IDF 5.5.5 and does on the device what the simulator does: its own assistant (Groq and Azure) with actions that ask first, messages and notes by voice, continuous conversation and barge-in, encrypted storage, signed updates and power management. It **has not run on the board yet**: nothing that depends on the physical board is claimed to work until the checks in [docs/FIRST_FLASH.md](docs/FIRST_FLASH.md) pass. See [docs/VERIFICATION.md](docs/VERIFICATION.md) for every result.
+> **Status: version 1.0.0 (November 2026), running on the board.** The first flash was on 2026-11-14. The owner reports (2026-11-16) that everything on the board works except the assistant, which **has not been tried on the board yet**. The simulator is feature-complete, with photos, local file transfer, realtime messages, a glass header in every look and Halo's Σύναψη drawn 1:1 from its approved design, and it passes the full automated suite. The firmware builds cleanly with ESP-IDF 5.5.5 and does on the device what the simulator does: its own assistant (Groq and Azure) with actions that ask first, messages and notes by voice, continuous conversation and barge-in, encrypted storage, signed updates and power management. See [docs/VERIFICATION.md](docs/VERIFICATION.md) for every result, and [docs/FIRST_FLASH.md](docs/FIRST_FLASH.md) for the flash and the checks on the board.
 
 ![Version 1.0.0: Settings in four groups (Συνδέσεις, Οθόνη και ήχος, Βοηθός, Συσκευή), Οθόνη with 24-hour time and reduced motion, Κατάσταση συσκευής with the battery's details and the microSD card's free space, Μάρμαρο's pearl centred while listening, a timer the assistant proposes and waits to have confirmed, and Σύστημα showing AURA 1.0.0](docs/images/aura-v1-screens.png)
 
@@ -16,7 +16,7 @@ All names, rooms, messages, photos and data in the screenshots are fictional `DE
 
 ## Σύντομα στα ελληνικά
 
-Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, φωτογραφίες από την κάρτα microSD, μεταφορά αρχείων από το κινητό ή τον υπολογιστή μέσα από το τοπικό Wi-Fi, μηνύματα Aoraton με κρυπτογράφηση που φτάνουν αμέσως και ειδοποιήσεις από το iPhone. Έχει τέσσερις εμφανίσεις (Άλως, Μάρμαρο, Σέλας, Γραφίτης) που επιλέγεις από τις Ρυθμίσεις → Εμφάνιση. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Στη συσκευή ο βοηθός μιλά απευθείας με το Groq και το Azure, με κλειδιά που στέλνεις μία φορά από τον υπολογιστή και φυλάσσονται κρυπτογραφημένα. Οι Ρυθμίσεις χωρίζονται σε τέσσερις ομάδες: Συνδέσεις, Οθόνη και ήχος, Βοηθός, Συσκευή. Η έκδοση 1.0.0 είναι η πρώτη για την πλακέτα: ο προσομοιωτής δουλεύει σήμερα, και το firmware κάνει ό,τι κι εκείνος (ενέργειες με επιβεβαίωση, μηνύματα και σημειώσεις με φωνή, συνεχής συζήτηση), αλλά δεν έχει δοκιμαστεί ακόμα σε πραγματική πλακέτα. Τα βήματα για το πρώτο flash είναι στο [docs/FIRST_FLASH.md](docs/FIRST_FLASH.md).
+Η AURA είναι ένας ελληνόφωνος βοηθός AI για μια μικρή συσκευή με τετράγωνη οθόνη AMOLED 480 × 480 (ESP32-S3). Μιλάς ή γράφεις και απαντά με φωνή και κείμενο. Έχει ρολόι, ξυπνητήρια, υπενθυμίσεις, σημειώσεις (και φωνητικές), ημερολόγιο με εργασίες και λίστα αγορών, καιρό, ελληνικό ραδιόφωνο, εορτολόγιο και αργίες, τιμές καυσίμων, φωτογραφίες από την κάρτα microSD, μεταφορά αρχείων από το κινητό ή τον υπολογιστή μέσα από το τοπικό Wi-Fi, μηνύματα Aoraton με κρυπτογράφηση που φτάνουν αμέσως και ειδοποιήσεις από το iPhone. Έχει τέσσερις εμφανίσεις (Άλως, Μάρμαρο, Σέλας, Γραφίτης) που επιλέγεις από τις Ρυθμίσεις → Εμφάνιση. Ο ίδιος κώδικας τρέχει στον προσομοιωτή των Windows και στο firmware της συσκευής. Στη συσκευή ο βοηθός μιλά απευθείας με το Groq και το Azure, με κλειδιά που στέλνεις μία φορά από τον υπολογιστή και φυλάσσονται κρυπτογραφημένα. Οι Ρυθμίσεις χωρίζονται σε τέσσερις ομάδες: Συνδέσεις, Οθόνη και ήχος, Βοηθός, Συσκευή. Η έκδοση 1.0.0 τρέχει πλέον στην πλακέτα: το πρώτο flash έγινε στις 14 Νοεμβρίου 2026 και όλα δουλεύουν, εκτός από τον βοηθό AI, που δεν έχει δοκιμαστεί ακόμα στη συσκευή. Το firmware κάνει ό,τι κι ο προσομοιωτής (ενέργειες με επιβεβαίωση, μηνύματα και σημειώσεις με φωνή, συνεχής συζήτηση). Τα βήματα του flash και οι έλεγχοι στην πλακέτα είναι στο [docs/FIRST_FLASH.md](docs/FIRST_FLASH.md).
 
 ## Contents
 
@@ -68,11 +68,12 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 ### Device
 
 - **Always-on clock and power saving.** The screen dims, then shows an always-on clock, optionally over a dimmed photo you choose. Dimming is always relative to your chosen brightness.
-- **Gestures.** Raise to wake, and flip face down to mute.
+- **Gestures and rotation.** Raise to wake, and flip face down to mute. Stood on any of its four edges, the screen turns to match; Οθόνη → Κλείδωμα θέσης holds it.
+- **Keys.** The left key turns the volume down and the right one up. The centre key wakes or sleeps the screen; held for 1.5 s it switches AURA off, and held for 1 s it switches it on again.
 - **Sound settings.** Volume, mute, message chime, spoken answers and continuous conversation. A second tap on a read-aloud button stops the reading.
 - **Settings in four groups.** Συνδέσεις (Wi-Fi, phone, File transfer), Οθόνη και ήχος (Οθόνη with Λιγότερη κίνηση, Εμφάνιση, Ήχος), Βοηθός (the assistant, weather) and Συσκευή (language, status, system). On the device the assistant's row names who answers and who speaks (Groq · φωνή Azure).
 - **Device status.** Settings → Κατάσταση συσκευής shows the battery: percentage, charging stage, battery, USB and system voltage, the power chip's temperature and the rated 1000 mAh. The chip measures no health or cycles. It also shows the microSD card's free space, with a format that asks twice, and a switch for the status bar's battery percentage. Settings → Οθόνη switches between 24-hour time and 12-hour time (2:05 μ.μ.).
-- **Local file transfer.** Settings → Μεταφορά αρχείων shows a QR code and a six-digit code. From a phone or PC on the same Wi-Fi you send photos (prepared for the 480 × 480 screen in the browser) or other files, and you can list or delete them. Access lasts ten minutes and ends when you stop it. See [docs/FILE_TRANSFER.md](docs/FILE_TRANSFER.md).
+- **Local file transfer.** Settings → Μεταφορά αρχείων shows a QR code and a six-digit code. From a phone or PC on the same Wi-Fi you send photos (prepared for the 480 × 480 screen in the browser) or other files, and you can list, download or delete them. Access lasts ten minutes and ends when you stop it. See [docs/FILE_TRANSFER.md](docs/FILE_TRANSFER.md).
 - **System.** The version (AURA 1.0.0), signed updates (OTA with rollback), diagnostics, credits, restart, power off, and a factory reset that erases settings and data but keeps your photos and files.
 - **Phone link.** Notifications and calls from a paired iPhone over Bluetooth LE (ANCS). In the simulator this uses the PC's Bluetooth adapter and is experimental.
 
@@ -212,7 +213,7 @@ The authoritative suite runs everything that can be checked on a PC. It contacts
   - Bridge and control-page tests (`node --test`).
   - A smoke run and a 370-transition UI stress run.
 - **Evidence.**
-  - Real SDL/LVGL pointer checks of every route at 1× and 2× scale (283 checks each). The run fails on any LVGL error, on an animation drawn through a transform layer, or when LVGL's memory peak exceeds the device's budget.
+  - Real SDL/LVGL pointer checks of every route at 1× and 2× scale (291 checks each). The run fails on any LVGL error, on an animation drawn through a transform layer, or when LVGL's memory peak exceeds the device's budget.
   - Screenshot and motion evidence of every screen, written to the ignored `artifacts/` folder.
 
 Single test programs can be built and run from `build/native`, for example `ninja -C build/native aura_radio_tests`. Bridge tests run with `node --test` inside `bridge/`.
@@ -250,7 +251,7 @@ See [docs/HARDWARE.md](docs/HARDWARE.md). The first flash, and what to check on 
 - Encrypted NVS from the first boot. Its key is an HMAC key that the first boot burns into eFuse block 5; this is permanent, but it does not stop reflashing.
 - Power management: 240 MHz while the screen is lit, 80 MHz otherwise, and a main loop that slows down with the screen.
 - Drivers for the PCF85063 clock (UTC, set again after each network time sync) and the AXP2101 power manager (battery, USB and charging).
-- Σύναψη is drawn on the second core.
+- Each look's presence is drawn by a worker on the first core and a helper on the second, and goes to the panel straight wherever no label lies over it. On the board Σύναψη draws about 9 frames a second, and Μάρμαρο, Σέλας and Γραφίτης 11 to 30 ([docs/HARDWARE.md](docs/HARDWARE.md)).
 - Frame, loop and memory numbers on the serial console after boot.
 
 **Giving the device its keys.** Open Settings → Μεταφορά αρχείων on the device, then run this on the PC. It reads `.env`, signs in with the code and never prints the keys:
@@ -277,11 +278,7 @@ node scripts/aoraton-device-sign-in.mjs --address http://<device address>:<port>
 
 Google's page opens in the PC's browser; the device keeps its own session, and the PC never sees it. Unlock the room keys on the device itself; `--invite <link>` adds a room from an invite link. Before the board arrives, `run.bat device` makes the simulator sign in the same way ([docs/SIMULATOR.md](docs/SIMULATOR.md)).
 
-**What is not available on the device yet.**
-
-- **Needs more work.**
-  - Confirming the assistant's proposed actions.
-- **Needs the board.** Everything physical still has to be validated: display, touch, audio, battery and Wi-Fi/TLS behaviour.
+**Still to try on the board.** The assistant: Groq listening and answering, Azure speaking, the actions it proposes, notes and messages by voice, continuous conversation and barge-in. Everything else works on the owner's board (the owner's report, 2026-11-16).
 
 The production and update signing keys are never stored in the repository.
 
@@ -296,23 +293,21 @@ The production and update signing keys are never stored in the repository.
 - **The bridge is local.** It listens only on `127.0.0.1` and requires a fresh bearer token for each run.
 - **Untrusted text is data.** Device facts, conversation history and web pages go to the model as data, never as instructions. Model output cannot act without typed validation and your confirmation.
 - **Messages and audio stay private.** Message text, transcripts and audio are not written to logs. Aoraton messages are end-to-end encrypted.
-- **File transfer is opt-in and local.** It is off after every start, opens only when you enable it, and lasts ten minutes. It needs the six-digit code shown on the screen (five wrong codes lock it) and accepts only devices on the local network. It can only add, list and delete files in the photos and files folders, and accept the assistant's keys; there are no downloads. It is plain HTTP, so use it on trusted Wi-Fi.
+- **File transfer is opt-in and local.** It is off after every start, opens only when you enable it, and lasts ten minutes. It needs the six-digit code shown on the screen (five wrong codes lock it) and accepts only devices on the local network. It can only add, list, download and delete files in the photos and files folders, and accept the assistant's keys. It is plain HTTP, so use it on trusted Wi-Fi.
 - **Demo data is labelled.** Fictional or simulated data is always marked `DEMO`.
 
 Details: [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md) and the [Aoraton security boundaries](docs/aoraton/SECURITY_BOUNDARIES.md).
 
 ## Known limitations
 
-- **The firmware has not run on hardware.**
-  - Unmeasured: heap and stack peaks, frame rate, power use and touch accuracy.
-  - Halo's Σύναψη spends at most a third of the time drawing and switches to a lighter frame when frames are slow, but its cost has only been measured on a PC.
-  - Only run in the simulator so far: photos on the card, transfers from a phone, and the device's assistant.
+- **The device's assistant has not been tried on the board.** So far it has run only in the simulator and the tests.
   - On the device, barge-in (speaking over an answer) has no echo reference: it relies on the gate's calibration against the speaker and must be tuned on the board. Ήχος can turn it off.
-  - Automatic light sleep waits for a power measurement on the board.
+- **Power use is unmeasured.** Automatic light sleep waits for a power measurement on the board.
+- **On the device the presence does not follow the microphone.** The microphone's level reaches the UI only in the simulator, so while listening the presence stays still; while speaking it follows the voice.
 - **There is no wake word.** No trained and measured Greek "Αύρα" model exists yet, so listening starts with a tap.
 - **Echo cancellation is untuned.** It works in tests, but still needs tuning in a real room and on the device's microphones.
 - **iPhone disconnect handling is untested live.** Detecting that the phone has gone, and reconnecting, needs a session with a paired iPhone.
-- **Radio has two limits.** Only MP3 stations are supported, and on the device it is built but not yet heard: it needs the board.
+- **Radio plays MP3 stations only.**
 
 ## Documentation
 
