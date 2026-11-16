@@ -68,6 +68,23 @@ The board ran out of internal RAM at boot until these held; `aura_firmware_confi
 - The device frame's loops run from IRAM (~9 KiB). In them: no `sqrtf` (it runs from flash) and no float division (ROM's `__divsf3`), and bits move with `__builtin_bit_cast` (a 4-byte `std::memcpy` became a ROM call).
 - The worker wakes the UI loop when it has drawn a frame (`FrameWorker::set_finished`); while the screen is lit the loop sleeps no longer than Synapse's rest.
 
+## Μάρμαρο's, Σέλας's and Γραφίτης's presences on the board (2026-11-16)
+
+- Each presence is one opaque RGB565 frame in PSRAM, two buffers, behind every label (`shared/ui/include/aura/aura_device_frame.hpp`). The light fields under it are drawn into it, and each frame redraws only what changed.
+- A frame is drawn in strips of eight rows by the frame worker (first core) and its helper (second core, below LVGL), each taking the next strip; each lane has its own rows of light. Σέλας's strips follow its band's grid (from row 134).
+- A changed strip that nothing LVGL draws lies over goes to the panel straight, from the two internal DMA strip memories Synapse uses (`PanelSynapseOutput`); LVGL draws only the strips under labels and buttons. A strip LVGL is still to draw waits for LVGL's refresh; one LVGL is told to draw after it was sent goes to LVGL again; a frame left behind by a screen change sends nothing more.
+- The helper sends between its strips, waiting for LVGL's lock (at most 40 ms); the worker sends what is left once the frame is drawn. Nothing tries the lock without waiting: the LVGL adapter logs every miss as an error over the 115200-baud console, about 6 ms a line, and about 60 a second had stalled the worker.
+- A frame that took the worker 33 ms or longer starts the next in the tick that shows it, so the next is drawn while LVGL shows this one. Before, the frame waited for the tick after, which waited for LVGL's drawing: the two took turns.
+- Frames a second, measured on COM3 with a temporary profile (removed afterwards). «Speaks» used a synthetic voice level from 0.15 to 0.85 every 600 ms.
+
+| Look | Home | Thinking | Speaks (glow follows the voice) |
+|---|---|---|---|
+| Μάρμαρο | 29.5 (12 at the first flash) | 29 (8.8) | 15.5 (3-5) |
+| Σέλας | 21.5 (5.6) | 18 | 11.5 (3-5) |
+| Γραφίτης | no presence on Home | 29 | 17.5 |
+
+- The microphone's level never reaches the UI on the board: `set_input_amplitude` is called only in the simulator. While listening, the glow therefore stays still and moves at the thinking rate; while speaking, it follows the playback envelope.
+
 The code consumes these through `firmware/components/aura_board/include/aura_board_profile.h`; pins must not be scattered through application code. Safe PMIC/display/audio initialization order still needs BSP source inspection and physical verification.
 
 Board documentation: https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-2.16 (pinout, chips, ESP-IDF examples). Checked there and in the BSP 2.0.1 header for v13: GPIO18 is the user key (10 k pull-up, low when pressed), the QMI8658 sits on the shared I2C bus with INT1/INT2 on GPIO17/21 (address 0x6B or 0x6A by SA0), two microphones feed the ES7210, and the BSP provides `bsp_i2c_get_handle`, `bsp_audio_codec_microphone_init`, `bsp_sdcard_mount` and `bsp_display_brightness_set` (CO5300 command 0x51). The docs do not describe a speaker connector.

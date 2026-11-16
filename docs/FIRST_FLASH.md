@@ -144,6 +144,7 @@ HARDWARE.
 | microSD | Free space after a minute; Διαμόρφωση κάρτας on a spare card |
 | Motion | Raise to wake: rested half a second, then lifted, tilted or turned (a knock on the desk does not wake it); face down mutes |
 | Σύναψη | Lines sharp and motion steady in all four states; in the `metrics` lines `synapse` near 80 ms and about 9 fps |
+| Μάρμαρο, Σέλας, Γραφίτης | Motion steady in all four states, no label or button drawn over by the presence; in the `metrics` lines `synapse ... fps` (the look's presence) about 29 on Μάρμαρο's Home and while thinking, about 20 on Σέλας's, at least 11 while one speaks (`docs/HARDWARE.md`) |
 | Start | The brand screen within about two seconds of a reset, no white flash; Επανεκκίνηση and Απενεργοποίηση show their progress |
 | File transfer | Λήψη saves a photo and a file whole; signing in with other tabs open does not hang |
 | Clock | The time survives a restart without Wi-Fi |

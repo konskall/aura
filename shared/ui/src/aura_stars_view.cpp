@@ -15,6 +15,7 @@ constexpr float kMiddle = AuraStarsView::size / 2.0F;
 // 98 px keeps that, and the largest dot, inside the 264 px canvas.
 constexpr float kRadius = 98.0F;
 constexpr float kTilt = 0.38F;
+constexpr std::size_t kCanvasBytes = static_cast<std::size_t>(AuraStarsView::size) * AuraStarsView::size * 3;
 
 struct Rgb {
     float red;
@@ -56,15 +57,26 @@ float next_random(std::uint32_t& state) {
 }
 }  // namespace
 
-AuraStarsView::AuraStarsView() {
-    descriptor_.header.magic = LV_IMAGE_HEADER_MAGIC;
-    descriptor_.header.cf = LV_COLOR_FORMAT_RGB565A8;
-    descriptor_.header.flags = LV_IMAGE_FLAGS_MODIFIABLE;
-    descriptor_.header.w = size;
-    descriptor_.header.h = size;
-    descriptor_.header.stride = size * static_cast<int>(sizeof(std::uint16_t));
-    descriptor_.data_size = buffer_.size();
-    descriptor_.data = buffer_.data();
+AuraStarsView::AuraStarsView() : AuraStarsView(default_presence_profile(), nullptr) { shared_worker_ = true; }
+
+AuraStarsView::AuraStarsView(PresenceProfile profile, FrameWorker* worker) : profile_(profile) {
+    if (profile_ == PresenceProfile::Device) {
+        device_ = std::make_unique<DeviceFrame>(2 * glow_radius, 2 * glow_radius, &AuraStarsView::draw_device, this);
+        device_->set_worker(worker);
+        for (auto& row : rows_) row = std::make_unique<std::uint8_t[]>(static_cast<std::size_t>(2 * glow_radius) * 3);
+        for (auto& light : lights_) light = std::make_unique<std::uint8_t[]>(static_cast<std::size_t>(kStripRows) * size * 3);
+        dots_.reserve(point_count);
+    } else {
+        buffer_ = std::make_unique<std::uint8_t[]>(kCanvasBytes);
+        descriptor_.header.magic = LV_IMAGE_HEADER_MAGIC;
+        descriptor_.header.cf = LV_COLOR_FORMAT_RGB565A8;
+        descriptor_.header.flags = LV_IMAGE_FLAGS_MODIFIABLE;
+        descriptor_.header.w = size;
+        descriptor_.header.h = size;
+        descriptor_.header.stride = size * static_cast<int>(sizeof(std::uint16_t));
+        descriptor_.data_size = kCanvasBytes;
+        descriptor_.data = buffer_.get();
+    }
     // Fibonacci points: even over the sphere.
     const float golden = kTau / 2.0F * (3.0F - std::sqrt(5.0F));
     std::uint32_t seed = 7;
@@ -76,7 +88,16 @@ AuraStarsView::AuraStarsView() {
     }
 }
 
+AuraStarsView::~AuraStarsView() {
+    if (device_) device_->stop();
+}
+
+std::size_t AuraStarsView::buffer_bytes() const noexcept {
+    return device_ ? device_->buffer_bytes() : kCanvasBytes;
+}
+
 lv_obj_t* AuraStarsView::attach(lv_obj_t* parent, int center_x, int center_y) {
+    if (device_) return attach_device(parent, center_x, center_y);
     // The glow sits behind the screen's content; the canvas on top.
     glow_ = light_field(parent, center_x, center_y, static_cast<int>(kRadius * 1.9F), 0xD6E2FF, LV_OPA_TRANSP);
     lv_obj_move_to_index(glow_, 0);
@@ -104,6 +125,7 @@ lv_obj_t* AuraStarsView::attach(lv_obj_t* parent, int center_x, int center_y) {
 }
 
 void AuraStarsView::detach() noexcept {
+    if (device_) device_->detach();
     image_ = nullptr;
     glow_ = nullptr;
 }
@@ -114,6 +136,13 @@ void AuraStarsView::set_reduced_motion(bool reduced) noexcept { reduced_motion_ 
 
 bool AuraStarsView::tick(std::uint32_t elapsed_ms) {
     if (!image_ || reduced_motion_) return false;
+    if (device_) {
+        const DeviceFrame::Step step = device_->advance(elapsed_ms);
+        if (step == DeviceFrame::Step::Wait) return false;
+        if (step == DeviceFrame::Step::Shown) return true;
+        advance(static_cast<float>(device_->step_ms()) / 1000.0F);
+        return start_device_frame() || step == DeviceFrame::Step::ShownStart;
+    }
     accumulator_ms_ += elapsed_ms;
     if (accumulator_ms_ < frame_interval_ms) return false;
     const auto step = std::min<std::uint32_t>(accumulator_ms_, 100U);
@@ -123,6 +152,11 @@ bool AuraStarsView::tick(std::uint32_t elapsed_ms) {
     lv_obj_invalidate(image_);
     update_glow();
     return true;
+}
+
+std::uint32_t AuraStarsView::next_tick_ms() const noexcept {
+    if (!device_ || reduced_motion_) return no_tick;
+    return device_->next_tick_ms();
 }
 
 // Time, the eased blend between states (200 ms) and the sphere's turn:
@@ -158,8 +192,8 @@ void AuraStarsView::stamp(float x, float y, float radius, float red, float green
             const float cover = std::clamp(radius + 0.5F - std::sqrt(px * px + py * py), 0.0F, 1.0F);
             if (cover <= 0.0F) continue;
             const auto index = static_cast<std::size_t>(row * size + column);
-            auto* red_green = buffer_.data() + index * 2;
-            auto* blue_byte = buffer_.data() + static_cast<std::size_t>(size * size) * 2 + index;
+            auto* red_green = buffer_.get() + index * 2;
+            auto* blue_byte = buffer_.get() + static_cast<std::size_t>(size * size) * 2 + index;
             const auto add = [cover](std::uint8_t& target, float value) {
                 target = static_cast<std::uint8_t>(
                     std::min(255, static_cast<int>(target) + static_cast<int>(value * cover * 255.0F)));
@@ -171,8 +205,10 @@ void AuraStarsView::stamp(float x, float y, float radius, float red, float green
     }
 }
 
-void AuraStarsView::render() {
-    std::fill(buffer_.begin(), buffer_.end(), std::uint8_t{0});
+// Each point of the turning sphere as a dot of light (canvas pixels, its
+// radius and colour), in drawing order; the frame's swell on the way.
+template <typename Emit>
+void AuraStarsView::each_point(Emit&& emit) {
     const auto& w = weights_;
     const float drive = (w[1] + w[3]) * level_;
     const float breath = std::sin(seconds_ * kTau / 6.5F);
@@ -220,15 +256,22 @@ void AuraStarsView::render() {
         }
         const Rgb& tone = bright > 1.0F ? hot : color;
         const float light = std::min(1.0F, bright);
-        stamp(kMiddle + turned_x * radius * lift, kMiddle + tilted_y * radius * lift,
-              (0.8F + 1.9F * depth) * (1.0F + 0.5F * drive), tone.red * light, tone.green * light, tone.blue * light);
+        emit(kMiddle + turned_x * radius * lift, kMiddle + tilted_y * radius * lift,
+             (0.8F + 1.9F * depth) * (1.0F + 0.5F * drive), tone.red * light, tone.green * light, tone.blue * light);
     }
     swell_ = swell;
+}
+
+void AuraStarsView::render() {
+    std::fill(buffer_.get(), buffer_.get() + kCanvasBytes, std::uint8_t{0});
+    each_point([this](float x, float y, float radius, float red, float green, float blue) {
+        stamp(x, y, radius, red, green, blue);
+    });
 
     // The added light becomes colour and coverage: alpha is the brightest
     // channel, so on black the canvas shows exactly the light that was added.
-    auto* colors = reinterpret_cast<std::uint16_t*>(buffer_.data());
-    auto* alpha = buffer_.data() + static_cast<std::size_t>(size * size) * 2;
+    auto* colors = reinterpret_cast<std::uint16_t*>(buffer_.get());
+    auto* alpha = buffer_.get() + static_cast<std::size_t>(size * size) * 2;
     for (std::size_t index = 0; index < static_cast<std::size_t>(size * size); ++index) {
         const int red = buffer_[index * 2];
         const int green = buffer_[index * 2 + 1];
@@ -258,6 +301,151 @@ void AuraStarsView::update_glow() {
     if (coarse != glow_color_) {
         lv_obj_set_style_image_recolor(glow_, lv_color_hex(coarse), 0);
         glow_color_ = coarse;
+    }
+}
+
+// The board: the glow's square, drawn whole on a first visit or at a new
+// place; a return shows the last frame and the worker draws the next.
+lv_obj_t* AuraStarsView::attach_device(lv_obj_t* parent, int center_x, int center_y) {
+    if (shared_worker_ && !device_->worker()) device_->set_worker(FrameWorker::shared());
+    if (shared_worker_ && !device_->helper()) device_->set_helper(FrameWorker::helper());
+    device_->attach(parent, center_x - glow_radius, center_y - glow_radius);
+    center_x_ = center_x;
+    center_y_ = center_y;
+    image_ = device_->object();
+    // Other light fields under the frame are drawn into it, above the glow.
+    auto absorbed = absorb_light_fields(parent, device_->area());
+    if (absorbed != absorbed_) {
+        absorbed_ = std::move(absorbed);
+        device_->invalidate_all();
+    }
+    if (reduced_motion_ || !attached_before_) {
+        for (std::size_t index = 0; index < weights_.size(); ++index) {
+            weights_[index] = index == static_cast<std::size_t>(state_) ? 1.0F : 0.0F;
+        }
+    }
+    attached_before_ = true;
+    advance(0.0F);
+    if (device_->needs_whole()) {
+        prepare_device();
+        device_->draw_whole();
+    }
+    return image_;
+}
+
+void AuraStarsView::prepare_device() {
+    dots_.clear();
+    each_point([this](float x, float y, float radius, float red, float green, float blue) {
+        dots_.push_back({x, y, radius, red, green, blue, static_cast<int>(x), static_cast<int>(y),
+                         static_cast<int>(std::ceil(radius + 1.0F))});
+    });
+    // As the presentation's glow: a step of a few levels before it brightens.
+    FrameLight glow = glow_light();
+    if (glow_frame_.radius == glow.radius && std::abs(glow.opacity - glow_frame_.opacity) < 3) {
+        glow.opacity = glow_frame_.opacity;
+    }
+    glow_frame_ = glow;
+}
+
+// The frame's changes: the canvas, and the whole glow when it brightened or
+// took another state's colour.
+bool AuraStarsView::start_device_frame() {
+    const FrameLight before = glow_frame_;
+    prepare_device();
+    FrameRect dirty = FrameRect::around(center_x_, center_y_, size / 2);
+    if (glow_frame_ != before) dirty = device_->area();
+    return device_->start(dirty);
+}
+
+FrameLight AuraStarsView::glow_light() const noexcept {
+    const float drive = (weights_[1] + weights_[3]) * level_;
+    FrameLight light;
+    light.center_x = center_x_;
+    light.center_y = center_y_;
+    light.radius = glow_radius;
+    light.tint = hex(mix(weights_, kColor)) & 0xF8F8F8U;
+    light.opacity = static_cast<std::uint8_t>(channel(0.10F + 0.20F * drive + 0.08F * weights_[2]));
+    return light;
+}
+
+// On the worker: the glow, the light fields above it and the points' light,
+// eight rows at a time.
+void AuraStarsView::draw_device(void* view, int lane, std::uint16_t* pixels, const FrameRect& area,
+                                const FrameRect& rect) noexcept {
+    auto* self = static_cast<AuraStarsView*>(view);
+    const int origin_x = self->center_x_ - size / 2;
+    const int origin_y = self->center_y_ - size / 2;
+    const FrameRect lit = FrameRect{origin_x, origin_y, origin_x + size, origin_y + size}.clipped(rect);
+    const int width = rect.width();
+    std::uint8_t* row = self->rows_[static_cast<std::size_t>(lane)].get();
+    std::uint8_t* light = self->lights_[static_cast<std::size_t>(lane)].get();
+    for (int top = rect.y1; top < rect.y2; top += kStripRows) {
+        const int bottom = std::min(rect.y2, top + kStripRows);
+        const int light_top = std::max(top, lit.y1);
+        const int light_bottom = std::min(bottom, lit.y2);
+        const bool lights = !lit.empty() && light_top < light_bottom;
+        if (lights) {
+            // Only the strip's lit columns are cleared and read.
+            const int lit_first = lit.x1 - origin_x;
+            const int lit_last = lit.x2 - 1 - origin_x;
+            for (int y = light_top; y < light_bottom; ++y) {
+                std::uint8_t* cleared = light + (static_cast<std::size_t>(y - top) * size + lit_first) * 3;
+                std::fill(cleared, cleared + static_cast<std::size_t>(lit_last - lit_first + 1) * 3, std::uint8_t{0});
+            }
+            const int strip_first = light_top - origin_y;
+            const int strip_last = light_bottom - 1 - origin_y;
+            for (const auto& dot : self->dots_) {
+                if (dot.row + dot.reach < strip_first || dot.row - dot.reach > strip_last) continue;
+                // Locals: a byte stored to the strip could alias the dot.
+                const float dot_x = dot.x;
+                const float dot_y = dot.y;
+                const float edge = dot.radius + 0.5F;
+                const float red = dot.red;
+                const float green = dot.green;
+                const float blue = dot.blue;
+                const int first_row = std::max({dot.row - dot.reach, 0, strip_first});
+                const int last_row = std::min({dot.row + dot.reach, size - 1, strip_last});
+                const int first_column = std::max({dot.column - dot.reach, 0, lit_first});
+                const int last_column = std::min({dot.column + dot.reach, size - 1, lit_last});
+                for (int canvas_row = first_row; canvas_row <= last_row; ++canvas_row) {
+                    const float py = static_cast<float>(canvas_row) + 0.5F - dot_y;
+                    const float py_squared = py * py;
+                    std::uint8_t* target =
+                        light + (static_cast<std::size_t>(origin_y + canvas_row - top) * size + first_column) * 3;
+                    for (int column = first_column; column <= last_column; ++column, target += 3) {
+                        const float px = static_cast<float>(column) + 0.5F - dot_x;
+                        const float cover = std::min(1.0F, edge - device_root(px * px + py_squared));
+                        if (cover <= 0.0F) continue;
+                        target[0] = static_cast<std::uint8_t>(
+                            std::min(255, static_cast<int>(target[0]) + static_cast<int>(red * cover * 255.0F)));
+                        target[1] = static_cast<std::uint8_t>(
+                            std::min(255, static_cast<int>(target[1]) + static_cast<int>(green * cover * 255.0F)));
+                        target[2] = static_cast<std::uint8_t>(
+                            std::min(255, static_cast<int>(target[2]) + static_cast<int>(blue * cover * 255.0F)));
+                    }
+                }
+            }
+        }
+        for (int y = top; y < bottom; ++y) {
+            // The glow is the black row's first light: it writes the row whole.
+            const FrameRow composed{row, rect.x1, rect.x2, y};
+            lay_first_light(composed, self->glow_frame_);
+            for (const auto& field : self->absorbed_) lay_light(composed, field);
+            std::uint16_t* out = pixels + static_cast<std::size_t>(y - area.y1) * static_cast<std::size_t>(area.width()) +
+                                 static_cast<std::size_t>(rect.x1 - area.x1);
+            if (lights && y >= light_top && y < light_bottom) {
+                // The points' light laid over the glow as each pixel is packed.
+                const std::uint8_t* added =
+                    light + (static_cast<std::size_t>(y - top) * size + static_cast<std::size_t>(lit.x1 - origin_x)) * 3;
+                const int before = lit.x1 - rect.x1;
+                pack_row(row, before, out);
+                pack_lit_row(row + static_cast<std::size_t>(before) * 3, added, lit.x2 - lit.x1, out + before);
+                pack_row(row + static_cast<std::size_t>(lit.x2 - rect.x1) * 3, rect.x2 - lit.x2,
+                         out + (lit.x2 - rect.x1));
+            } else {
+                pack_row(row, width, out);
+            }
+        }
     }
 }
 

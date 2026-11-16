@@ -743,6 +743,998 @@ void check_stars_presence() {
     lv_obj_clean(screen);
 }
 
+// The board's presence frames (aura_device_frame.hpp). On the board LVGL
+// scaled the presences' glows for every frame and waited for drawings that
+// held the display lock: 3-12 frames a second (measured 2026-11-15).
+// A scene the fake drawing copies: what the frame must show.
+// Strips the test's panel has been sent (FramePanel).
+std::atomic<int> frame_panel_sends{0};
+
+struct FrameScene {
+    aura::ui::FrameRect area;
+    std::vector<std::uint16_t> pixels;
+    std::vector<aura::ui::FrameRect> redrawn;
+    // How long each strip takes (so that a helper takes some), and the lanes
+    // that drew (bits).
+    std::chrono::milliseconds strip_time{};
+    unsigned lanes{};
+    // Whether a strip was drawn once the panel had been sent one.
+    bool drawn_after_send{};
+    std::mutex guard;
+
+    void change(const aura::ui::FrameRect& rect, std::uint16_t value) {
+        for (int y = rect.y1; y < rect.y2; ++y) {
+            for (int x = rect.x1; x < rect.x2; ++x) {
+                pixels[static_cast<std::size_t>((y - area.y1) * area.width() + (x - area.x1))] = value;
+            }
+        }
+    }
+    bool shown_by(const aura::ui::DeviceFrame& frame) const {
+        return std::memcmp(frame.shown(), pixels.data(), pixels.size() * sizeof(std::uint16_t)) == 0;
+    }
+    // What was drawn since the last call: the union of its strips.
+    aura::ui::FrameRect take_drawn() {
+        aura::ui::FrameRect drawn;
+        for (const auto& rect : redrawn) drawn = drawn.united(rect);
+        redrawn.clear();
+        return drawn;
+    }
+    // Whether each strip drawn lies inside one of the frame's eight-row strips.
+    bool drawn_in_strips() const {
+        for (const auto& rect : redrawn) {
+            const int rows = aura::ui::DeviceFrame::strip_rows;
+            if ((rect.y1 - area.y1) / rows != (rect.y2 - 1 - area.y1) / rows) return false;
+        }
+        return true;
+    }
+};
+
+void draw_scene(void* owner, int lane, std::uint16_t* pixels, const aura::ui::FrameRect& area,
+                const aura::ui::FrameRect& rect) {
+    auto* scene = static_cast<FrameScene*>(owner);
+    if (scene->strip_time.count() > 0) std::this_thread::sleep_for(scene->strip_time);
+    {
+        std::lock_guard<std::mutex> hold(scene->guard);
+        scene->redrawn.push_back(rect);
+        scene->lanes |= 1U << lane;
+        if (frame_panel_sends.load() > 0) scene->drawn_after_send = true;
+    }
+    for (int y = rect.y1; y < rect.y2; ++y) {
+        for (int x = rect.x1; x < rect.x2; ++x) {
+            const auto index = static_cast<std::size_t>((y - area.y1) * area.width() + (x - area.x1));
+            pixels[index] = scene->pixels[index];
+        }
+    }
+}
+
+// Two buffers: the one shown, and the one the next frame is drawn into, which
+// lacks the changes of the frame shown and of its own. Each frame redraws just
+// those, and the frame shown always holds the whole scene.
+// The first light on a row writes what clearing it and laying the light
+// would, over whatever the row held: both shapes, near and far, faint, off
+// and cut by the row's ends.
+void check_first_light() {
+    using aura::ui::FrameLight;
+    using aura::ui::FrameRow;
+    using aura::ui::LightShape;
+    const FrameLight lights[] = {
+        {40, 30, 25, 0x38E1C9, 50, LightShape::Disc},  {40, 30, 25, 0xD6E2FF, 255, LightShape::Pearl},
+        {-10, 30, 60, 0x7B5CFF, 64, LightShape::Disc}, {70, 5, 3, 0xFFFFFF, 1, LightShape::Disc},
+        {40, 30, 25, 0x123456, 0, LightShape::Disc},   {40, 30, 0, 0x123456, 200, LightShape::Pearl},
+        {200, 30, 20, 0xFFFFFF, 255, LightShape::Disc}};
+    bool same = true;
+    for (const auto& light : lights) {
+        for (int y = -2; y < 62; y += 3) {
+            for (const auto& span : {std::pair<int, int>{0, 80}, {33, 47}, {39, 40}, {60, 80}}) {
+                const int count = span.second - span.first;
+                std::vector<std::uint8_t> cleared(static_cast<std::size_t>(count) * 3, 0);
+                std::vector<std::uint8_t> first(static_cast<std::size_t>(count) * 3, 0xAB);
+                aura::ui::lay_light(FrameRow{cleared.data(), span.first, span.second, y}, light);
+                aura::ui::lay_first_light(FrameRow{first.data(), span.first, span.second, y}, light);
+                same = same && first == cleared;
+            }
+        }
+    }
+    expect(same, "the first light writes every byte of its row, as clearing it and laying the light do");
+}
+
+void check_device_frame() {
+    using aura::ui::DeviceFrame;
+    using aura::ui::FrameRect;
+    using aura::ui::FrameWorker;
+    using aura::ui::PresenceView;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+    expect(aura::ui::default_presence_profile() == aura::ui::PresenceProfile::Presentation,
+           "the simulator keeps the approved presentation");
+    expect(DeviceFrame::interval_ms == 33, "the board's presences aim for LVGL's 30 frames a second");
+
+    const FrameRect whole{10, 20, 50, 50};
+    FrameScene scene{whole, std::vector<std::uint16_t>(40 * 30, 1), {}};
+    {
+        DeviceFrame frame(40, 30, &draw_scene, &scene);
+        frame.attach(screen, 10, 20);
+        expect(frame.area() == whole && frame.needs_whole(), "a first visit needs a whole frame");
+        auto* image = frame.object();
+        const auto* source = static_cast<const lv_image_dsc_t*>(lv_image_get_src(image));
+        expect(source->header.cf == LV_COLOR_FORMAT_RGB565 && source->header.w == 40 && source->header.h == 30 &&
+                   lv_obj_get_index(image) == 0 && !lv_obj_is_clickable(image),
+               "the frame is one opaque RGB565 image under everything on the screen");
+        frame.draw_whole();
+        expect(scene.drawn_in_strips() && scene.redrawn.size() == 4U, "a frame is drawn eight rows at a time");
+        expect(scene.take_drawn() == whole && frame.frame_count() == 1 && !frame.needs_whole() &&
+                   scene.shown_by(frame),
+               "a first visit draws the whole frame, then shows it");
+
+        expect(frame.advance(0) == DeviceFrame::Step::Start, "the first tick after a visit starts the next frame");
+        const FrameRect corner{12, 22, 20, 30};
+        scene.change(corner, 2);
+        expect(frame.start(corner) && scene.take_drawn() == whole && scene.shown_by(frame),
+               "the buffer not shown since the visit is redrawn whole");
+        expect(frame.advance(32) == DeviceFrame::Step::Wait, "the next frame waits out its 33 ms");
+        expect(frame.advance(1) == DeviceFrame::Step::Start && frame.step_ms() == 33, "then starts, a 33 ms step");
+        const FrameRect side{30, 40, 34, 44};
+        scene.change(side, 3);
+        expect(frame.start(side) && scene.take_drawn() == corner.united(side) && scene.shown_by(frame),
+               "a frame redraws what changed in the frame shown and in itself");
+        frame.advance(33);
+        scene.change(corner, 4);
+        expect(frame.start(corner) && scene.take_drawn() == side.united(corner) && scene.shown_by(frame),
+               "and the frame shown holds every change");
+        frame.advance(33);
+        expect(frame.start({}) && scene.take_drawn() == corner && scene.shown_by(frame),
+               "a frame that changes nothing still brings its buffer up to date");
+        expect(frame.next_tick_ms() == PresenceView::no_tick, "drawn on the caller's thread, it keeps the UI's pace");
+        frame.detach();
+        frame.attach(screen, 10, 20);
+        expect(!frame.needs_whole() && scene.shown_by(frame), "a return to the same place shows the last frame");
+        frame.invalidate_all();
+        expect(frame.needs_whole(), "a change under the whole frame needs it redrawn");
+        frame.detach();
+        lv_obj_clean(screen);
+    }
+
+    // On a worker: the tick that starts a frame does not show it; a later one does.
+    FrameWorker worker;
+    {
+        DeviceFrame frame(40, 30, &draw_scene, &scene);
+        frame.set_worker(&worker);
+        frame.attach(screen, 10, 20);
+        frame.draw_whole();
+        expect(frame.advance(0) == DeviceFrame::Step::Start && !frame.start({12, 22, 20, 30}) &&
+                   frame.frame_count() == 1,
+               "a frame on the worker shows on a later tick");
+        worker.wait_idle();
+        expect(frame.next_tick_ms() == 0, "a frame the worker has drawn wants its tick at once");
+        expect(frame.advance(5) == DeviceFrame::Step::Shown && frame.frame_count() == 2 && scene.shown_by(frame),
+               "that tick shows it");
+        expect(frame.next_tick_ms() == 28, "the next frame waits out the rest of its 33 ms");
+        expect(frame.advance(28) == DeviceFrame::Step::Start, "then starts");
+        frame.start({12, 22, 20, 30});
+        // A frame that took the worker its 33 ms or longer: the tick that shows
+        // it starts the next, which the worker draws while LVGL shows this one.
+        worker.wait_idle();
+        expect(frame.advance(40) == DeviceFrame::Step::ShownStart && frame.frame_count() == 3 &&
+                   scene.shown_by(frame) && frame.step_ms() == 40,
+               "a slow frame shows, and the next starts in the same tick, a step of the time it took");
+        const FrameRect side{30, 40, 34, 44};
+        scene.change(side, 5);
+        expect(!frame.start(side) && frame.drawing() && frame.frame_count() == 3,
+               "the next frame goes to the worker");
+        worker.wait_idle();
+        expect(frame.advance(10) == DeviceFrame::Step::Shown && frame.frame_count() == 4 && scene.shown_by(frame),
+               "a fast frame shows and leaves the next to the rest of its 33 ms");
+        expect(frame.advance(23) == DeviceFrame::Step::Start && frame.step_ms() == 33, "which then starts");
+        frame.start({12, 22, 20, 30});
+        frame.detach();
+    }
+    expect(!worker.busy(), "a frame never leaves the worker drawing into freed memory");
+    lv_obj_clean(screen);
+
+    // Strips that follow the owner's own grid (Σέλας's band): from row 22,
+    // every eight rows, the first and last cut by the frame.
+    {
+        FrameScene grid{whole, std::vector<std::uint16_t>(40 * 30, 9), {}};
+        DeviceFrame frame(40, 30, &draw_scene, &grid);
+        frame.attach(screen, 10, 20);
+        frame.align_strips(22);
+        frame.draw_whole();
+        bool aligned = grid.redrawn.size() == 5U;
+        for (const auto& rect : grid.redrawn) aligned = aligned && (rect.y1 + 2) / 8 == (rect.y2 + 1) / 8;
+        expect(aligned && grid.take_drawn() == whole && grid.shown_by(frame),
+               "strips that follow a grid of eight rows from row 22 lie inside its cells");
+        frame.detach();
+    }
+    lv_obj_clean(screen);
+
+    // With a helper (the board's other core), the two take the frame's strips
+    // as each is free: every strip once, each lane with its own memory.
+    FrameWorker helper;
+    {
+        FrameScene slow{whole, std::vector<std::uint16_t>(40 * 30, 7), {}};
+        slow.strip_time = std::chrono::milliseconds(20);
+        DeviceFrame frame(40, 30, &draw_scene, &slow);
+        frame.set_worker(&worker);
+        frame.set_helper(&helper);
+        frame.attach(screen, 10, 20);
+        frame.draw_whole();
+        slow.take_drawn();
+        slow.lanes = 0;
+        expect(frame.advance(0) == DeviceFrame::Step::Start, "a helped frame starts");
+        slow.change(whole, 8);
+        frame.start(whole);
+        worker.wait_idle();
+        expect(!helper.busy() && frame.advance(0) == DeviceFrame::Step::Shown && slow.shown_by(frame),
+               "a frame the worker and its helper drew shows once both are done");
+        expect(slow.lanes == 0b11U && slow.redrawn.size() == 4U && slow.drawn_in_strips() &&
+                   slow.take_drawn() == whole,
+               "both lanes draw strips of it, each strip once");
+        frame.detach();
+    }
+    expect(!worker.busy() && !helper.busy(), "a helped frame never leaves either drawing into freed memory");
+    lv_obj_clean(screen);
+}
+
+// A second headless display that keeps what it draws: whole screens as RGB565.
+std::vector<std::uint8_t> picture_pixels(480 * 480 * 2);
+
+lv_display_t* picture_display() {
+    static lv_display_t* display = nullptr;
+    if (display) return display;
+    ensure_lvgl();
+    auto* previous = lv_display_get_default();
+    display = lv_display_create(480, 480);
+    lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
+    static std::uint8_t buffer[480 * 40 * 2];
+    lv_display_set_buffers(display, buffer, nullptr, sizeof(buffer), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, [](lv_display_t* target, const lv_area_t* area, std::uint8_t* pixels) {
+        const auto width = static_cast<std::size_t>(lv_area_get_width(area));
+        for (int y = area->y1; y <= area->y2; ++y) {
+            std::memcpy(&picture_pixels[(static_cast<std::size_t>(y) * 480 + static_cast<std::size_t>(area->x1)) * 2],
+                        pixels + static_cast<std::size_t>(y - area->y1) * width * 2, width * 2);
+        }
+        lv_display_flush_ready(target);
+    });
+    lv_display_set_default(previous);
+    return display;
+}
+
+lv_obj_t* picture_screen() {
+    auto* previous = lv_display_get_default();
+    lv_display_set_default(picture_display());
+    auto* screen = lv_obj_create(nullptr);
+    lv_obj_remove_style_all(screen);
+    lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+    lv_display_set_default(previous);
+    return screen;
+}
+
+const std::vector<std::uint8_t>& picture_of(lv_obj_t* screen) {
+    lv_screen_load(screen);
+    lv_obj_invalidate(screen);
+    lv_refr_now(picture_display());
+    return picture_pixels;
+}
+
+// The difference between two pictures over `area`: the sum of the 8-bit
+// channel differences, how many values, and how many differ by more than 8.
+struct PictureDifference {
+    double sum{};
+    double values{};
+    double over{};
+    double mean() const { return values > 0.0 ? sum / values : 0.0; }
+    double over_percent() const { return values > 0.0 ? 100.0 * over / values : 0.0; }
+};
+
+void add_difference(PictureDifference& difference, const std::vector<std::uint8_t>& first,
+                    const std::vector<std::uint8_t>& second, const aura::ui::FrameRect& area) {
+    const auto channels = [](const std::vector<std::uint8_t>& picture, int x, int y, int* out) {
+        const auto index = (static_cast<std::size_t>(y) * 480 + static_cast<std::size_t>(x)) * 2;
+        const unsigned value = picture[index] | (picture[index + 1] << 8U);
+        out[0] = static_cast<int>((value >> 11U) & 0x1FU) << 3;
+        out[1] = static_cast<int>((value >> 5U) & 0x3FU) << 2;
+        out[2] = static_cast<int>(value & 0x1FU) << 3;
+    };
+    for (int y = area.y1; y < area.y2; ++y) {
+        for (int x = area.x1; x < area.x2; ++x) {
+            int a[3];
+            int b[3];
+            channels(first, x, y, a);
+            channels(second, x, y, b);
+            for (int channel = 0; channel < 3; ++channel) {
+                const int value = std::abs(a[channel] - b[channel]);
+                difference.sum += value;
+                difference.over += value > 8 ? 1.0 : 0.0;
+                difference.values += 1.0;
+            }
+        }
+    }
+}
+
+// A presence on the board looks as it does in the simulator: both drawn whole
+// by LVGL through the four states with a moving voice (and two light fields
+// on the screen, when `fields`), the device frame's square differs by at most
+// `mean_limit` levels on average in every state, and at most `over_limit` %
+// of its values by more than 8.
+template <typename View>
+void expect_device_looks_presented(int center_x, int center_y, int reach, bool fields, double mean_limit,
+                                   double over_limit, const char* message) {
+    using aura::ui::PresenceProfile;
+    using aura::ui::PresenceState;
+    auto* presented_screen = picture_screen();
+    auto* device_screen = picture_screen();
+    if (fields) {
+        for (auto* screen : {presented_screen, device_screen}) {
+            aura::ui::light_field(screen, 36, 470, 170, 0x38E1C9, 50);
+            aura::ui::light_field(screen, 476, 30, 170, 0x7B5CFF, 64);
+        }
+    }
+    auto presented = std::make_unique<View>(PresenceProfile::Presentation, nullptr);
+    auto device = std::make_unique<View>(PresenceProfile::Device, nullptr);
+    presented->attach(presented_screen, center_x, center_y);
+    device->attach(device_screen, center_x, center_y);
+    const auto area = aura::ui::FrameRect::around(center_x, center_y, reach).clipped({0, 0, 480, 480});
+    int step = 0;
+    for (const auto state : {PresenceState::Idle, PresenceState::Listening, PresenceState::Thinking,
+                             PresenceState::Speaking}) {
+        presented->set_state(state);
+        device->set_state(state);
+        PictureDifference difference;
+        for (int tick = 0; tick < 12; ++tick, ++step) {
+            const float level = 0.15F + 0.8F * std::fabs(std::sin(static_cast<float>(step) * 0.7F));
+            presented->set_level(level);
+            device->set_level(level);
+            presented->tick(66);
+            device->tick(66);
+            const auto shown = picture_of(presented_screen);
+            add_difference(difference, shown, picture_of(device_screen), area);
+        }
+        if (difference.mean() > mean_limit || difference.over_percent() > over_limit) {
+            std::cerr << "state " << static_cast<int>(state) << ": mean " << difference.mean() << ", over 8 "
+                      << difference.over_percent() << " %\n";
+        }
+        expect(difference.mean() <= mean_limit && difference.over_percent() <= over_limit, message);
+    }
+    presented->detach();
+    device->detach();
+    lv_screen_load(picture_screen());
+    lv_obj_delete(presented_screen);
+    lv_obj_delete(device_screen);
+}
+
+// Each device frame redraws only what changed: frame by frame, through the
+// four states with a moving voice, then while thinking without a voice (the
+// glow settles and only the comet or the band moves) and listening to a
+// steady voice (the ripples spread under a steady glow), it shows exactly what
+// a frame redrawn whole every time shows.
+template <typename View>
+void expect_device_redraws_only_changes(int center_x, int center_y, bool fields, const char* message) {
+    using aura::ui::PresenceProfile;
+    using aura::ui::PresenceState;
+    ensure_lvgl();
+    auto* partial_screen = lv_obj_create(nullptr);
+    auto* whole_screen = lv_obj_create(nullptr);
+    if (fields) {
+        for (auto* screen : {partial_screen, whole_screen}) {
+            aura::ui::light_field(screen, 36, 470, 170, 0x38E1C9, 50);
+            aura::ui::light_field(screen, 476, 30, 170, 0x7B5CFF, 64);
+        }
+    }
+    auto partial = std::make_unique<View>(PresenceProfile::Device, nullptr);
+    auto whole = std::make_unique<View>(PresenceProfile::Device, nullptr);
+    partial->attach(partial_screen, center_x, center_y);
+    whole->attach(whole_screen, center_x, center_y);
+    const std::size_t bytes = partial->buffer_bytes() / 2;
+    struct Phase {
+        PresenceState state;
+        int ticks;
+        float level;  // below 0: a moving voice
+    };
+    const Phase phases[] = {{PresenceState::Idle, 10, -1.0F},     {PresenceState::Listening, 10, -1.0F},
+                            {PresenceState::Thinking, 10, -1.0F}, {PresenceState::Speaking, 10, -1.0F},
+                            {PresenceState::Idle, 10, -1.0F},     {PresenceState::Thinking, 45, 0.0F},
+                            {PresenceState::Listening, 20, -1.0F}, {PresenceState::Listening, 30, 0.6F}};
+    int step = 0;
+    bool same = true;
+    for (const auto& phase : phases) {
+        partial->set_state(phase.state);
+        whole->set_state(phase.state);
+        for (int tick = 0; tick < phase.ticks; ++tick, ++step) {
+            const float level = phase.level >= 0.0F ? phase.level :
+                0.15F + 0.8F * std::fabs(std::sin(static_cast<float>(step) * 0.9F));
+            partial->set_level(level);
+            whole->set_level(level);
+            partial->tick(33);
+            whole->device_frame()->invalidate_all();
+            whole->tick(33);
+            same = same && std::memcmp(partial->device_frame()->shown(), whole->device_frame()->shown(), bytes) == 0;
+        }
+    }
+    expect(same, message);
+    partial.reset();
+    whole.reset();
+    lv_obj_delete(partial_screen);
+    lv_obj_delete(whole_screen);
+}
+
+// Each lane draws a presence with its own memory: frame by frame, through the
+// four states with a moving voice, the frames the worker and its helper draw
+// are those drawn on one thread.
+template <typename View>
+void expect_lanes_draw_alike(int center_x, int center_y, const char* message) {
+    using aura::ui::FrameWorker;
+    using aura::ui::PresenceProfile;
+    using aura::ui::PresenceState;
+    ensure_lvgl();
+    auto* alone_screen = lv_obj_create(nullptr);
+    auto* helped_screen = lv_obj_create(nullptr);
+    FrameWorker worker;
+    FrameWorker helper;
+    auto alone = std::make_unique<View>(PresenceProfile::Device, nullptr);
+    auto helped = std::make_unique<View>(PresenceProfile::Device, &worker);
+    helped->device_frame()->set_helper(&helper);
+    alone->attach(alone_screen, center_x, center_y);
+    helped->attach(helped_screen, center_x, center_y);
+    const std::size_t bytes = alone->buffer_bytes() / 2;
+    bool same = true;
+    int step = 0;
+    for (const auto state : {PresenceState::Idle, PresenceState::Listening, PresenceState::Thinking,
+                             PresenceState::Speaking}) {
+        alone->set_state(state);
+        helped->set_state(state);
+        for (int tick = 0; tick < 8; ++tick, ++step) {
+            const float level = 0.15F + 0.8F * std::fabs(std::sin(static_cast<float>(step) * 0.9F));
+            alone->set_level(level);
+            helped->set_level(level);
+            alone->tick(33);
+            helped->tick(33);
+            worker.wait_idle();
+            helped->tick(0);
+            same = same && std::memcmp(alone->device_frame()->shown(), helped->device_frame()->shown(), bytes) == 0;
+        }
+    }
+    expect(same, message);
+    alone.reset();
+    helped.reset();
+    expect(!worker.busy() && !helper.busy(), "a presence never leaves its lanes drawing into freed memory");
+    lv_obj_delete(alone_screen);
+    lv_obj_delete(helped_screen);
+}
+
+// Γραφίτης's constellation on the board: the glow's square, opaque, drawn on
+// the worker; it looks as the presentation does.
+void check_stars_device_frame() {
+    using aura::ui::AuraStarsView;
+    using aura::ui::FrameWorker;
+    using aura::ui::PresenceProfile;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+    expect(AuraStarsView().profile() == PresenceProfile::Presentation,
+           "the simulator draws the approved constellation");
+
+    auto device = std::make_unique<AuraStarsView>(PresenceProfile::Device, nullptr);
+    expect(device->buffer_bytes() == 2U * 372U * 372U * 2U,
+           "the board's constellation is two RGB565 frames the size of its glow");
+    auto* image = device->attach(screen, 240, 240);
+    const auto* source = static_cast<const lv_image_dsc_t*>(lv_image_get_src(image));
+    lv_obj_update_layout(image);
+    expect(source->header.cf == LV_COLOR_FORMAT_RGB565 && lv_obj_get_x(image) == 54 && lv_obj_get_y(image) == 54 &&
+               lv_obj_get_child_count(screen) == 1 && device->frame_count() == 1,
+           "the board's glow and points are one opaque frame, drawn at once on a first visit");
+    device->detach();
+    lv_obj_clean(screen);
+
+    expect_device_looks_presented<AuraStarsView>(240, 240, AuraStarsView::glow_radius, true, 2.0, 1.0,
+                                                 "the board's constellation looks as the presentation does");
+    expect_device_redraws_only_changes<AuraStarsView>(240, 240, true,
+                                                      "the board's constellation redraws only what changed");
+    expect_lanes_draw_alike<AuraStarsView>(240, 240, "the constellation's two lanes draw it as one does");
+
+    // On the worker: the tick that starts a frame does not show it; a later one does.
+    FrameWorker worker;
+    auto async = std::make_unique<AuraStarsView>(PresenceProfile::Device, &worker);
+    async->attach(screen, 240, 240);
+    expect(!async->tick(33) && async->frame_count() == 1, "a frame on the worker does not show at once");
+    worker.wait_idle();
+    expect(async->next_tick_ms() == 0 && async->tick(1) && async->frame_count() == 2, "the next tick shows it");
+    async->tick(40);
+    worker.wait_idle();
+    expect(async->tick(40) && async->frame_count() == 3 && async->device_frame()->drawing(),
+           "a slow constellation frame shows, and the next starts in the same tick");
+    async.reset();
+    expect(!worker.busy(), "the constellation never leaves the worker drawing into freed memory");
+    lv_obj_clean(screen);
+}
+
+// Μάρμαρο's pearl on the board: the glow, the ripples, the listening ring,
+// the comet and the sphere in one opaque frame as far as the farthest ripple.
+void check_pearl_device_frame() {
+    using aura::ui::AuraPearlView;
+    using aura::ui::FrameWorker;
+    using aura::ui::PresenceProfile;
+    using aura::ui::PresenceState;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+    expect(AuraPearlView().profile() == PresenceProfile::Presentation, "the simulator draws the approved pearl");
+
+    auto device = std::make_unique<AuraPearlView>(PresenceProfile::Device, nullptr);
+    expect(device->buffer_bytes() == 2U * 416U * 416U * 2U,
+           "the board's pearl is two RGB565 frames as wide as its farthest ripple");
+    auto* image = device->attach(screen, 240, 272);
+    const auto* source = static_cast<const lv_image_dsc_t*>(lv_image_get_src(image));
+    lv_obj_update_layout(image);
+    expect(source->header.cf == LV_COLOR_FORMAT_RGB565 && lv_obj_get_x(image) == 32 && lv_obj_get_y(image) == 64 &&
+               lv_obj_get_child_count(screen) == 1 && device->frame_count() == 1,
+           "the board's glow, rings and sphere are one opaque frame, drawn at once on a first visit");
+    device->set_state(PresenceState::Listening);
+    device->set_level(0.0F);
+    for (int step = 0; step < 10; ++step) device->tick(66);
+    const int quiet = device->ring_radius();
+    device->set_level(1.0F);
+    for (int step = 0; step < 10; ++step) device->tick(66);
+    const int loud = device->ring_radius();
+    expect(quiet > 80 && loud > quiet && loud <= 205, "on the board too, a louder voice widens the listening ring");
+    device->detach();
+    lv_obj_clean(screen);
+
+    expect_device_looks_presented<AuraPearlView>(240, 272, AuraPearlView::device_reach, false, 1.5, 1.0,
+                                                 "the board's pearl looks as the presentation does");
+    expect_device_redraws_only_changes<AuraPearlView>(240, 240, false, "the board's pearl redraws only what changed");
+    expect_lanes_draw_alike<AuraPearlView>(240, 272, "the pearl's two lanes draw it as one does");
+
+    FrameWorker worker;
+    auto async = std::make_unique<AuraPearlView>(PresenceProfile::Device, &worker);
+    async->attach(screen, 240, 272);
+    expect(!async->tick(33) && async->frame_count() == 1, "a pearl frame on the worker does not show at once");
+    worker.wait_idle();
+    expect(async->next_tick_ms() == 0 && async->tick(1) && async->frame_count() == 2, "the next tick shows it");
+    async->tick(40);
+    worker.wait_idle();
+    expect(async->tick(40) && async->frame_count() == 3 && async->device_frame()->drawing(),
+           "a slow pearl frame shows, and the next starts in the same tick");
+    async.reset();
+    expect(!worker.busy(), "the pearl never leaves the worker drawing into freed memory");
+    lv_obj_clean(screen);
+}
+
+// Σέλας's ribbons on the board: the haze reaches past the screen's edges, so
+// the haze, the screen's light fields and the ribbons are one opaque frame of
+// the whole screen.
+void check_aurora_device_frame() {
+    using aura::ui::AuraAuroraView;
+    using aura::ui::FrameWorker;
+    using aura::ui::PresenceProfile;
+    ensure_lvgl();
+    auto* screen = lv_screen_active();
+    expect(AuraAuroraView().profile() == PresenceProfile::Presentation,
+           "the simulator draws the approved ribbons");
+
+    auto device = std::make_unique<AuraAuroraView>(PresenceProfile::Device, nullptr);
+    expect(device->buffer_bytes() == 2U * 480U * 480U * 2U,
+           "the board's ribbons are two RGB565 frames of the whole screen");
+    auto* corner = aura::ui::light_field(screen, 36, 470, 170, 0x38E1C9, 50);
+    auto* other = aura::ui::light_field(screen, 476, 30, 170, 0x7B5CFF, 64);
+    auto* image = device->attach(screen, 240, 234);
+    const auto* source = static_cast<const lv_image_dsc_t*>(lv_image_get_src(image));
+    lv_obj_update_layout(image);
+    expect(source->header.cf == LV_COLOR_FORMAT_RGB565 && lv_obj_get_x(image) == 0 && lv_obj_get_y(image) == 0 &&
+               lv_obj_get_index(image) == 0 && device->frame_count() == 1,
+           "the board's haze and ribbons are one opaque frame under the whole screen, drawn at once");
+    expect(lv_obj_is_hidden(corner) && lv_obj_is_hidden(other),
+           "the screen's light fields are drawn into the frame, not by LVGL");
+    device->detach();
+    lv_obj_clean(screen);
+
+    expect_device_looks_presented<AuraAuroraView>(240, 234, AuraAuroraView::haze_radius, true, 2.5, 1.0,
+                                                  "the board's ribbons look as the presentation does");
+    expect_device_redraws_only_changes<AuraAuroraView>(240, 234, true,
+                                                       "the board's ribbons redraw only what changed");
+    expect_lanes_draw_alike<AuraAuroraView>(240, 234, "the ribbons' two lanes draw them as one does");
+
+    FrameWorker worker;
+    auto async = std::make_unique<AuraAuroraView>(PresenceProfile::Device, &worker);
+    async->attach(screen, 240, 234);
+    expect(!async->tick(33) && async->frame_count() == 1, "a ribbons frame on the worker does not show at once");
+    worker.wait_idle();
+    expect(async->next_tick_ms() == 0 && async->tick(1) && async->frame_count() == 2, "the next tick shows it");
+    async->tick(40);
+    worker.wait_idle();
+    expect(async->tick(40) && async->frame_count() == 3 && async->device_frame()->drawing(),
+           "a slow ribbons frame shows, and the next starts in the same tick");
+    async.reset();
+    expect(!worker.busy(), "the ribbons never leave the worker drawing into freed memory");
+    lv_obj_clean(screen);
+}
+
+// The board's panel for a device frame's strips: what it is sent lands in the
+// picture display's pixels, as LVGL's own flushes do, so that picture is what
+// the panel shows. While busy, a lock that may not wait fails at once and one
+// that may waits until the panel is free again (or refuses); refusing, every
+// lock fails.
+class FramePanel final : public aura::ui::SynapseOutput {
+public:
+    struct Sent {
+        int left;
+        int top;
+        int columns;
+        int rows;
+        bool locked;
+    };
+
+    void* strip(int index, std::size_t bytes) override {
+        auto& memory = memory_[static_cast<std::size_t>(index & 1)];
+        if (memory.size() < bytes) memory.resize(bytes);
+        return memory.data();
+    }
+    bool lock(std::uint32_t timeout_ms) override {
+        {
+            std::unique_lock<std::mutex> guard(gate_);
+            if (timeout_ms == 0) ++tried_;
+            if (busy_ && timeout_ms > 0) {
+                waiting_ = true;
+                changed_.notify_all();
+                changed_.wait(guard, [this] { return !busy_ || refusing_; });
+                waiting_ = false;
+            }
+            if (busy_ || refusing_) return false;
+        }
+        exclusive_.lock();
+        locked_ = true;
+        return true;
+    }
+    void unlock() override {
+        locked_ = false;
+        exclusive_.unlock();
+    }
+    bool send(int left, int top, int columns, int rows, const void* pixels) override {
+        const auto* bytes = static_cast<const std::uint8_t*>(pixels);
+        for (int row = 0; row < rows; ++row) {
+            for (int column = 0; column < columns; ++column) {
+                const auto from = (static_cast<std::size_t>(row) * static_cast<std::size_t>(columns) +
+                                   static_cast<std::size_t>(column)) * 2U;
+                const auto to = (static_cast<std::size_t>(top + row) * 480U + static_cast<std::size_t>(left + column)) * 2U;
+                // The panel's order is high byte first; the picture's is LVGL's.
+                picture_pixels[to] = bytes[from + 1];
+                picture_pixels[to + 1] = bytes[from];
+            }
+        }
+        sent_.push_back({left, top, columns, rows, locked_});
+        ++frame_panel_sends;
+        return true;
+    }
+    // Locks tried without waiting.
+    int tried() {
+        std::lock_guard<std::mutex> guard(gate_);
+        return tried_;
+    }
+    void set_busy(bool busy) {
+        {
+            std::lock_guard<std::mutex> guard(gate_);
+            busy_ = busy;
+        }
+        changed_.notify_all();
+    }
+    void set_refusing(bool refusing) {
+        {
+            std::lock_guard<std::mutex> guard(gate_);
+            refusing_ = refusing;
+        }
+        changed_.notify_all();
+    }
+    // Whether the worker waits in lock() within two seconds.
+    bool wait_for_worker() {
+        std::unique_lock<std::mutex> guard(gate_);
+        return changed_.wait_for(guard, std::chrono::seconds(2), [this] { return waiting_; });
+    }
+    // What was sent since the last call (read once the worker is idle).
+    std::vector<Sent> take() {
+        std::vector<Sent> sent;
+        sent.swap(sent_);
+        return sent;
+    }
+
+private:
+    std::array<std::vector<std::uint8_t>, 2> memory_;
+    std::vector<Sent> sent_;
+    std::mutex exclusive_;
+    std::mutex gate_;
+    std::condition_variable changed_;
+    bool busy_{false};
+    bool refusing_{false};
+    bool waiting_{false};
+    bool locked_{false};
+    int tried_{0};
+};
+
+// On the board a device frame's strips go to the panel straight, eight rows at
+// a time, where nothing LVGL draws lies over them, and LVGL draws only the
+// rest: on the first flash LVGL took 30-110 ms to show each frame, and its
+// PSRAM traffic slowed the worker on the other core by a third (2026-11-16).
+// After every frame, what the panel shows (the strips sent and LVGL's own
+// drawing) is what LVGL shows drawing the whole screen from the frame.
+void check_device_frame_direct() {
+    using aura::ui::DeviceFrame;
+    using aura::ui::FrameRect;
+    using aura::ui::FrameWorker;
+    auto* screen = picture_screen();
+    lv_screen_load(screen);
+    // A caption over the frame's last strip (screen rows 70-77).
+    auto* caption = lv_label_create(screen);
+    lv_label_set_text(caption, "caption");
+    lv_obj_set_pos(caption, 0, 71);
+    lv_obj_set_style_text_color(caption, lv_color_white(), 0);
+    lv_obj_set_width(caption, 480);
+    // The frame's strips (bits) a caption's rows lie over.
+    const auto strips_under = [](lv_obj_t* object) {
+        lv_obj_update_layout(object);
+        lv_area_t area{};
+        lv_obj_get_coords(object, &area);
+        std::uint64_t strips = 0;
+        for (int strip = 0; strip < 6; ++strip) {
+            const int first = 30 + strip * aura::ui::DeviceFrame::strip_rows;
+            if (area.y1 < first + aura::ui::DeviceFrame::strip_rows && area.y2 >= first) strips |= 1ULL << strip;
+        }
+        return strips;
+    };
+    FrameScene scene{{20, 30, 60, 78}, std::vector<std::uint16_t>(40 * 48, 0x2104), {}};
+    FramePanel panel;
+    aura::ui::set_synapse_output(&panel);
+    // What the panel shows, then what LVGL shows from the frame drawing the whole screen.
+    const auto panel_shows_screen = [&] {
+        lv_refr_now(picture_display());
+        const std::vector<std::uint8_t> panel_picture = picture_pixels;
+        lv_obj_invalidate(screen);
+        lv_refr_now(picture_display());
+        return panel_picture == picture_pixels;
+    };
+    const auto all_aligned = [](const std::vector<FramePanel::Sent>& sent) {
+        for (const auto& strip : sent) {
+            if (!strip.locked || (strip.left & 1) != 0 || (strip.top & 1) != 0 || (strip.columns & 1) != 0 ||
+                (strip.rows & 1) != 0 || strip.rows > DeviceFrame::strip_rows) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto below = [](const std::vector<FramePanel::Sent>& sent, int row) {
+        for (const auto& strip : sent) {
+            if (strip.top + strip.rows > row) return false;
+        }
+        return true;
+    };
+    FrameWorker worker;
+    {
+        DeviceFrame frame(40, 48, &draw_scene, &scene);
+        frame.set_worker(&worker);
+        frame.attach(screen, 20, 30);
+        frame.draw_whole();
+        expect(panel_shows_screen() && panel.take().empty(), "a first visit goes to LVGL whole");
+        // One frame on the worker: started once its 33 ms have passed, shown on the tick after.
+        const auto draw_frame = [&](const FrameRect& change, std::uint16_t value) {
+            scene.change(change, value);
+            while (frame.advance(DeviceFrame::interval_ms) != DeviceFrame::Step::Start) {
+            }
+            frame.start(change);
+            worker.wait_idle();
+            return frame.advance(0) == DeviceFrame::Step::Shown && scene.shown_by(frame);
+        };
+
+        // A change in the frame's top rows: its strips go straight, and LVGL is told nothing.
+        expect(strips_under(caption) == 0b100000U, "the caption lies over the frame's last strip");
+        const FrameRect top{23, 33, 41, 43};
+        expect(draw_frame(top, 0x07E0) && frame.direct_frames() == 1 && frame.last_sent() == 0b11U,
+               "a frame's changed strips go to the panel straight");
+        auto sent = panel.take();
+        expect(sent.size() == 2U && all_aligned(sent) && sent.front().left == 22 && sent.front().top == 32 &&
+                   sent.front().columns == 20 && sent.front().rows == 6 && sent.back().top == 38 &&
+                   sent.back().rows == 6,
+               "under LVGL's lock, in panel windows on even rows and columns around the change");
+        expect(panel_shows_screen(), "and the panel shows the frame");
+
+        // The whole frame: the caption's strip goes to LVGL, the rest straight.
+        const FrameRect whole{20, 30, 60, 78};
+        expect(draw_frame(whole, 0x001F) && frame.last_sent() == 0b11111U, "the strips under a caption go to LVGL");
+        sent = panel.take();
+        expect(sent.size() == 5U && all_aligned(sent) && below(sent, 70), "the panel never gets the caption's rows");
+        expect(panel_shows_screen(), "and the caption shows over the frame LVGL drew there");
+
+        // LVGL busy until the frame is drawn: its strips wait for the lock, and
+        // one invalidated meanwhile goes to LVGL.
+        panel.set_busy(true);
+        scene.change(whole, 0x7BEF);
+        while (frame.advance(DeviceFrame::interval_ms) != DeviceFrame::Step::Start) {
+        }
+        frame.start(whole);
+        expect(panel.wait_for_worker(), "the worker waits for LVGL's lock");
+        const lv_area_t spoiled{0, 40, 479, 41};
+        lv_obj_invalidate_area(screen, &spoiled);
+        panel.set_busy(false);
+        worker.wait_idle();
+        expect(frame.advance(0) == DeviceFrame::Step::Shown && frame.last_sent() == 0b11101U,
+               "strips wait for LVGL's lock, and one LVGL was told to draw meanwhile goes to it");
+        sent = panel.take();
+        expect(sent.size() == 4U && all_aligned(sent), "the others go once the lock is free");
+        expect(panel_shows_screen(), "and the panel shows the frame");
+
+        // LVGL draws over a strip already sent, before the frame shows: from the
+        // frame shown until then, so the strip goes to LVGL again.
+        scene.change(whole, 0x8410);
+        while (frame.advance(DeviceFrame::interval_ms) != DeviceFrame::Step::Start) {
+        }
+        frame.start(whole);
+        worker.wait_idle();
+        const lv_area_t redrawn{0, 56, 479, 57};
+        lv_obj_invalidate_area(screen, &redrawn);
+        lv_refr_now(picture_display());
+        expect(frame.advance(0) == DeviceFrame::Step::Shown && frame.last_sent() == 0b10111U,
+               "a strip LVGL drew over after it was sent goes to LVGL again");
+        sent = panel.take();
+        expect(sent.size() == 5U && panel_shows_screen(), "and the panel shows the frame");
+
+        // LVGL told to draw over a strip before the frame begins: it draws there
+        // from the frame shown until this one shows, so the strip goes to LVGL.
+        scene.change(whole, 0x4208);
+        const lv_area_t told{0, 34, 479, 35};
+        lv_obj_invalidate_area(screen, &told);
+        while (frame.advance(DeviceFrame::interval_ms) != DeviceFrame::Step::Start) {
+        }
+        frame.start(whole);
+        worker.wait_idle();
+        lv_refr_now(picture_display());
+        expect(frame.advance(0) == DeviceFrame::Step::Shown && frame.last_sent() == 0b11110U,
+               "a strip LVGL is still to draw when a frame begins goes to LVGL");
+        sent = panel.take();
+        expect(sent.size() == 4U && panel_shows_screen(), "and the panel shows that frame");
+
+        // No lock at all: LVGL draws the frame.
+        panel.set_refusing(true);
+        const auto straight = frame.direct_frames();
+        expect(draw_frame(whole, 0xFFE0) && frame.last_sent() == 0U && frame.direct_frames() == straight &&
+                   panel.take().empty(),
+               "a frame whose strips never get the lock goes to LVGL whole");
+        expect(panel_shows_screen(), "and the panel shows it");
+        panel.set_refusing(false);
+        expect(draw_frame(whole, 0x0410) && frame.last_sent() == 0b11111U && panel_shows_screen(),
+               "and the frame after it goes straight again");
+        panel.take();
+
+        // A frame that begins before LVGL has drawn what the one before told it
+        // (on the board a frame that took its 33 ms starts as the one before
+        // shows, and every such frame went to LVGL whole): its strips wait for
+        // LVGL's drawing, then go straight.
+        panel.set_refusing(true);
+        expect(draw_frame(whole, 0x3186) && frame.last_sent() == 0U, "a frame goes to LVGL whole");
+        panel.set_refusing(false);
+        panel.set_busy(true);
+        scene.change(whole, 0x9CD3);
+        while (frame.advance(DeviceFrame::interval_ms) != DeviceFrame::Step::Start) {
+        }
+        frame.start(whole);
+        const bool waited = panel.wait_for_worker();
+        lv_refr_now(picture_display());
+        panel.set_busy(false);
+        worker.wait_idle();
+        expect(waited && frame.advance(0) == DeviceFrame::Step::Shown && frame.last_sent() == 0b11111U,
+               "the next one's strips wait for LVGL to draw what it was told, then go straight");
+        sent = panel.take();
+        expect(sent.size() == 5U && panel_shows_screen(), "and the panel shows it");
+
+        // A caption that moves over the frame's middle: the strips it covers go to LVGL.
+        lv_obj_set_pos(caption, 0, 49);
+        const std::uint64_t under = strips_under(caption);
+        expect(under != 0U && (under & 0b100011U) == 0U, "the caption now lies over the frame's middle");
+        expect(draw_frame(whole, 0xA145) && panel_shows_screen(), "a moved caption is drawn first");
+        panel.take();
+        expect(draw_frame(whole, 0x5ACB) && frame.last_sent() == (0b111111U & ~under),
+               "then the strips under it go to LVGL, the others straight");
+        expect(panel_shows_screen(), "and the panel shows the caption over the frame");
+        panel.take();
+
+        // Strips on the grid of the owner's own (from row 34): the panel's windows
+        // follow them, and the caption's strips go to LVGL.
+        frame.align_strips(34);
+        expect(panel_shows_screen(), "a frame whose strips moved shows");
+        lv_obj_update_layout(caption);
+        lv_area_t covered{};
+        lv_obj_get_coords(caption, &covered);
+        std::uint64_t covered_strips = 0;
+        for (int strip = 0; strip < 7; ++strip) {
+            const int first = strip == 0 ? 30 : 34 + (strip - 1) * DeviceFrame::strip_rows;
+            const int last = std::min(77, 33 + strip * DeviceFrame::strip_rows);
+            if (covered.y1 <= last && covered.y2 >= first) covered_strips |= 1ULL << strip;
+        }
+        expect(draw_frame(whole, 0x6B4D) && frame.last_sent() == (0b1111111U & ~covered_strips),
+               "strips on another grid go straight where nothing lies over them");
+        sent = panel.take();
+        bool on_grid = all_aligned(sent) && !sent.empty();
+        for (const auto& strip : sent) {
+            on_grid = on_grid && (strip.top == 30 ? strip.rows <= 4 : (strip.top - 34) / 8 == (strip.top + strip.rows - 35) / 8);
+        }
+        expect(on_grid && panel_shows_screen(), "in panel windows inside the grid's strips, and the panel shows the frame");
+        // LVGL told to draw over the grid's second strip (rows 34-41) before a frame begins.
+        scene.change(whole, 0x2965);
+        const lv_area_t second{0, 34, 479, 35};
+        lv_obj_invalidate_area(screen, &second);
+        while (frame.advance(DeviceFrame::interval_ms) != DeviceFrame::Step::Start) {
+        }
+        frame.start(whole);
+        worker.wait_idle();
+        lv_refr_now(picture_display());
+        expect(frame.advance(0) == DeviceFrame::Step::Shown &&
+                   frame.last_sent() == (0b1111101U & ~covered_strips),
+               "a strip of the grid LVGL is still to draw goes to LVGL");
+        panel.take();
+        expect(panel_shows_screen(), "and the panel shows that frame");
+
+        // Leaving the screen while the worker waits for the lock: nothing more goes to the panel.
+        panel.set_busy(true);
+        scene.change(whole, 0x18E3);
+        while (frame.advance(DeviceFrame::interval_ms) != DeviceFrame::Step::Start) {
+        }
+        frame.start(whole);
+        expect(panel.wait_for_worker(), "the worker waits for LVGL's lock");
+        auto* left = frame.object();
+        frame.detach();
+        panel.set_busy(false);
+        worker.wait_idle();
+        expect(panel.take().empty(), "a frame left behind sends nothing");
+        lv_obj_delete(left);
+
+        // On a screen that is not shown, a frame never goes straight.
+        auto* other = picture_screen();
+        frame.attach(screen, 20, 30);
+        lv_screen_load(other);
+        lv_refr_now(picture_display());
+        for (int step = 0; step < 3; ++step) draw_frame(top, static_cast<std::uint16_t>(0x1111 * (step + 1)));
+        expect(panel.take().empty() && frame.last_sent() == 0U, "a frame on a screen not shown goes to LVGL");
+        auto* last = frame.object();
+        frame.detach();
+        lv_obj_delete(last);
+        lv_screen_load(screen);
+        lv_obj_delete(other);
+    }
+    expect(panel.tried() == 0, "a frame never tries LVGL's lock without waiting (the board logs each miss)");
+
+    // With a helper (the board's other core, LVGL's): it sends what is drawn
+    // between its own strips, while the frame is still being drawn.
+    FrameWorker helper;
+    {
+        lv_obj_set_hidden(caption, true);
+        FrameScene slow{{20, 30, 60, 78}, std::vector<std::uint16_t>(40 * 48, 0x4A69), {}};
+        slow.strip_time = std::chrono::milliseconds(20);
+        DeviceFrame frame(40, 48, &draw_scene, &slow);
+        frame.set_worker(&worker);
+        frame.set_helper(&helper);
+        frame.attach(screen, 20, 30);
+        frame.draw_whole();
+        expect(panel_shows_screen(), "a helped frame's first visit shows");
+        panel.take();
+        const FrameRect whole{20, 30, 60, 78};
+        slow.change(whole, 0x7C1F);
+        while (frame.advance(DeviceFrame::interval_ms) != DeviceFrame::Step::Start) {
+        }
+        frame_panel_sends = 0;
+        slow.drawn_after_send = false;
+        slow.lanes = 0;
+        frame.start(whole);
+        worker.wait_idle();
+        expect(frame.advance(0) == DeviceFrame::Step::Shown && frame.last_sent() == 0b111111U && slow.lanes == 0b11U,
+               "a helped frame's strips all go straight");
+        expect(panel.take().size() == 6U && slow.drawn_after_send && panel_shows_screen(),
+               "the helper sends strips while the frame is still being drawn, and the panel shows it");
+        auto* image = frame.object();
+        frame.detach();
+        lv_obj_delete(image);
+        lv_obj_set_hidden(caption, false);
+    }
+    expect(panel.tried() == 0, "nor does a helped one");
+    aura::ui::set_synapse_output(nullptr);
+    expect(!worker.busy() && !helper.busy(), "the frame never leaves the worker drawing into freed memory");
+    lv_screen_load(picture_screen());
+    lv_obj_delete(screen);
+}
+
 // Synapse's luminance (Rec. 709) at one frame pixel, in either frame format:
 // RGB888 (blue, green, red in memory) or RGB565.
 float synapse_luminance(const lv_image_dsc_t& frame, int x, int y) {
@@ -2152,6 +3144,12 @@ int main() {
     check_pearl_presence();
     check_aurora_presence();
     check_stars_presence();
+    check_first_light();
+    check_device_frame();
+    check_device_frame_direct();
+    check_stars_device_frame();
+    check_pearl_device_frame();
+    check_aurora_device_frame();
 
     check_synapse();
     check_synapse_pacing();

@@ -64,6 +64,7 @@ idf_component_register(
         "${AURA_ROOT}/shared/ui/src/aura_icons.cpp"
         "${AURA_ROOT}/shared/ui/src/aura_keyboard.cpp"
         "${AURA_ROOT}/shared/ui/src/aura_aurora_view.cpp"
+        "${AURA_ROOT}/shared/ui/src/aura_device_frame.cpp"
         "${AURA_ROOT}/shared/ui/src/aura_frame_worker.cpp"
         "${AURA_ROOT}/shared/ui/src/aura_mercury_view.cpp"
         "${AURA_ROOT}/shared/ui/src/aura_pearl_view.cpp"
