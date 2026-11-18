@@ -187,6 +187,20 @@ void VoiceAssistantTurn::stop_speaking() noexcept {
     speech_parts_.clear();
     next_part_ = 0;
     next_clip_.reset();
+    early_sentence_.clear();
+}
+
+void VoiceAssistantTurn::speak_early(const std::string& partial) {
+    if (!spoken_ || !early_sentence_.empty() || reply_playing_ || speech_future_.valid()) return;
+    const char* language = interface_language_code(language_);
+    if (!speech_.tts_available(language)) return;
+    // The first sentence is whole once another has begun after it; a longer
+    // one waits for the answer, which cuts it between words.
+    auto sentences = sentences_of(parse_assistant_answer(partial).text);
+    if (sentences.size() < 2 || code_points(sentences.front()) > kSpeechPieceMax) return;
+    early_sentence_ = std::move(sentences.front());
+    speech_language_ = language;
+    speech_future_ = speech_.synthesize(early_sentence_, language, voice_);
 }
 
 bool VoiceAssistantTurn::asking() const noexcept {
@@ -217,7 +231,10 @@ bool VoiceAssistantTurn::poll() {
         AssistantStreamSnapshot update;
         if (stream_->take_after(stream_sequence_, update)) {
             stream_sequence_ = update.sequence;
-            if (!update.text.empty() && controller_.dispatch({EventType::PartialResult, update.text, 0})) changed = true;
+            if (!update.text.empty() && controller_.dispatch({EventType::PartialResult, update.text, 0})) {
+                changed = true;
+                speak_early(update.text);
+            }
         }
     }
     if (finished(reply_)) {
@@ -267,6 +284,10 @@ bool VoiceAssistantTurn::poll() {
             const bool heard = reply_started_;
             if (next_clip_ && answering() && play(*next_clip_)) {
                 next_clip_.reset();
+            } else if (reply_.valid() && answering() && !speech_future_.valid()) {
+                // The first sentence ended before the answer did: the rest
+                // follows once it is written (deliver).
+                reply_playing_ = false;
             } else if (!speech_future_.valid() || !answering()) {
                 const bool again = heard && follow_up_ && listen_again_ && answering();
                 stop_speaking();
@@ -309,9 +330,25 @@ void VoiceAssistantTurn::deliver(const std::string& raw) {
         controller_.dispatch({EventType::RequireConfirmation, assistant_action_name(parsed.action->type), 0});
     }
     const char* language = interface_language_code(language_);
+    const bool voice = spoken_ && speech_.tts_available(language);
+    auto pieces = voice ? speech_pieces(text) : std::vector<std::string>{};
+    if (!early_sentence_.empty() && !pieces.empty() && pieces.front() == early_sentence_) {
+        // The first sentence is playing or on its way: the rest follows it.
+        early_sentence_.clear();
+        speech_parts_ = std::move(pieces);
+        next_part_ = 1;
+        speech_language_ = language;
+        if (!reply_playing_ && !speech_future_.valid() && next_part_ < speech_parts_.size()) {
+            speech_future_ = speech_.synthesize(speech_parts_[next_part_++], language, voice_);
+        }
+        return;
+    }
+    // An answer that begins otherwise than the sentence already spoken (or
+    // that has no voice now) starts again from its beginning.
+    if (!early_sentence_.empty() && (reply_playing_ || speech_future_.valid())) audio_.stop();
     stop_speaking();
-    if (spoken_ && speech_.tts_available(language)) {
-        speech_parts_ = speech_pieces(text);
+    if (voice) {
+        speech_parts_ = std::move(pieces);
         speech_language_ = language;
         if (!speech_parts_.empty()) speech_future_ = speech_.synthesize(speech_parts_[next_part_++], language, voice_);
     }

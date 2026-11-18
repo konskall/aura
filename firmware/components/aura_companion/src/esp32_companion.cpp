@@ -270,10 +270,22 @@ void Esp32Companion::install(AuraUiCallbacks& callbacks, IAoratonService* aorato
 }
 
 bool Esp32Companion::begin_question() {
-    set_barge_monitor(false);
+    // The barge-in monitor's microphone, still open (the owner spoke over the
+    // answer, or it ended and the conversation goes on), is kept: no restart,
+    // so none of the ES7210's settling, and after a barge-in the words that
+    // interrupted the answer begin the question.
+    const bool warm = microphone_.running() && (barge_monitoring_ || barge_triggered_);
+    const bool interrupted = warm && barge_triggered_;
+    barge_monitoring_ = false;
+    barge_triggered_ = false;
     if (recording_note_ || recording_question_ || voice_.state != VoiceCaptureState::Idle ||
-        !capabilities_.speech_recognition || !microphone_.start()) {
+        !capabilities_.speech_recognition) {
+        if (warm) microphone_.stop();
         return false;
+    }
+    if (!warm) {
+        set_barge_monitor(false);
+        if (!microphone_.start()) return false;
     }
     audio_.stop();
     // A new question drops an action that was never confirmed.
@@ -281,6 +293,17 @@ bool Esp32Companion::begin_question() {
     // A question ends by itself when the speaker stops (VoiceRecorder's turn mode).
     recorder_.start(VoiceRecorder::Mode::Turn);
     question_level_ = {};
+    if (warm) {
+        microphone_.set_gain(Esp32Microphone::kVoiceGainDb);
+        microphone_.discard();  // the answer's last moments
+        if (interrupted && !barge_words_.empty()) {
+            // Heard 6 dB lower while the device spoke (kMonitorGainDb).
+            for (auto& sample : barge_words_) sample = static_cast<std::int16_t>(std::clamp(sample * 2, -32768, 32767));
+            recorder_.append(barge_words_.data(), barge_words_.size());
+        }
+        ESP_LOGI(kTag, "question: from the open microphone%s", interrupted ? ", after the owner's words" : "");
+    }
+    barge_words_.clear();
     recording_question_ = true;
     voice_.state = VoiceCaptureState::Recording;
     voice_.purpose = VoicePurpose::Assistant;
@@ -305,6 +328,13 @@ void Esp32Companion::end_question() {
              static_cast<unsigned>(level.samples == 0 ? 0.0 : std::sqrt(level.energy / level.samples)),
              static_cast<unsigned>(level.samples == 0 ? 0U : level.zeros * 100U / level.samples),
              static_cast<unsigned>(level.samples));
+    char tenths[20 * 7 + 1]{};
+    std::size_t used = 0;
+    for (const auto tenth : level.tenths) {
+        used += static_cast<std::size_t>(std::snprintf(tenths + used, sizeof(tenths) - used, " %u", tenth));
+        if (used >= sizeof(tenths)) break;
+    }
+    ESP_LOGI(kTag, "question: rms by tenths of a second:%s", tenths);
     voice_.state = VoiceCaptureState::Idle;
     voice_.level = 0.0F;
     ++voice_.sequence;
@@ -390,13 +420,22 @@ void Esp32Companion::set_barge_monitor(bool on) {
         barge_monitoring_ = false;
         microphone_.stop();
         samples_.clear();
+        if (barge_gate_) {
+            ESP_LOGI(kTag, "barge-in monitor off: the answer's echo %.1f dB down; the loudest sound over it %.1fx "
+                     "the echo left (%.1fx interrupts)",
+                     static_cast<double>(barge_gate_->cancelled_db()), static_cast<double>(barge_gate_->loudest()),
+                     static_cast<double>(EchoReferenceGate::kOwnerMargin));
+        }
         return;
     }
     if (!capabilities_.microphone || recording_note_ || recording_question_ || recording_message_ ||
-        voice_.state != VoiceCaptureState::Idle || !microphone_.start()) {
+        voice_.state != VoiceCaptureState::Idle || barge_triggered_ || !microphone_.start()) {
         return;
     }
-    barge_gate_.reset();
+    microphone_.set_gain(Esp32Microphone::kMonitorGainDb);
+    if (!barge_gate_) barge_gate_ = std::make_unique<EchoReferenceGate>();
+    barge_gate_->reset();
+    barge_words_.clear();
     samples_.clear();
     barge_monitoring_ = true;
 }
@@ -505,17 +544,34 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
     const auto now = now_ms();
     poll_storage_results();
     note_transcriptions_.poll(notes_);
-    // Speech over a spoken answer: the gate calibrates against the speaker's
-    // bleed first, then wants a sustained rise (no echo reference on the board).
-    if (barge_monitoring_) {
+    // Speech over a spoken answer: the speaker's own signal (ES7210 MIC3) is
+    // taken out of the microphone, and the owner's voice is what is left.
+    if (barge_monitoring_ && barge_gate_) {
         samples_.clear();
-        microphone_.drain(samples_);
-        const auto playing = audio_.diagnostics();
-        if (!samples_.empty() && playing.state == AudioState::Playing &&
-            barge_gate_.observe(samples_.data(), samples_.size(), playing.envelope)) {
-            set_barge_monitor(false);
-            barge_heard_ = true;
+        reference_.clear();
+        microphone_.drain(samples_, reference_);
+        if (!samples_.empty()) {
+            const bool spoke = barge_gate_->observe(samples_.data(), reference_.data(), samples_.size());
+            const auto& left = barge_gate_->residual();
+            barge_words_.insert(barge_words_.end(), left.begin(), left.end());
+            constexpr std::size_t kWordsKept = VoiceRecorder::kSampleRate;  // a second
+            if (barge_words_.size() > kWordsKept) {
+                barge_words_.erase(barge_words_.begin(),
+                                   barge_words_.begin() + static_cast<std::ptrdiff_t>(barge_words_.size() - kWordsKept));
+            }
+            if (spoke) {
+                ESP_LOGI(kTag, "barge-in: the owner spoke over the answer (its echo %.1f dB down)",
+                         static_cast<double>(barge_gate_->cancelled_db()));
+                barge_monitoring_ = false;  // the microphone stays open for the question
+                barge_triggered_ = true;
+                barge_heard_ = true;
+            }
         }
+    }
+    // A microphone left open by a barge-in nobody took up is closed.
+    if (barge_triggered_ && !barge_heard_ && !recording_question_) {
+        barge_triggered_ = false;
+        microphone_.stop();
     }
     clock_.tick(elapsed_ms);
 
@@ -564,13 +620,23 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
         microphone_.drain(samples_);
         if (recording_question_) {
             auto& level = question_level_;
+            constexpr std::uint32_t kTenth = VoiceRecorder::kSampleRate / 10U;
             for (const std::int16_t sample : samples_) {
                 const std::int32_t magnitude = sample < 0 ? -static_cast<std::int32_t>(sample) : sample;
                 level.peak = std::max(level.peak, magnitude);
                 level.energy += static_cast<double>(sample) * sample;
                 if (sample == 0) ++level.zeros;
+                const std::uint32_t tenth = level.samples / kTenth;
+                if (tenth < level.tenths.size()) {
+                    level.tenth_energy += static_cast<double>(sample) * sample;
+                    if (level.samples % kTenth == kTenth - 1U) {
+                        level.tenths[tenth] = static_cast<std::uint16_t>(
+                            std::min(65535.0, std::sqrt(level.tenth_energy / kTenth)));
+                        level.tenth_energy = 0.0;
+                    }
+                }
+                ++level.samples;
             }
-            level.samples += static_cast<std::uint32_t>(samples_.size());
         }
         if (!samples_.empty()) recorder_.append(samples_.data(), samples_.size());
         voice_.level = recorder_.level();

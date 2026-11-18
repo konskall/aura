@@ -9,6 +9,7 @@
 #include "freertos/task.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <dirent.h>
 #include <string>
@@ -21,6 +22,38 @@ namespace {
 constexpr const char* kTag = "aura-mic";
 constexpr std::size_t kMaxPending = 16000 * 2;  // two seconds
 constexpr const char* kRoot = "/sdcard/aura";
+// One read: 20 ms of four 16-bit TDM slots.
+constexpr std::size_t kReadFrames = 320;
+constexpr std::size_t kSlots = 4;
+constexpr std::size_t kReferenceSlot = 0;
+constexpr std::size_t kVoiceSlot = 1;
+constexpr std::size_t kSecondSlot = 3;
+// The ES7210's registers for MIC3 (the speaker's signal) beside the BSP's
+// MIC1 and MIC2, as its driver sets them for three microphones: clocks,
+// power, the PGA at 12 dB (the speaker's signal stays far from clipping),
+// TDM on SDOUT1, and the reset that applies them.
+constexpr int kClockOffReg = 0x01;
+constexpr int kMic3Clocks = 0x15;
+constexpr int kMic34PowerReg = 0x4C;
+constexpr int kMic3GainReg = 0x45;
+constexpr int kPgaOn = 0x10;
+constexpr int kReferenceGain = 4;  // GAIN_12DB
+constexpr int kInterfaceReg = 0x12;
+constexpr int kTdm = 0x02;
+constexpr int kResetReg = 0x00;
+
+// MIC3 into the TDM frame after the BSP's codec opened MIC1 and MIC2.
+void enable_reference(esp_codec_dev_handle_t codec) {
+    int value = 0;
+    esp_codec_dev_read_reg(codec, kClockOffReg, &value);
+    esp_codec_dev_write_reg(codec, kClockOffReg, value & ~kMic3Clocks);
+    esp_codec_dev_write_reg(codec, kMic34PowerReg, 0x00);
+    esp_codec_dev_read_reg(codec, kMic3GainReg, &value);
+    esp_codec_dev_write_reg(codec, kMic3GainReg, (value & ~0x1F) | kPgaOn | kReferenceGain);
+    esp_codec_dev_write_reg(codec, kInterfaceReg, kTdm);
+    esp_codec_dev_write_reg(codec, kResetReg, 0x71);
+    esp_codec_dev_write_reg(codec, kResetReg, 0x41);
+}
 
 // The internal RAM the panel's transfers need while the microphone is open:
 // with it open the panel's transfers found none (2026-11-16, «Draw bitmap
@@ -39,26 +72,34 @@ bool Esp32Microphone::initialize() {
         if (!lifecycle_) return false;
         xSemaphoreGive(lifecycle_);
     }
+    if (!frames_) {
+        frames_ = static_cast<std::int16_t*>(
+            heap_caps_malloc(kReadFrames * kSlots * sizeof(std::int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!frames_) return false;
+    }
     codec_ = bsp_audio_codec_microphone_init();
     ESP_LOGI(kTag, "ES7210 microphone %s", codec_ ? "ready" : "unavailable");
     return codec_ != nullptr;
 }
 
 bool Esp32Microphone::start() {
-    if (!codec_ || !lifecycle_ || xSemaphoreTake(lifecycle_, 0) != pdTRUE) return false;
+    if (!codec_ || !frames_ || !lifecycle_ || xSemaphoreTake(lifecycle_, 0) != pdTRUE) return false;
     esp_codec_dev_sample_info_t info{};
     info.sample_rate = 16000;
-    info.channel = 2;  // the ES7210 delivers a stereo pair; the left channel is kept
+    info.channel = kSlots;  // TDM: 64-bit frames, as the speaker's clips (Esp32AudioBackend)
     info.bits_per_sample = 16;
     auto codec = static_cast<esp_codec_dev_handle_t>(codec_);
     if (esp_codec_dev_open(codec, &info) != ESP_CODEC_DEV_OK) {
         xSemaphoreGive(lifecycle_);
         return false;
     }
-    esp_codec_dev_set_in_gain(codec, 30.0F);
+    esp_codec_dev_set_in_gain(codec, kVoiceGainDb);
+    enable_reference(codec);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         pending_.clear();
+        pending_reference_.clear();
+        levels_ = {};
     }
     running_ = true;
     // The capture task's stack lives in PSRAM: it never touches the flash, and
@@ -83,23 +124,55 @@ bool Esp32Microphone::stop() {
         return false;
     }
     xSemaphoreGive(lifecycle_);
-    if (was_running) log_internal_ram("off");
+    if (was_running) {
+        log_internal_ram("off");
+        Levels levels;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            levels = levels_;
+        }
+        const auto rms = [&levels](double energy) {
+            return static_cast<unsigned>(levels.frames == 0 ? 0.0 : std::sqrt(energy / levels.frames));
+        };
+        ESP_LOGI(kTag, "microphone heard %u ms: voice rms %u peak %d, second microphone rms %u, speaker rms %u peak %d",
+                 static_cast<unsigned>(levels.frames / 16U), rms(levels.voice), levels.voice_peak, rms(levels.second),
+                 rms(levels.reference), levels.reference_peak);
+    }
     return true;
 }
 
 void Esp32Microphone::task(void* argument) {
     auto* self = static_cast<Esp32Microphone*>(argument);
     auto codec = static_cast<esp_codec_dev_handle_t>(self->codec_);
-    std::int16_t frames[320 * 2]{};
+    std::int16_t* frames = self->frames_;
+    std::uint32_t settling = 16U * kSettleMs;  // frames still dropped
     while (self->running_.load()) {
-        if (esp_codec_dev_read(codec, frames, sizeof(frames)) != ESP_CODEC_DEV_OK) {
+        if (esp_codec_dev_read(codec, frames, kReadFrames * kSlots * sizeof(std::int16_t)) != ESP_CODEC_DEV_OK) {
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
         }
-        std::lock_guard<std::mutex> lock(self->mutex_);
-        for (std::size_t index = 0; index + 1 < sizeof(frames) / sizeof(frames[0]); index += 2) {
-            if (self->pending_.size() < kMaxPending) self->pending_.push_back(frames[index]);
+        if (settling > 0) {
+            settling = settling > kReadFrames ? settling - static_cast<std::uint32_t>(kReadFrames) : 0U;
+            continue;
         }
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        auto& levels = self->levels_;
+        for (std::size_t frame = 0; frame < kReadFrames; ++frame) {
+            const std::int16_t* slots = frames + frame * kSlots;
+            const int voice = slots[kVoiceSlot];
+            const int reference = slots[kReferenceSlot];
+            const int second = slots[kSecondSlot];
+            levels.voice += static_cast<double>(voice) * voice;
+            levels.second += static_cast<double>(second) * second;
+            levels.reference += static_cast<double>(reference) * reference;
+            levels.voice_peak = std::max(levels.voice_peak, voice < 0 ? -voice : voice);
+            levels.reference_peak = std::max(levels.reference_peak, reference < 0 ? -reference : reference);
+            if (self->pending_.size() < kMaxPending) {
+                self->pending_.push_back(slots[kVoiceSlot]);
+                self->pending_reference_.push_back(slots[kReferenceSlot]);
+            }
+        }
+        levels.frames += static_cast<std::uint32_t>(kReadFrames);
     }
     esp_codec_dev_close(codec);
     xSemaphoreGive(self->lifecycle_);
@@ -110,6 +183,25 @@ void Esp32Microphone::drain(std::vector<std::int16_t>& output) {
     std::lock_guard<std::mutex> lock(mutex_);
     output.insert(output.end(), pending_.begin(), pending_.end());
     pending_.clear();
+    pending_reference_.clear();
+}
+
+void Esp32Microphone::drain(std::vector<std::int16_t>& output, std::vector<std::int16_t>& reference) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    output.insert(output.end(), pending_.begin(), pending_.end());
+    reference.insert(reference.end(), pending_reference_.begin(), pending_reference_.end());
+    pending_.clear();
+    pending_reference_.clear();
+}
+
+void Esp32Microphone::set_gain(float db) {
+    if (codec_ && running_.load()) esp_codec_dev_set_in_gain(static_cast<esp_codec_dev_handle_t>(codec_), db);
+}
+
+void Esp32Microphone::discard() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_.clear();
+    pending_reference_.clear();
 }
 
 bool Esp32CompanionStore::mount() {

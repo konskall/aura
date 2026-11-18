@@ -46,7 +46,11 @@ bool Esp32AudioBackend::initialize() {
     }
     xSemaphoreGive(mutex_);
 
-    codec_ = bsp_audio_codec_speaker_init();
+    if (!wide_) {
+        wide_ = static_cast<std::int32_t*>(
+            heap_caps_malloc(kChunkSamples * sizeof(std::int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    }
+    codec_ = wide_ ? bsp_audio_codec_speaker_init() : nullptr;
     if (!codec_ || !amplifier_.initialize(codec_)) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         machine_.dispatch(AudioCommand::Initialize);
@@ -338,7 +342,7 @@ void Esp32AudioBackend::play_clip_now(std::uint32_t generation, const std::strin
     // C++ requires designated initializers in declaration order
     // (bits_per_sample, channel, channel_mask, sample_rate, ...); assign instead.
     esp_codec_dev_sample_info_t sample_info{};
-    sample_info.bits_per_sample = format.bits_per_sample;
+    sample_info.bits_per_sample = 32;  // the clip's 16-bit samples, widened (wide_)
     sample_info.channel = format.channels;
     sample_info.sample_rate = format.sample_rate;
     if (esp_codec_dev_open(codec_, &sample_info) != ESP_CODEC_DEV_OK) {
@@ -388,7 +392,8 @@ void Esp32AudioBackend::play_clip_now(std::uint32_t generation, const std::strin
         diagnostics_.progress = static_cast<float>(cursor_) / clip_.samples.size();
         diagnostics_.buffered_frames = (clip_.samples.size() - cursor_) / std::max<std::uint8_t>(1, format.channels);
         xSemaphoreGive(mutex_);
-        if (esp_codec_dev_write(codec_, chunk.data(), count * sizeof(std::int16_t)) != ESP_CODEC_DEV_OK) {
+        for (std::size_t i = 0; i < count; ++i) wide_[i] = static_cast<std::int32_t>(chunk[i]) * 65536;
+        if (esp_codec_dev_write(codec_, wide_, count * sizeof(std::int32_t)) != ESP_CODEC_DEV_OK) {
             failed = true;
             break;
         }

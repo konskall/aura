@@ -83,6 +83,7 @@ public:
     bool listening() const noexcept { return listening_; }
 
 private:
+    void speak_early(const std::string& partial);
     void deliver(const std::string& raw);
     void fail(const std::string& code);
     bool asking() const noexcept;
@@ -113,6 +114,9 @@ private:
     std::size_t next_part_{0};
     std::string speech_language_;
     std::optional<PcmClip> next_clip_;
+    // The answer's first sentence, spoken while the rest is still being
+    // written (the answer took 1.4-5.6 s on the board, 2026-11-16).
+    std::string early_sentence_;
     std::string action_question_;
     std::string action_refused_;
     std::string empty_answer_;

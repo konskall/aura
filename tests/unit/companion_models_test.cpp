@@ -842,6 +842,134 @@ void ota_tests() {
     expect(same.snapshot().state == UpdateState::UpToDate, "the same version is up to date");
 }
 
+// Speech-like sound: low-passed noise in syllables of 150 ms with 60 ms gaps,
+// and a 400 ms pause every two seconds.
+std::vector<std::int16_t> syllables(std::size_t count, double rms, std::uint32_t seed) {
+    std::vector<std::int16_t> output(count);
+    double smooth = 0.0;
+    std::vector<double> raw(count);
+    double energy = 0.0;
+    std::size_t sounding = 0;
+    for (std::size_t index = 0; index < count; ++index) {
+        seed = seed * 1103515245U + 12345U;
+        smooth = 0.85 * smooth + 0.15 * (static_cast<double>((seed >> 16) & 0x7FFFU) - 16384.0);
+        const std::size_t in_phrase = index % 32000U;
+        const bool on = in_phrase < 25600U && (in_phrase % 3360U) < 2400U;
+        raw[index] = on ? smooth : 0.0;
+        if (on) {
+            energy += smooth * smooth;
+            ++sounding;
+        }
+    }
+    const double scale = sounding ? rms / std::sqrt(energy / static_cast<double>(sounding)) : 0.0;
+    for (std::size_t index = 0; index < count; ++index) {
+        output[index] = static_cast<std::int16_t>(std::clamp(raw[index] * scale, -32767.0, 32767.0));
+    }
+    return output;
+}
+
+// The board's echo (2026-11-16, measured): the microphone hears the speaker
+// about 2.2 times as loud as the reference slot (24 dB and 12 dB of gain), a
+// little late, with two reflections, the speaker's clipping above `knee` and a
+// tail an 8 ms filter cannot hold (`tail`).
+std::vector<std::int16_t> board_echo(const std::vector<std::int16_t>& reference, double knee, double tail,
+                                     std::uint32_t seed) {
+    std::vector<std::int16_t> output(reference.size());
+    double decay = 0.0;
+    for (std::size_t index = 0; index < reference.size(); ++index) {
+        const auto at = [&](std::size_t delay) { return index >= delay ? static_cast<double>(reference[index - delay]) : 0.0; };
+        double echo = 2.2 * at(6) + 0.5 * at(21) - 0.25 * at(47);
+        echo = knee * std::tanh(echo / knee);
+        decay = 0.995 * decay + tail * at(160);
+        seed = seed * 1103515245U + 12345U;
+        const double noise = (static_cast<double>((seed >> 16) & 0x7FFFU) - 16384.0) / 16384.0 * 15.0;
+        output[index] = static_cast<std::int16_t>(std::clamp(echo + decay + noise, -32767.0, 32767.0));
+    }
+    return output;
+}
+
+void echo_reference_gate_tests() {
+    using namespace aura;
+    static constexpr std::size_t kBlock = 480;  // the companion drains about 30 ms at a time
+    const auto run = [](EchoReferenceGate& gate, const std::vector<std::int16_t>& microphone,
+                        const std::vector<std::int16_t>& reference, std::size_t& when) {
+        for (std::size_t at = 0; at < microphone.size(); at += kBlock) {
+            const auto count = std::min(kBlock, microphone.size() - at);
+            if (gate.observe(microphone.data() + at, reference.data() + at, count)) {
+                when = at + count;
+                return true;
+            }
+        }
+        return false;
+    };
+    const std::size_t eight_seconds = 16000U * 8U;
+    const auto over = [](const std::vector<std::int16_t>& echo, const std::vector<std::int16_t>& owner) {
+        std::vector<std::int16_t> mixed(echo);
+        for (std::size_t index = 16000U * 3U; index < mixed.size(); ++index) {
+            mixed[index] = static_cast<std::int16_t>(std::clamp(static_cast<int>(mixed[index]) + owner[index], -32767, 32767));
+        }
+        return mixed;
+    };
+    std::size_t when = 0;
+
+    // A clean echo: cancelled by more than 15 dB; a voice softer than the
+    // echo itself still interrupts it.
+    const auto reference = syllables(eight_seconds, 300.0, 7U);
+    const auto echo = board_echo(reference, 9000.0, 0.004, 11U);
+    EchoReferenceGate quiet_owner;
+    expect(!run(quiet_owner, echo, reference, when), "the device's own voice, cancelled, never interrupts it");
+    expect(quiet_owner.cancelled_db() > 15.0F, "a clean echo is cancelled by more than 15 dB");
+    EchoReferenceGate soft_listening;
+    expect(run(soft_listening, over(echo, syllables(eight_seconds, 250.0, 29U)), reference, when) &&
+               when > 16000U * 3U && when < 16000U * 4U,
+           "a voice softer than the echo interrupts it within a second");
+
+    // A loud voice through a clipping speaker, with a longer tail: about
+    // 12 dB is cancelled, and the rest must not sound like the owner; the
+    // owner speaking up over it does, soon.
+    const auto loud_reference = syllables(eight_seconds, 600.0, 7U);
+    const auto harsh = board_echo(loud_reference, 2500.0, 0.012, 11U);
+    EchoReferenceGate harsh_quiet;
+    expect(!run(harsh_quiet, harsh, loud_reference, when) && harsh_quiet.cancelled_db() > 10.0F,
+           "a loud, clipped echo is cancelled by more than 10 dB, and never interrupts");
+    const auto owner = syllables(eight_seconds, 700.0, 23U);
+    EchoReferenceGate listening;
+    expect(run(listening, over(harsh, owner), loud_reference, when) && when > 16000U * 3U &&
+               when < 16000U * 3U + 9600U,
+           "the owner speaking over the answer interrupts it within 0.6 s");
+    // For the log: how far the loudest sound over the answer rose above the
+    // echo left over, against the margin that interrupts.
+    expect(harsh_quiet.loudest() > 0.0F && harsh_quiet.loudest() < EchoReferenceGate::kOwnerMargin &&
+               listening.loudest() >= EchoReferenceGate::kOwnerMargin,
+           "the gate tells how close a sound came to interrupting");
+    const auto echo_for_glitches = harsh;
+
+    // The ES7210 starts with a quarter second of noise in every slot, and again
+    // when the speaker starts while it listens (measured on the board): never
+    // the owner.
+    // The same settling swing in every slot, clipping at first, for 250 ms.
+    std::vector<std::int16_t> glitched_microphone(echo_for_glitches);
+    std::vector<std::int16_t> glitched_reference(loud_reference);
+    for (const std::size_t start : {std::size_t{0}, std::size_t{16000U * 4U}}) {
+        for (std::size_t index = start; index < start + 4000U; ++index) {
+            const double age = static_cast<double>(index - start);
+            const double swing = 60000.0 * std::exp(-age / 900.0) * std::sin(age * 2.0 * 3.14159265 * 35.0 / 16000.0);
+            const auto value = static_cast<std::int16_t>(std::clamp(swing, -32767.0, 32767.0));
+            glitched_microphone[index] = value;
+            glitched_reference[index] = value;
+        }
+    }
+    EchoReferenceGate glitching;
+    expect(!run(glitching, glitched_microphone, glitched_reference, when),
+           "the ES7210's start and restart noise does not interrupt");
+
+    // No reference at all (the speaker silent): nothing is learnt, nothing interrupts.
+    EchoReferenceGate silent;
+    const std::vector<std::int16_t> nothing(16000U * 2U, 0);
+    const auto room = syllables(16000U * 2U, 600.0, 31U);
+    expect(!run(silent, room, nothing, when), "without the device's voice the gate does not decide");
+}
+
 void voice_tests() {
     using namespace aura;
     const auto rms = [](const std::vector<std::int16_t>& samples) {
@@ -942,6 +1070,32 @@ void voice_tests() {
     recorder.start();
     for (int index = 0; index < 200; ++index) recorder.append(voice.data(), voice.size());
     expect(recorder.elapsed_ms() == VoiceRecorder::kMaxMs, "a spoken question still stops at 15 seconds");
+
+    // Speech recognition gets the voice as it was heard (2026-11-16, the
+    // owner: «κάνει αρκετά λάθη στην αναγνώριση»): no gain chosen every 20 ms
+    // that clips a loud syllable, no gate that thins a soft one. The level and
+    // the pauses still come from the front end.
+    VoiceRecorder faithful;
+    faithful.start();
+    std::vector<std::int16_t> soft(1600);
+    std::vector<std::int16_t> loud(1600);
+    for (std::size_t index = 0; index < soft.size(); ++index) {
+        soft[index] = static_cast<std::int16_t>(300.0 * std::sin(static_cast<double>(index) * 0.2));
+        loud[index] = static_cast<std::int16_t>(20000.0 * std::sin(static_cast<double>(index) * 0.2));
+    }
+    for (int index = 0; index < 5; ++index) faithful.append(soft.data(), soft.size());
+    for (int index = 0; index < 5; ++index) faithful.append(loud.data(), loud.size());
+    const auto faithful_wav = faithful.finish_wav();
+    PcmClip heard;
+    expect(parse_wav(faithful_wav.data(), faithful_wav.size(), heard) && heard.samples.size() == 10U * 1600U,
+           "the recording holds every sample");
+    const auto peak_of = [&heard](std::size_t from, std::size_t to) {
+        int peak = 0;
+        for (std::size_t index = from; index < to; ++index) peak = std::max(peak, std::abs(static_cast<int>(heard.samples[index])));
+        return peak;
+    };
+    expect(peak_of(1600, 8000) >= 280 && peak_of(1600, 8000) <= 320, "a soft voice keeps its level");
+    expect(peak_of(9600, 16000) >= 19000 && peak_of(9600, 16000) <= 20400, "a loud voice is neither raised nor clipped");
     const std::uint8_t garbage[48]{};
     expect(!parse_wav(garbage, sizeof(garbage), clip), "garbage is not a WAV");
 
@@ -980,6 +1134,8 @@ void voice_tests() {
         triggered = talked_over.observe(normal_voice.data(), normal_voice.size(), 0.3F);
     }
     expect(triggered, "speech during calibration does not raise the barge-in bar");
+
+    echo_reference_gate_tests();
 }
 
 }  // namespace

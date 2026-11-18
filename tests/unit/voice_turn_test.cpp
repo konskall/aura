@@ -444,6 +444,90 @@ int main() {
     expect(speak_out() == 0 && audio.played == played_at + 1 && listened_again == listened_at,
            "stopping the voice drops the rest, and nothing listens again");
 
+    // The first sentence is spoken while the rest of the answer is still being
+    // written: on the board the answer took 1.4-5.6 s of the ~7.5 s from the
+    // question to the voice (2026-11-16).
+    controller.dispatch({aura::EventType::Reset});
+    audio.state = aura::AudioState::Ready;
+    provider.hold = true;
+    provider.reply = {true, "Είναι 10:00. Κάνει ζέστη σήμερα.", {}};
+    spoken_at = speech.spoken.size();
+    played_at = audio.played;
+    listened_at = listened_again;
+    turn.ask("Τι ώρα είναι;");
+    settle(turn);
+    expect(speech.spoken.size() == spoken_at && audio.played == played_at, "half a sentence is not spoken");
+    provider.requests.back().stream->publish_delta("10:00. Κάνει");
+    settle(turn);
+    expect(speech.spoken.size() == spoken_at + 1 && speech.spoken[spoken_at] == "Είναι 10:00." &&
+               audio.played == played_at + 1 && turn.speaking(),
+           "the first sentence is spoken as soon as it is written");
+    audio.state = aura::AudioState::Playing;
+    settle(turn);
+    audio.state = aura::AudioState::Ready;
+    settle(turn);
+    expect(listened_again == listened_at && controller.snapshot().state == AssistantState::Responding &&
+               speech.spoken.size() == spoken_at + 1,
+           "the end of the first sentence is not the end of the answer");
+    provider.release();
+    settle(turn);
+    expect(controller.snapshot().answer_text == "Είναι 10:00. Κάνει ζέστη σήμερα." &&
+               speech.spoken.size() == spoken_at + 2 && speech.spoken[spoken_at + 1] == "Κάνει ζέστη σήμερα." &&
+               audio.played == played_at + 2,
+           "the rest follows, without the first sentence again");
+    speak_out();
+    expect(!turn.speaking() && listened_again == listened_at + 1, "and it listens again once, after the last piece");
+
+    // The rest arriving while the first sentence still plays waits for it.
+    controller.dispatch({aura::EventType::Reset});
+    provider.hold = true;
+    spoken_at = speech.spoken.size();
+    played_at = audio.played;
+    turn.ask("Τι ώρα είναι;");
+    provider.requests.back().stream->publish_delta("10:00. Κάνει");
+    settle(turn);
+    audio.state = aura::AudioState::Playing;
+    settle(turn);
+    provider.release();
+    settle(turn);
+    expect(audio.played == played_at + 1 && speech.spoken.size() == spoken_at + 2,
+           "the rest is fetched while the first sentence plays, and waits for it");
+    expect(speak_out() == 1 && audio.played == played_at + 2, "then plays after it");
+
+    // An answer that turns out to begin otherwise is spoken from its start.
+    controller.dispatch({aura::EventType::Reset});
+    audio.state = aura::AudioState::Ready;
+    provider.hold = true;
+    provider.reply = {true, "Άλλη αρχή. Και τέλος.", {}};
+    spoken_at = speech.spoken.size();
+    const int stopped_at = audio.stopped;
+    turn.ask("Πες κάτι");
+    provider.requests.back().stream->publish_delta("πρώτη. Δεύτερη");
+    settle(turn);
+    expect(speech.spoken.size() == spoken_at + 1 && speech.spoken[spoken_at] == "Είναι πρώτη.",
+           "the streamed first sentence is spoken");
+    provider.release();
+    settle(turn);
+    expect(audio.stopped > stopped_at && speech.spoken.size() >= spoken_at + 2 &&
+               speech.spoken[spoken_at + 1] == "Άλλη αρχή.",
+           "an answer that begins otherwise stops it and is spoken from its start");
+    turn.stop_speaking();
+
+    // Nothing is spoken early without a voice, nor with spoken answers off.
+    controller.dispatch({aura::EventType::Reset});
+    provider.hold = true;
+    provider.reply = {true, "Είναι 10:00. Κάνει ζέστη σήμερα.", {}};
+    spoken_at = speech.spoken.size();
+    turn.set_spoken_replies(false);
+    turn.ask("Τι ώρα είναι;");
+    provider.requests.back().stream->publish_delta("10:00. Κάνει");
+    settle(turn);
+    provider.release();
+    settle(turn);
+    turn.set_spoken_replies(true);
+    expect(speech.spoken.size() == spoken_at && !turn.speaking(), "spoken answers off: nothing is spoken early");
+    provider.hold = false;
+
     // A confirmed action is carried out by the shared executor.
     aura::ClockServicesModel clock;
     aura::NotesModel notes;

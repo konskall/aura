@@ -22,10 +22,12 @@
 #include "esp32_ota.hpp"
 #include "esp32_phone_link.hpp"
 
+#include <array>
 #include <cstdint>
 #include <ctime>
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -173,6 +175,10 @@ private:
         std::uint32_t zeros{0};
         std::int32_t peak{0};
         double energy{0.0};
+        // The first two seconds in tenths: where the voice begins, and
+        // whether the ES7210's settling or the speaker's tail shows.
+        std::array<std::uint16_t, 20> tenths{};
+        double tenth_energy{0.0};
     };
     InputLevel question_level_{};
     bool recording_question_{false};
@@ -185,9 +191,16 @@ private:
     AssistantExtras extras_{};
     ISpeechService* speech_{nullptr};
     NoteTranscriptions note_transcriptions_;
-    BargeInGate barge_gate_;
+    // Barge-in, with the speaker's own signal as reference (ES7210 MIC3); in
+    // PSRAM (the filter and the owner's first words).
+    std::unique_ptr<EchoReferenceGate> barge_gate_;
+    std::vector<std::int16_t> reference_;
+    // The last second without the device's voice: the words that interrupted
+    // it begin the question.
+    std::vector<std::int16_t> barge_words_;
     bool barge_monitoring_{false};
     bool barge_heard_{false};
+    bool barge_triggered_{false};  // the monitor's microphone stays open for the question
     bool extras_dirty_{true};
     CompanionCapabilities capabilities_{};
     bool capabilities_dirty_{true};

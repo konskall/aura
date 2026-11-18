@@ -65,6 +65,11 @@ private:
     PcmClip clip_{};
     std::string pending_wav_path_;
     std::size_t cursor_{0};
+    // A clip goes out as 32-bit samples (in PSRAM): with the microphone's four
+    // 16-bit slots the I2S frame is 64 bits both ways, so neither side
+    // reconfigures the shared clock while the other runs (an answer's start
+    // would otherwise drop sound, 2026-11-16).
+    std::int32_t* wide_{nullptr};
     std::uint32_t generation_{0};
     bool alert_clip_{false};  // a clock alert: heard through mute (playback_gain)
     bool shutting_down_{false};

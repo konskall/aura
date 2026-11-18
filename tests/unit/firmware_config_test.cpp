@@ -238,6 +238,48 @@ void check_panel_memory(const std::string& root) {
            "the microphone's capture task keeps its stack in PSRAM");
 }
 
+// The board wires the speaker's signal back into the ES7210 (MIC3), and the
+// microphone hears the device as loud as the owner: barge-in cut answers by
+// itself (2026-11-16). Measured on the board: four TDM slots, 0 the speaker's
+// signal, 1 and 3 the microphones; ~250 ms of noise in every slot after each
+// start; 30 dB clipped speech near the device. The clips go out in 32-bit
+// samples so the shared I2S frame is 64 bits both ways.
+void check_echo_reference(const std::string& root) {
+    constexpr auto none = std::string::npos;
+    const std::string microphone =
+        without_comments(read_file(root + "/firmware/components/aura_companion/src/esp32_microphone.cpp"));
+    const std::string header =
+        without_comments(read_file(root + "/firmware/components/aura_companion/include/esp32_microphone.hpp"));
+    const auto gain = microphone.find("esp_codec_dev_set_in_gain(codec, kVoiceGainDb)");
+    const auto reference = microphone.find("enable_reference(codec)");
+    expect(microphone.find("info.channel = kSlots") != none && gain != none && reference != none && gain < reference,
+           "the microphone opens four slots, the speaker's signal among them");
+    expect(microphone.find("kReferenceSlot = 0") != none && microphone.find("kVoiceSlot = 1") != none &&
+               microphone.find("kInterfaceReg, kTdm") != none,
+           "slot 0 is the speaker's signal and slot 1 the voice, in TDM");
+    expect(header.find("kVoiceGainDb = 24.0F") != none, "the voice at 24 dB, not 30");
+    expect(header.find("kSettleMs = 300") != none && microphone.find("16U * kSettleMs") != none,
+           "the ES7210's first 300 ms after a start are dropped");
+    const std::string audio =
+        without_comments(read_file(root + "/firmware/components/aura_audio/src/esp32_audio_backend.cpp"));
+    expect(audio.find("sample_info.bits_per_sample = 32") != none &&
+               audio.find("esp_codec_dev_write(codec_, wide_, count * sizeof(std::int32_t))") != none,
+           "a clip goes out in 32-bit samples: a 64-bit I2S frame, as the microphone's");
+    const std::string companion =
+        without_comments(read_file(root + "/firmware/components/aura_companion/src/esp32_companion.cpp"));
+    expect(companion.find("barge_gate_->observe(samples_.data(), reference_.data(), samples_.size())") != none,
+           "barge-in takes the speaker's signal out of the microphone");
+    expect(companion.find("microphone_.discard()") != none &&
+               companion.find("recorder_.append(barge_words_.data(), barge_words_.size())") != none,
+           "a question after an answer keeps the open microphone, and a barge-in's words");
+    const std::string main = without_comments(read_file(root + "/firmware/main/app_main.cpp"));
+    const auto listen = main.find("static const auto start_listening");
+    const auto question = main.find("companion.begin_question()", listen);
+    expect(listen != none && question != none &&
+               main.substr(listen, question - listen).find("set_barge_monitor(false)") == none,
+           "listening does not close the barge-in monitor's microphone first");
+}
+
 // A question's recording reached Groq at 20-58 KB/s: one TCP window of 5760
 // bytes a round trip, and with Bluetooth on the Wi-Fi radio must doze, so a
 // round trip took 100-250 ms (2026-11-16). 16 KB in flight; lwIP's buffers live
@@ -364,6 +406,7 @@ int main() {
     check_synapse_panel_output(root);
     check_voice_preview(root);
     check_panel_memory(root);
+    check_echo_reference(root);
     check_upload_window(defaults);
     check_network_name(defaults);
     check_transfer_server(root);

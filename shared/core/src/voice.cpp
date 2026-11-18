@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 
 namespace aura {
 namespace {
@@ -193,6 +194,8 @@ void VoiceRecorder::start(Mode mode) {
     pcm_.reserve(kSampleRate * 4);
     frame_.clear();
     front_end_.reset();
+    dc_input_ = 0.0F;
+    dc_output_ = 0.0F;
     recording_ = true;
     speech_detected_ = false;
     level_ = 0.0F;
@@ -209,11 +212,20 @@ void VoiceRecorder::append(const std::int16_t* samples, std::size_t count) {
     for (std::size_t index = 0; index < take; ++index) {
         frame_.push_back(samples[index]);
         if (frame_.size() == kFrameSamples) {
+            keep(frame_.data(), frame_.size());
             front_end_.process(frame_.data(), frame_.size(), processed_);
-            pcm_.insert(pcm_.end(), processed_.begin(), processed_.end());
             analyse_frame(processed_.data(), processed_.size());
             frame_.clear();
         }
+    }
+}
+
+void VoiceRecorder::keep(const std::int16_t* samples, std::size_t count) {
+    for (std::size_t index = 0; index < count; ++index) {
+        const float input = static_cast<float>(samples[index]);
+        dc_output_ = input - dc_input_ + 0.995F * dc_output_;
+        dc_input_ = input;
+        pcm_.push_back(static_cast<std::int16_t>(std::clamp(dc_output_, -32768.0F, 32767.0F)));
     }
 }
 
@@ -247,10 +259,7 @@ void VoiceRecorder::cancel() {
 
 std::vector<std::uint8_t> VoiceRecorder::finish_wav() {
     recording_ = false;
-    if (!frame_.empty()) {
-        front_end_.process(frame_.data(), frame_.size(), processed_);
-        pcm_.insert(pcm_.end(), processed_.begin(), processed_.end());
-    }
+    if (!frame_.empty()) keep(frame_.data(), frame_.size());
     auto wav = make_wav(pcm_, kSampleRate);
     pcm_.clear();
     frame_.clear();
@@ -314,6 +323,153 @@ bool BargeInGate::observe(const std::int16_t* samples, std::size_t count, float 
     }
     triggered_ = active_ms_ >= kActivationMs;
     return triggered_;
+}
+
+namespace {
+
+constexpr std::uint32_t kGateFrameSamples = 320;   // 20 ms
+constexpr float kGateStep = 0.5F;                  // NLMS step
+constexpr float kGateRegularisation = 128.0F * 20.0F * 20.0F;
+constexpr int kReferenceGlitch = 16000;            // no voice reaches this in the reference slot
+constexpr float kReferenceSounding = 20.0F;        // rms: the device is speaking
+constexpr float kOwnerMinimum = 120.0F;            // rms at 24 dB of microphone gain
+
+}  // namespace
+
+void EchoReferenceGate::reset() noexcept {
+    history_.fill(0.0F);
+    weights_.fill(0.0F);
+    kept_weights_.fill(0.0F);
+    position_ = 0;
+    adapt_ = false;
+    owner_ = false;
+    glitch_ = false;
+    frame_samples_ = 0;
+    frame_microphone_ = frame_reference_ = frame_residual_ = 0.0;
+    settle_ms_ = kSettleMs;
+    learned_ms_ = 0;
+    reference_hold_ = 0.0F;
+    noise_ = 30.0F;
+    ratios_.fill(0.0F);
+    ratio_count_ = ratio_next_ = 0;
+    recent_ = 0;
+    recent_ratios_.fill(0.0F);
+    recent_next_ = 0;
+    echo_energy_ = residual_energy_ = 0.0;
+    loudest_ = 0.0F;
+    triggered_ = false;
+    residual_.clear();
+}
+
+bool EchoReferenceGate::observe(const std::int16_t* microphone, const std::int16_t* reference, std::size_t count) {
+    residual_.clear();
+    if (triggered_ || !microphone || !reference || count == 0) return triggered_;
+    residual_.resize(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        const float input = static_cast<float>(reference[index]);
+        const float heard = static_cast<float>(microphone[index]);
+        if (std::abs(reference[index]) >= kReferenceGlitch && !glitch_) {
+            // The ES7210 restarting: what was learnt before it stands.
+            glitch_ = true;
+            adapt_ = false;
+            weights_ = kept_weights_;
+        }
+        position_ = position_ == 0 ? kTaps - 1 : position_ - 1;
+        history_[position_] = input;
+        history_[position_ + kTaps] = input;
+        const float* window = history_.data() + position_;
+        float echo = 0.0F;
+        float power = 0.0F;
+        for (std::size_t tap = 0; tap < kTaps; ++tap) {
+            echo += weights_[tap] * window[tap];
+            power += window[tap] * window[tap];
+        }
+        const float left = heard - echo;
+        if (adapt_) {
+            // Slower while the owner may be speaking: a filter that learnt too
+            // little would otherwise freeze, and take its own echo for them.
+            const float step = (owner_ ? kGateStep * 0.1F : kGateStep) * left / (power + kGateRegularisation);
+            for (std::size_t tap = 0; tap < kTaps; ++tap) weights_[tap] += step * window[tap];
+        }
+        residual_[index] = static_cast<std::int16_t>(std::clamp(left, -32768.0F, 32767.0F));
+        frame_microphone_ += static_cast<double>(heard) * heard;
+        frame_reference_ += static_cast<double>(input) * input;
+        frame_residual_ += static_cast<double>(left) * left;
+        if (++frame_samples_ == kGateFrameSamples) {
+            end_frame();
+            if (triggered_) {
+                residual_.resize(index + 1);
+                break;
+            }
+        }
+    }
+    return triggered_;
+}
+
+void EchoReferenceGate::end_frame() noexcept {
+    const auto rms = [](double energy) {
+        return static_cast<float>(std::sqrt(energy / static_cast<double>(kGateFrameSamples)));
+    };
+    const float heard = rms(frame_microphone_);
+    const float reference = rms(frame_reference_);
+    const float left = rms(frame_residual_);
+    frame_samples_ = 0;
+    frame_microphone_ = frame_reference_ = frame_residual_ = 0.0;
+    if (glitch_) {
+        glitch_ = false;
+        settle_ms_ = kSettleMs;
+        recent_ = 0;
+        return;
+    }
+    if (settle_ms_ > 0) {
+        settle_ms_ = settle_ms_ > 20U ? settle_ms_ - 20U : 0U;
+        adapt_ = false;
+        return;
+    }
+    kept_weights_ = weights_;
+    reference_hold_ = std::max(reference, reference_hold_ * 0.8F);
+    const bool speaking = reference > kReferenceSounding;
+    const bool learned = learned_ms_ >= kLearnMs;
+    bool owner = false;
+    if (learned && ratio_count_ > 0) {
+        // The echo left over, as the last second's median while the device
+        // spoke (its syllables' gaps would make any lower share far too low).
+        std::array<float, 50> sorted{};
+        std::copy_n(ratios_.begin(), ratio_count_, sorted.begin());
+        auto* middle = sorted.data() + ratio_count_ / 2;
+        std::nth_element(sorted.data(), middle, sorted.data() + ratio_count_);
+        const float expected = *middle * reference_hold_ + noise_;
+        owner = left > kOwnerMargin * expected && left > kOwnerMinimum;
+        recent_ratios_[recent_next_] = left > kOwnerMinimum ? left / expected : 0.0F;
+        recent_next_ = (recent_next_ + 1) % recent_ratios_.size();
+        auto window = recent_ratios_;
+        auto* sustained = window.data() + (kOwnerFrames - 1);
+        std::nth_element(window.data(), sustained, window.data() + window.size(), std::greater<float>());
+        loudest_ = std::max(loudest_, *sustained);
+    }
+    if (!owner) {
+        if (speaking) {
+            ratios_[ratio_next_] = left / reference_hold_;
+            ratio_next_ = (ratio_next_ + 1) % ratios_.size();
+            ratio_count_ = std::min(ratio_count_ + 1, ratios_.size());
+            learned_ms_ += 20U;
+            echo_energy_ = echo_energy_ * 0.95 + static_cast<double>(heard) * heard;
+            residual_energy_ = residual_energy_ * 0.95 + static_cast<double>(left) * left;
+        } else if (reference_hold_ <= kReferenceSounding) {
+            noise_ += (left - noise_) * (left < noise_ ? 0.5F : 0.02F);
+        }
+    }
+    owner_ = owner;
+    adapt_ = speaking;
+    recent_ = ((recent_ << 1U) | (owner ? 1U : 0U)) & ((1U << kWindowFrames) - 1U);
+    std::uint32_t owner_frames = 0;
+    for (std::uint32_t bits = recent_; bits != 0; bits &= bits - 1U) ++owner_frames;
+    triggered_ = learned && owner_frames >= kOwnerFrames;
+}
+
+float EchoReferenceGate::cancelled_db() const noexcept {
+    if (residual_energy_ <= 0.0 || echo_energy_ <= 0.0) return 0.0F;
+    return static_cast<float>(10.0 * std::log10(echo_energy_ / residual_energy_));
 }
 
 std::vector<std::uint8_t> make_wav(const std::vector<std::int16_t>& pcm, std::uint32_t sample_rate) {

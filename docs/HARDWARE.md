@@ -20,7 +20,7 @@ Verified from the current official Waveshare documentation on 2026-10-17:
     - battery detection 0x68 bit 0 on;
     - since the first flash, the PWR key: its timing (0x27), its short and long presses (0x41), and switching off (0x10 bit 0); no rail or charger writes.
 - ES7210 microphone ADC and ES8311 playback codec/amplifier path. The owner's board has a speaker (2026-11-06).
-  The firmware plays clips at 16 or 24 kHz, and the radio as a continuous stream at the station's own rate (8–48 kHz). The codec is reopened in between, because the board has one output.
+  The firmware plays clips at 16 or 24 kHz, sent as 32-bit samples (below), and the radio as a continuous stream at the station's own rate (8–48 kHz). The codec is reopened in between, because the board has one output.
 - TF slot, native USB-C, 2.4 GHz Wi-Fi, Bluetooth 5 LE. Bluetooth Classic A2DP/HFP is not promised.
 
 ## Flash layout (16 MB, `firmware/partitions.csv`)
@@ -84,6 +84,16 @@ The board ran out of internal RAM at boot until these held; `aura_firmware_confi
 | Γραφίτης | no presence on Home | 29 | 17.5 |
 
 - The microphone's level never reaches the UI on the board: `set_input_amplitude` is called only in the simulator. While listening, the glow therefore stays still and moves at the thinking rate; while speaking, it follows the playback envelope.
+
+## Microphones and speaker on the board (2026-11-16)
+
+Measured on COM3 with temporary firmware (removed afterwards) and Waveshare's schematic:
+
+- The ES7210 has two microphones (MIC1 and MIC2, the top corners) and, on MIC3, the ES8311's output wired back ("AEC" in the schematic, taken before the NS4150B amplifier). MIC4 is unused. The BSP opens only MIC1 and MIC2; `Esp32Microphone` adds MIC3 through the ES7210's registers after opening (clocks, power, PGA, TDM on SDOUT1, reset) and reads four 16-bit TDM slots a frame: **0 the speaker's signal, 1 and 3 the microphones, 2 empty**. Slot 1 is the voice.
+- **The ES7210 starts with about 250 ms of noise in every slot** (rms about 1100, peaks at full scale), after each start and again when the speaker's side of the shared I2S is reconfigured while it listens. The first 300 ms after a start are dropped. Before, every question began with it (its "peak 32767"), and a listen after an answer took it for speech and ended 1.4 s later with nothing said.
+- Gains: the voice at 24 dB (it was 30; the questions' peaks of 32767 were the start's noise, so 24 dB is room for a voice close to the device, not a measured clip); 18 dB while the device speaks (its own voice reached 32768 at 24 dB); the speaker's signal at 12 dB (peak about 4200 at the owner's volume). Each question's levels are in the log (`question: … input peak, rms` and `rms by tenths of a second`).
+- The speaker and the microphones share one I2S. Playback and recording run at the same rate (16 kHz), and a clip goes out as 32-bit samples, so the frame is 64 bits both ways and neither side reconfigures the shared clock while the other runs.
+- **The echo:** the microphones hear the speaker far louder than a voice (rms about 8300 at 24 dB). Offline, from 3 s of the board's samples: the echo's response is short (99% of it within 3.3 ms), and the best linear filter of any length takes out about 12 dB (coherence 0.906 at 1–2 kHz: the speaker's and the amplifier's distortion, which the signal taken before the amplifier does not hold). The NLMS filter of `EchoReferenceGate` (128 taps) reaches that on the board: 11.5–12.2 dB and no false interruption over 8 s of speech-like sound, and 19.1 dB on a spoken answer. Below 500 Hz the speaker gives under 1% of the echo.
 
 The code consumes these through `firmware/components/aura_board/include/aura_board_profile.h`; pins must not be scattered through application code. Safe PMIC/display/audio initialization order still needs BSP source inspection and physical verification.
 

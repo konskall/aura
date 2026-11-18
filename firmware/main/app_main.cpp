@@ -467,7 +467,8 @@ extern "C" void app_main(void) {
             controller.dispatch({aura::EventType::ProviderUnavailable, "PROVIDER_NOT_CONFIGURED", 0});
             return;
         }
-        companion.set_barge_monitor(false);
+        // begin_question keeps the barge-in monitor's microphone open (no
+        // ES7210 settling; after a barge-in, the words that interrupted).
         assistant.turn->begin_listening(automatic);
         if (!companion.begin_question()) {
             assistant.turn->cancel();
