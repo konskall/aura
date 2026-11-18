@@ -127,6 +127,7 @@ void VoiceAssistantTurn::set_answer_copy(std::string action_question, std::strin
 void VoiceAssistantTurn::begin_listening(bool automatic) {
     // A new question interrupts the previous one, and the voice still speaking it.
     cancel();
+    speech_.prepare(spoken_);
     const auto state = audio_.diagnostics().state;
     if (state == AudioState::Playing || state == AudioState::Paused) audio_.stop();
     if (is_turn_active(controller_.snapshot().state)) controller_.dispatch({EventType::Reset, {}, 0});
@@ -181,7 +182,21 @@ void VoiceAssistantTurn::cancel() {
     stop_speaking();
 }
 
+void VoiceAssistantTurn::read_aloud(const std::string& text) {
+    stop_speaking();
+    audio_.stop();
+    const char* language = interface_language_code(language_);
+    if (!speech_.tts_available(language)) return;
+    speech_parts_ = speech_pieces(text);
+    if (speech_parts_.empty()) return;
+    reading_ = true;
+    speech_language_ = language;
+    next_part_ = 1;
+    speech_future_ = speech_.synthesize(speech_parts_.front(), language, voice_);
+}
+
 void VoiceAssistantTurn::stop_speaking() noexcept {
+    reading_ = false;
     reply_playing_ = false;
     speech_future_ = {};
     speech_parts_.clear();
@@ -250,7 +265,7 @@ bool VoiceAssistantTurn::poll() {
             }
         }
     }
-    const auto answering = [this] { return controller_.snapshot().state == AssistantState::Responding; };
+    const auto answering = [this] { return reading_ || controller_.snapshot().state == AssistantState::Responding; };
     const auto play = [this](const PcmClip& clip) {
         if (!audio_.play_pcm(clip)) return false;
         reply_playing_ = true;
@@ -289,7 +304,7 @@ bool VoiceAssistantTurn::poll() {
                 // follows once it is written (deliver).
                 reply_playing_ = false;
             } else if (!speech_future_.valid() || !answering()) {
-                const bool again = heard && follow_up_ && listen_again_ && answering();
+                const bool again = heard && follow_up_ && listen_again_ && !reading_ && answering();
                 stop_speaking();
                 // Heard to its end, with nothing waiting for a confirmation.
                 if (again) {

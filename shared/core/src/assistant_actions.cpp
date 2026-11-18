@@ -43,9 +43,11 @@ bool execute_assistant_action(const AssistantAction& action, AssistantActionTarg
             return true;
         }
         case AssistantActionType::Brightness: {
-            if (action.value < 5 || action.value > 100) return false;
             auto settings = targets.display.snapshot().settings;
-            settings.active_brightness_percent = action.value;
+            const int target = action.relative ? std::clamp(settings.active_brightness_percent + action.value, 5, 100)
+                                               : action.value;
+            if (target < 5 || target > 100) return false;
+            settings.active_brightness_percent = target;
             targets.display.set_settings(settings);
             return true;
         }
@@ -54,7 +56,11 @@ bool execute_assistant_action(const AssistantAction& action, AssistantActionTarg
             targets.sound.muted = action.value != 0;
             targets.audio.set_muted(targets.sound.muted);
             return true;
+        // The host's: a room for the message, a screen, the board's power.
         case AssistantActionType::Message:
+        case AssistantActionType::OpenApp:
+        case AssistantActionType::Restart:
+        case AssistantActionType::PowerOff:
         case AssistantActionType::None:
             break;
     }

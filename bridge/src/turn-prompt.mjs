@@ -85,6 +85,12 @@ export function buildChatInstructions({ prompt, context = '', history = [], lang
     'ACTION: {"type":"calendar_event","start":"2026-10-28T18:30","duration_minutes":60,"text":"dentist"}',
     'For calendar_event, use the local date/time from device facts and the exact YYYY-MM-DDTHH:MM format.',
     'ACTION: {"type":"message","room":"Family","text":"I will be late"}',
+    'ACTION: {"type":"volume","value":40}  (or "step":10 for louder, "step":-10 for quieter)',
+    'ACTION: {"type":"brightness","value":70}  (or "step":20 for brighter, "step":-20 for dimmer)',
+    'ACTION: {"type":"mute","on":true}',
+    'ACTION: {"type":"open","app":"weather"}  (app is weather, clock, notes, calendar, tasks, shopping, radio, today, messages, notifications, photos, files, settings, sound, display, wifi, battery, home or apps)',
+    'ACTION: {"type":"restart"}',
+    'ACTION: {"type":"power_off"}',
     'Before the action line, say in one sentence what will happen. The user must confirm it on the device,',
     'so never claim that it is already done. Use no other action types.',
   ];

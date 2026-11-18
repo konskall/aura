@@ -92,12 +92,17 @@ private:
     std::string key_;
 };
 
-// Speech recognition (Groq) and the voice (Azure). Without Azure keys AURA
-// still listens. `https` and `worker` outlive the service.
+// Speech recognition (Groq) and the voice (Azure). The voice has a connection
+// and a thread of its own: its first sentence is asked for while the answer is
+// still being written, and behind the answer on one worker it came seconds
+// late (the board, 2026-11-16). Without Azure keys AURA still listens. The
+// clients and workers outlive the service.
 class CloudSpeechService final : public ISpeechService {
 public:
-    CloudSpeechService(IHttpsClient& https, CloudWorker& worker, CloudKeys keys);
+    CloudSpeechService(IHttpsClient& https, CloudWorker& worker, IHttpsClient& voice_https, CloudWorker& voice_worker,
+                       CloudKeys keys);
     ~CloudSpeechService() override;
+    void prepare(bool voice) override;
     bool stt_available() const override;
     bool tts_available(const std::string& language) const override;
     std::future<TranscriptResult> transcribe(std::vector<std::uint8_t> wav, std::string language) override;
@@ -106,6 +111,8 @@ public:
 private:
     IHttpsClient& https_;
     CloudWorker& worker_;
+    IHttpsClient& voice_https_;
+    CloudWorker& voice_worker_;
     CloudKeys keys_;
     std::string azure_url_;
 };

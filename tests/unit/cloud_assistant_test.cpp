@@ -15,14 +15,19 @@
 #include <io.h>
 #endif
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -46,6 +51,7 @@ struct FakeHttps final : aura::IHttpsClient {
     std::vector<aura::HttpsRequest> requests;
     aura::HttpsResponse response{200, {}, {}};
     std::vector<std::string> chunks;
+    std::size_t pieces_read{0};
     bool cancelled{false};
     aura::HttpsResponse post(const aura::HttpsRequest& request, const aura::HttpsChunk& on_chunk) override {
         std::lock_guard<std::mutex> lock(mutex);
@@ -53,6 +59,11 @@ struct FakeHttps final : aura::IHttpsClient {
         if (!on_chunk) return response;
         for (const auto& chunk : chunks) {
             if (!on_chunk(chunk)) break;
+        }
+        // A body comes in the pieces the board's client reads.
+        for (std::size_t offset = 0; chunks.empty() && offset < response.body.size(); offset += 2048) {
+            ++pieces_read;
+            if (!on_chunk(std::string_view(response.body).substr(offset, 2048))) break;
         }
         auto streamed = response;
         streamed.body.clear();
@@ -216,10 +227,289 @@ std::vector<std::uint8_t> silent_mp3(int frames) {
     return bytes;
 }
 
+// All of a voice that plays as it arrives, once it has ended.
+std::size_t whole_voice(const std::shared_ptr<aura::PcmFeed>& feed) {
+    for (int wait_ms = 0; wait_ms < 10000 && !feed->finished(); wait_ms += 5) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    expect(feed->finished(), "the voice's download ends");
+    return feed->size();
+}
+
+// A voice on its way: `first` arrives, the rest waits until released, and the
+// exchange ends with `ending`.
+struct ArrivingVoice final : aura::IHttpsClient {
+    std::string first;
+    std::string rest;
+    aura::HttpsResponse ending{200, {}, {}};
+    std::promise<void> release;
+    std::shared_future<void> released{release.get_future().share()};
+    aura::HttpsResponse post(const aura::HttpsRequest&, const aura::HttpsChunk& on_chunk) override {
+        on_chunk(first);
+        released.wait();
+        if (!rest.empty()) on_chunk(rest);
+        return ending;
+    }
+    void cancel() override {}
+};
+
+// The voice starts once 1.2 s of it has come: waiting for all of Azure's MP3
+// kept the owner 0.2-1.3 s longer after the answer was written, and decoding it
+// 0.3-0.4 s more (the board, 2026-11-16). With 0.3 s in hand a download that
+// stalled left a second of silence in the middle of a sentence (2026-11-18).
+void voice_as_it_arrives_tests() {
+    const auto bytes = [](int frames) {
+        const auto mp3 = silent_mp3(frames);
+        return std::string(mp3.begin(), mp3.end());
+    };
+    {
+        ArrivingVoice azure;
+        azure.first = bytes(60);
+        azure.rest = bytes(20);
+        FakeHttps groq;
+        aura::CloudWorker worker;
+        aura::CloudWorker voice_worker;
+        aura::CloudSpeechService speech(groq, worker, azure, voice_worker, kKeys);
+        auto voice = speech.synthesize("Είναι 10:00.", "el", "nestoras");
+        const bool early = voice.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+        if (!early) azure.release.set_value();
+        expect(early, "the voice is ready once its first second has come");
+        const auto spoken = voice.get();
+        expect(spoken.ok && spoken.clip.feed && spoken.clip.samples.empty() &&
+                   spoken.clip.format.sample_rate == 44100 && spoken.clip.format.channels == spoken.clip.feed->format().channels,
+               "it comes as a feed, in the voice's format");
+        const std::size_t before = spoken.clip.feed->size();
+        const auto& format = spoken.clip.format;
+        expect(before >= std::size_t{format.sample_rate} * format.channels * 1200U / 1000U &&
+                   !spoken.clip.feed->finished(),
+               "1.2 s in hand, and more on its way");
+        azure.release.set_value();
+        expect(whole_voice(spoken.clip.feed) > before, "the rest follows into the same feed");
+    }
+    {
+        // Azure's own format (32 kbit/s, 16 kHz, mono: frames of 144 bytes): the
+        // board's client reads 2 KB at a time, and the third read holds enough.
+        std::string azure_frames;
+        for (int frame = 0; frame < 90; ++frame) {
+            std::string one(144, '\0');
+            one[0] = '\xFF';
+            one[1] = '\xF3';
+            one[2] = '\x48';
+            one[3] = '\xC0';
+            azure_frames += one;
+        }
+        ArrivingVoice azure;
+        azure.first = azure_frames.substr(0, 3U * 2048U);
+        azure.rest = azure_frames.substr(3U * 2048U);
+        FakeHttps groq;
+        aura::CloudWorker worker;
+        aura::CloudWorker voice_worker;
+        aura::CloudSpeechService speech(groq, worker, azure, voice_worker, kKeys);
+        auto voice = speech.synthesize("Είναι 10:00.", "el", "nestoras");
+        const bool third_read = voice.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+        azure.release.set_value();
+        expect(third_read, "Azure's voice starts from the first 6 KB");
+        const auto spoken = voice.get();
+        expect(spoken.ok && spoken.clip.format.sample_rate == 16000 && spoken.clip.format.channels == 1,
+               "in the format the board's speaker and microphone share");
+        expect(whole_voice(spoken.clip.feed) == 90U * 576U, "and every frame of it is heard");
+
+        // Two reads are under a second of voice: too little to ride out a stall.
+        ArrivingVoice stalled;
+        stalled.first = azure_frames.substr(0, 2U * 2048U);
+        stalled.rest = azure_frames.substr(2U * 2048U);
+        aura::CloudWorker second_worker;
+        aura::CloudWorker second_voice_worker;
+        aura::CloudSpeechService second(groq, second_worker, stalled, second_voice_worker, kKeys);
+        auto waiting = second.synthesize("Είναι 10:00.", "el", "nestoras");
+        const bool too_soon = waiting.wait_for(std::chrono::milliseconds(300)) == std::future_status::ready;
+        stalled.release.set_value();
+        expect(!too_soon, "under a second of voice is not enough to start");
+        expect(wait(std::move(waiting)).ok, "it starts once the rest has come");
+    }
+    {
+        // Shorter than the lead: ready when its download has ended.
+        FakeHttps azure;
+        FakeHttps groq;
+        aura::CloudWorker worker;
+        aura::CloudWorker voice_worker;
+        aura::CloudSpeechService speech(groq, worker, azure, voice_worker, kKeys);
+        azure.response = {200, bytes(4), {}};
+        const auto spoken = wait(speech.synthesize("Ναι.", "el", "athina"));
+        expect(spoken.ok && spoken.clip.feed && spoken.clip.feed->finished() && spoken.clip.feed->size() > 0,
+               "a voice shorter than the lead still plays");
+    }
+    {
+        // Cut off after it began: what came is played, and it ends.
+        ArrivingVoice azure;
+        azure.first = bytes(60);
+        azure.ending = {0, {}, "NETWORK"};
+        azure.release.set_value();
+        FakeHttps groq;
+        aura::CloudWorker worker;
+        aura::CloudWorker voice_worker;
+        aura::CloudSpeechService speech(groq, worker, azure, voice_worker, kKeys);
+        const auto spoken = wait(speech.synthesize("Είναι 10:00.", "el", "nestoras"));
+        expect(spoken.ok && whole_voice(spoken.clip.feed) > 0, "a voice cut off midway ends with what came");
+    }
+    {
+        // Cut off before enough of it came: the failure is told, as before.
+        ArrivingVoice azure;
+        azure.first = bytes(2);
+        azure.ending = {0, {}, "NETWORK"};
+        azure.release.set_value();
+        FakeHttps groq;
+        aura::CloudWorker worker;
+        aura::CloudWorker voice_worker;
+        aura::CloudSpeechService speech(groq, worker, azure, voice_worker, kKeys);
+        const auto spoken = wait(speech.synthesize("Είναι 10:00.", "el", "nestoras"));
+        expect(!spoken.ok && !spoken.clip.feed && !spoken.error_code.empty(), "a voice that never began is a failure");
+    }
+    {
+        // Azure's refusals, whatever their body says.
+        FakeHttps azure;
+        FakeHttps groq;
+        aura::CloudWorker worker;
+        aura::CloudWorker voice_worker;
+        aura::CloudSpeechService speech(groq, worker, azure, voice_worker, kKeys);
+        azure.response = {429, "{\"error\":\"too many\"}", {}};
+        expect(wait(speech.synthesize("x", "el", "athina")).error_code == "RATE_LIMIT", "too many requests");
+        azure.response = {401, "{\"error\":\"key\"}", {}};
+        expect(wait(speech.synthesize("x", "el", "athina")).error_code == "PROVIDER_AUTH_FAILED", "a refused key");
+        azure.response = {503, "<html>busy</html>", {}};
+        expect(wait(speech.synthesize("x", "el", "athina")).error_code == "TTS_UNAVAILABLE", "a failing service");
+        // Endless bytes that are no voice are not read for ever.
+        azure.response = {200, std::string(3U * 1024U * 1024U, 'x'), {}};
+        azure.pieces_read = 0;
+        expect(wait(speech.synthesize("x", "el", "athina")).error_code == "TTS_FAILED" &&
+                   azure.pieces_read * 2048U <= 2U * 1024U * 1024U + 2048U,
+               "the download stops at 2 MB");
+    }
+}
+
+// The connections open while the owner speaks, so that neither the question nor
+// the voice waits for a TLS handshake: 0.7-1.5 s each on the board (2026-11-16).
+void warm_connection_tests() {
+    struct Warmed final : aura::IHttpsClient {
+        std::mutex mutex;
+        std::vector<aura::HttpsRequest> requests;
+        aura::HttpsResponse post(const aura::HttpsRequest&, const aura::HttpsChunk&) override { return {200, {}, {}}; }
+        void warm(const aura::HttpsRequest& request) override {
+            std::lock_guard<std::mutex> lock(mutex);
+            requests.push_back(request);
+        }
+        void cancel() override {}
+        std::size_t count() {
+            std::lock_guard<std::mutex> lock(mutex);
+            return requests.size();
+        }
+    };
+    // Waits for what a worker has been given so far.
+    const auto settle = [](aura::CloudWorker& worker) {
+        auto done = std::make_shared<std::promise<void>>();
+        auto finished = done->get_future();
+        worker.post([done] { done->set_value(); });
+        expect(finished.wait_for(std::chrono::seconds(10)) == std::future_status::ready, "the worker is free");
+    };
+    Warmed groq;
+    Warmed azure;
+    aura::CloudWorker worker;
+    aura::CloudWorker voice_worker;
+    {
+        aura::CloudSpeechService speech(groq, worker, azure, voice_worker, kKeys);
+        speech.prepare(true);
+        settle(worker);
+        settle(voice_worker);
+        expect(groq.count() == 1 && groq.requests[0].url == "https://api.groq.com/openai/v1/models" &&
+                   header(groq.requests[0], "Authorization") == "Bearer " + kKeys.groq_api_key,
+               "Groq's connection opens with its own key");
+        expect(azure.count() == 1 &&
+                   azure.requests[0].url == "https://westeurope.tts.speech.microsoft.com/cognitiveservices/v1" &&
+                   header(azure.requests[0], "Ocp-Apim-Subscription-Key") == kKeys.azure_speech_key,
+               "Azure's opens with its own");
+        expect(azure.requests[0].body.empty() && groq.requests[0].body.empty(), "asking for nothing");
+        speech.prepare(false);
+        settle(worker);
+        settle(voice_worker);
+        expect(groq.count() == 2 && azure.count() == 1, "with spoken answers off Azure is not called");
+    }
+    aura::CloudKeys no_azure = kKeys;
+    no_azure.azure_speech_key.clear();
+    {
+        aura::CloudSpeechService speech(groq, worker, azure, voice_worker, no_azure);
+        speech.prepare(true);
+        settle(worker);
+        settle(voice_worker);
+        expect(groq.count() == 3 && azure.count() == 1, "without Azure's key nothing opens there");
+    }
+    aura::CloudKeys no_keys;
+    {
+        aura::CloudSpeechService speech(groq, worker, azure, voice_worker, no_keys);
+        speech.prepare(true);
+        settle(worker);
+        settle(voice_worker);
+        expect(groq.count() == 3 && azure.count() == 1, "without keys nothing opens at all");
+    }
+}
+
+// An answer still being written: the request stays open until released.
+struct HeldHttps final : aura::IHttpsClient {
+    std::promise<void> opened;
+    std::promise<void> release;
+    std::shared_future<void> released{release.get_future().share()};
+    std::atomic<int> requests{0};
+    aura::HttpsResponse post(const aura::HttpsRequest&, const aura::HttpsChunk& on_chunk) override {
+        if (requests.fetch_add(1) == 0) opened.set_value();
+        released.wait();
+        if (on_chunk) on_chunk("data: {\"choices\":[{\"delta\":{\"content\":\"Είναι 10:00.\"}}]}\ndata: [DONE]\n");
+        return {200, {}, {}};
+    }
+    void cancel() override {}
+};
+
+// The first sentence is asked for while the answer is written. On one worker
+// the voice waited for the whole answer: in all six answers of the owner's test
+// on the board it began 9-133 ms after the answer ended (2026-11-16).
+void voice_beside_answer_tests() {
+    HeldHttps answers;
+    FakeHttps voices;
+    aura::CloudWorker answer_worker;
+    aura::CloudWorker voice_worker;
+    aura::CloudAssistantProvider provider(answers, answer_worker, kKeys.groq_api_key);
+    aura::CloudSpeechService speech(answers, answer_worker, voices, voice_worker, kKeys);
+    aura::TurnRequest request;
+    request.prompt = "Τι ώρα είναι;";
+    auto reply = provider.start_turn(request);
+    expect(answers.opened.get_future().wait_for(std::chrono::seconds(10)) == std::future_status::ready,
+           "the answer is being written");
+
+    const auto mp3 = silent_mp3(20);
+    voices.response = {200, std::string(mp3.begin(), mp3.end()), {}};
+    auto voice = speech.synthesize("Είναι 10:00.", "el", "nestoras");
+    const bool beside = voice.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+    answers.release.set_value();
+    expect(beside, "the voice does not wait for the answer being written");
+    expect(voice.get().ok && voices.requests.size() == 1 &&
+               voices.requests[0].url == "https://westeurope.tts.speech.microsoft.com/cognitiveservices/v1",
+           "the voice goes over its own connection");
+    expect(wait(std::move(reply)).ok && answers.requests.load() == 1, "the answer goes over the other");
+
+    // Listening stays with the answers: only the voice has moved.
+    FakeHttps listened;
+    FakeHttps unused;
+    aura::CloudWorker listen_worker;
+    aura::CloudWorker unused_worker;
+    aura::CloudSpeechService hearing(listened, listen_worker, unused, unused_worker, kKeys);
+    listened.response = {200, "{\"text\":\"Τι ώρα είναι;\"}", {}};
+    expect(wait(hearing.transcribe(aura::make_wav(std::vector<std::int16_t>(8000, 0), 16000), "el")).ok &&
+               listened.requests.size() == 1 && unused.requests.empty(),
+           "speech recognition goes with the answers");
+}
+
 void speech_tests() {
     FakeHttps https;
     aura::CloudWorker worker;
-    aura::CloudSpeechService speech(https, worker, kKeys);
+    aura::CloudSpeechService speech(https, worker, https, worker, kKeys);
     expect(speech.stt_available() && speech.tts_available("el") && speech.tts_available("de") &&
                !speech.tts_available("xx"),
            "Groq listens; Azure speaks the six languages");
@@ -266,7 +556,8 @@ void speech_tests() {
     https.response = {200, std::string(mp3.begin(), mp3.end()), {}};
     const std::size_t before = https.requests.size();
     const auto spoken = wait(speech.synthesize("Γεια σου & <καλώς> ήρθες", "el", "nestoras"));
-    expect(spoken.ok && spoken.clip.format.sample_rate == 44100 && !spoken.clip.samples.empty(),
+    expect(spoken.ok && spoken.clip.format.sample_rate == 44100 && spoken.clip.feed &&
+               whole_voice(spoken.clip.feed) > 0,
            "Azure's MP3 becomes PCM for the speaker");
     const auto& tts = https.requests.at(before);
     expect(tts.url == "https://westeurope.tts.speech.microsoft.com/cognitiveservices/v1" &&
@@ -285,7 +576,7 @@ void speech_tests() {
     expect(wait(speech.synthesize("x", "el", "athina")).error_code == "TTS_FAILED", "an answer that is not MP3");
     aura::CloudKeys no_azure = kKeys;
     no_azure.azure_speech_key.clear();
-    aura::CloudSpeechService listening(https, worker, no_azure);
+    aura::CloudSpeechService listening(https, worker, https, worker, no_azure);
     expect(listening.stt_available() && !listening.tts_available("el"), "without Azure, AURA still listens");
 }
 
@@ -328,6 +619,9 @@ int main(int argc, char** argv) {
     stream_tests();
     provider_tests();
     speech_tests();
+    voice_beside_answer_tests();
+    voice_as_it_arrives_tests();
+    warm_connection_tests();
     std::cout << "cloud_assistant_test: PASS\n";
     return 0;
 }

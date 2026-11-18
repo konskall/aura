@@ -1,3 +1,4 @@
+#include "aura/assistant_actions.hpp"
 #include "aura/assistant_companion.hpp"
 #include "aura/briefing.hpp"
 #include "aura/clock_services.hpp"
@@ -391,9 +392,78 @@ void assistant_tests() {
     const auto refused = answer_display_text(parsed, "Να το κάνω;", "Δεν έγινε τίποτα.");
     expect(refused.rfind("Βάζω υπενθύμιση.", 0) == 0 && refused.find("Δεν έγινε τίποτα.") != std::string::npos,
            "a refused action is reported under the answer");
-    parsed = parse_assistant_answer("ACTION: {\"type\":\"volume\",\"value\":40}");
+    parsed = parse_assistant_answer("ACTION: {\"type\":\"factory_reset\"}");
     expect(answer_display_text(parsed, "Να το κάνω;", "Δεν έγινε τίποτα.") == "Δεν έγινε τίποτα.",
            "the raw ACTION line is never shown");
+
+    // The whole device from the model's line too (the owner, 2026-11-18), as
+    // typed values only, each still waiting for the owner's confirmation.
+    const auto proposed = [](const char* json) {
+        return parse_assistant_answer(std::string("x\nACTION: ") + json).action;
+    };
+    auto device = proposed("{\"type\":\"volume\",\"value\":40}");
+    expect(device && device->type == AssistantActionType::Volume && device->value == 40 && !device->relative,
+           "the volume, to a value");
+    device = proposed("{\"type\":\"volume\",\"step\":-10}");
+    expect(device && device->type == AssistantActionType::Volume && device->value == -10 && device->relative,
+           "the volume, by a step");
+    expect(!proposed("{\"type\":\"volume\",\"value\":140}") && !proposed("{\"type\":\"volume\"}") &&
+               !proposed("{\"type\":\"volume\",\"value\":40,\"step\":10}") &&
+               !proposed("{\"type\":\"volume\",\"step\":0}"), "a volume that makes no sense is refused");
+    device = proposed("{\"type\":\"brightness\",\"value\":70}");
+    expect(device && device->type == AssistantActionType::Brightness && device->value == 70 && !device->relative,
+           "the brightness, to a value");
+    device = proposed("{\"type\":\"brightness\",\"step\":20}");
+    expect(device && device->type == AssistantActionType::Brightness && device->value == 20 && device->relative,
+           "the brightness, by a step");
+    expect(!proposed("{\"type\":\"brightness\",\"value\":2}"), "a dark screen is refused, as in Οθόνη");
+    device = proposed("{\"type\":\"mute\",\"on\":true}");
+    expect(device && device->type == AssistantActionType::Mute && device->value == 1, "mute");
+    device = proposed("{\"type\":\"mute\",\"on\":false}");
+    expect(device && device->type == AssistantActionType::Mute && device->value == 0, "unmute");
+    expect(!proposed("{\"type\":\"mute\"}"), "mute says which");
+    device = proposed("{\"type\":\"open\",\"app\":\"weather\"}");
+    expect(device && device->type == AssistantActionType::OpenApp && device->app == "weather", "open an app");
+    expect(!proposed("{\"type\":\"open\",\"app\":\"terminal\"}") && !proposed("{\"type\":\"open\"}"),
+           "only the device's own apps open");
+    device = proposed("{\"type\":\"restart\"}");
+    expect(device && device->type == AssistantActionType::Restart, "restart");
+    device = proposed("{\"type\":\"power_off\"}");
+    expect(device && device->type == AssistantActionType::PowerOff, "switch off");
+    expect(std::string(assistant_action_name(AssistantActionType::OpenApp)) == "open" &&
+               std::string(assistant_action_name(AssistantActionType::Restart)) == "restart" &&
+               std::string(assistant_action_name(AssistantActionType::PowerOff)) == "power_off",
+           "the new actions have names");
+
+    ClockServicesModel action_clock;
+    NotesModel action_notes;
+    OrganizerModel action_organizer;
+    DisplayPowerModel action_display;
+    MockAudioService action_audio;
+    action_audio.initialize();
+    SoundSettings action_sound;
+    const AssistantActionTargets targets{action_clock, action_notes, action_organizer, action_display,
+                                         action_audio, action_sound, 0};
+    auto lit = action_display.snapshot().settings;
+    lit.active_brightness_percent = 50;
+    action_display.set_settings(lit);
+    AssistantAction step;
+    step.type = AssistantActionType::Brightness;
+    step.relative = true;
+    step.value = 20;
+    expect(execute_assistant_action(step, targets) &&
+               action_display.snapshot().settings.active_brightness_percent == 70, "brighter by a step");
+    step.value = 60;
+    expect(execute_assistant_action(step, targets) &&
+               action_display.snapshot().settings.active_brightness_percent == 100, "no brighter than full");
+    step.value = -100;
+    expect(execute_assistant_action(step, targets) &&
+               action_display.snapshot().settings.active_brightness_percent == 5, "never dark");
+    for (const auto host : {AssistantActionType::OpenApp, AssistantActionType::Restart, AssistantActionType::PowerOff}) {
+        AssistantAction action;
+        action.type = host;
+        expect(!execute_assistant_action(action, targets), "the host opens apps, restarts and switches off");
+    }
     parsed = parse_assistant_answer("ACTION: {\"type\":\"timer\",\"seconds\":60}");
     expect(answer_display_text(parsed, "Να το κάνω;", "Δεν έγινε τίποτα.") == "Να το κάνω;",
            "an action alone asks for confirmation");

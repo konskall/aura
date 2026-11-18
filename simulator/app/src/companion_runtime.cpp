@@ -544,29 +544,31 @@ bool CompanionRuntime::handle_offline_command(const std::string& prompt) {
         case OfflineCommandKind::OpenTasks:
         case OfflineCommandKind::OpenShopping:
         case OfflineCommandKind::OpenRadio:
-        case OfflineCommandKind::OpenWeather: {
-            UiView view = UiView::Home;
-            if (command.kind == OfflineCommandKind::OpenClock) view = UiView::Clock;
-            else if (command.kind == OfflineCommandKind::OpenNotes) view = UiView::Notes;
-            else if (command.kind == OfflineCommandKind::OpenCalendar ||
-                     command.kind == OfflineCommandKind::OpenTasks ||
-                     command.kind == OfflineCommandKind::OpenShopping) view = UiView::Calendar;
-            else if (command.kind == OfflineCommandKind::OpenRadio) view = UiView::Radio;
-            else if (command.kind == OfflineCommandKind::OpenWeather) view = UiView::Weather;
+        case OfflineCommandKind::OpenWeather:
+        case OfflineCommandKind::OpenToday:
+        case OfflineCommandKind::OpenSettings:
+        case OfflineCommandKind::OpenMessages:
+        case OfflineCommandKind::OpenPhotos:
+        case OfflineCommandKind::OpenHome:
+        case OfflineCommandKind::OpenApps:
+        case OfflineCommandKind::OpenBattery:
+        case OfflineCommandKind::OpenWifi:
+        case OfflineCommandKind::OpenFiles: {
             ctx_.controller->dispatch({EventType::Cancel});
             voice_turn_ = false;
             reset_speech_pipeline();
-            if (command.kind == OfflineCommandKind::OpenTasks) {
-                ctx_.ui->open_organizer(OrganizerKind::Task);
-            } else if (command.kind == OfflineCommandKind::OpenShopping) {
-                ctx_.ui->open_organizer(OrganizerKind::Shopping);
-            } else if (command.kind == OfflineCommandKind::OpenCalendar) {
-                ctx_.ui->open_organizer(OrganizerKind::Event);
-            } else {
-                ctx_.ui->show(view);
-            }
+            ctx_.ui->open_app(offline_command_app(command.kind));
             return true;
         }
+        // The simulator has no board to switch off: its own confirmation screen.
+        case OfflineCommandKind::Restart:
+        case OfflineCommandKind::PowerOff:
+            ctx_.controller->dispatch({EventType::Cancel});
+            voice_turn_ = false;
+            reset_speech_pipeline();
+            ctx_.ui->show_system_confirmation(command.kind == OfflineCommandKind::Restart ? SystemAction::Restart
+                                                                                          : SystemAction::PowerOff);
+            return true;
         case OfflineCommandKind::ConfirmAction:
             if (!command.has_action) return false;
             finish_local_reply(strings.action_question, command.action);
@@ -643,6 +645,12 @@ bool CompanionRuntime::execute(const AssistantAction& action) {
     // A message goes to an Aoraton room; everything else is the shared
     // executor's, exactly as on the device.
     if (action.type == AssistantActionType::Message) return route_message(action);
+    if (action.type == AssistantActionType::OpenApp) return ctx_.ui->open_app(action.app);
+    if (action.type == AssistantActionType::Restart || action.type == AssistantActionType::PowerOff) {
+        ctx_.ui->show_system_confirmation(action.type == AssistantActionType::Restart ? SystemAction::Restart
+                                                                                      : SystemAction::PowerOff);
+        return true;
+    }
     return execute_assistant_action(action, {clock_, notes_, organizer_, display_, *ctx_.audio, sound_, now_minute()});
 }
 

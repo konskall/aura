@@ -13,6 +13,7 @@
 #include "aura/aura_ui.hpp"
 #include "aura/cloud_assistant.hpp"
 #include "aura/companion_strings.hpp"
+#include "aura/offline_commands.hpp"
 #include "aura/voice_turn.hpp"
 #include "aura/runtime_metrics.hpp"
 #include "aoraton_build_config.h"
@@ -23,6 +24,7 @@
 #include "esp32_cloud_keys.hpp"
 #include "esp32_https_client.hpp"
 #include "esp32_companion.hpp"
+#include "esp32_fuel_backend.hpp"
 #include "esp32_network.hpp"
 #include "esp32_radio_service.hpp"
 #include "esp32_weather_backend.hpp"
@@ -148,11 +150,12 @@ esp_pm_lock_handle_t start_power_management() {
     return lock;
 }
 
-// The cloud requests (Groq, Azure) block for seconds on one worker thread with
-// room for a TLS handshake on its stack.
-std::unique_ptr<aura::CloudWorker> start_cloud_worker() {
+// The cloud requests block for seconds, each on a worker thread with room for
+// a TLS handshake on its stack: one for Groq (listening and answers), one for
+// Azure's voice, which is asked for while the answer is still being written.
+std::unique_ptr<aura::CloudWorker> start_cloud_worker(const char* name) {
     esp_pthread_cfg_t worker = esp_pthread_get_default_config();
-    worker.thread_name = "aura_cloud";
+    worker.thread_name = name;
     worker.stack_size = 12288;
     worker.prio = 4;
     // Groq and Azure over HTTPS only, never the flash: the stack lives in PSRAM
@@ -172,6 +175,40 @@ struct CloudAssistant {
     std::unique_ptr<aura::CloudAssistantProvider> provider;
     std::unique_ptr<aura::CloudSpeechService> speech;
     std::unique_ptr<aura::VoiceAssistantTurn> turn;
+};
+
+// How long a spoken answer keeps the owner waiting, on the serial console once
+// the voice has begun and the answer is whole (numbers only).
+class TurnTimes {
+public:
+    void follow(const aura::AssistantSnapshot& turn, bool sounding, std::int64_t now_ms) {
+        const bool answering =
+            turn.state == aura::AssistantState::Thinking || turn.state == aura::AssistantState::Responding;
+        if (!answering) {
+            asked_ms_ = -1;
+            return;
+        }
+        if (asked_ms_ < 0) {
+            asked_ms_ = now_ms;
+            words_ms_ = voice_ms_ = whole_ms_ = -1;
+            reported_ = false;
+        }
+        if (words_ms_ < 0 && turn.state == aura::AssistantState::Responding) words_ms_ = now_ms;
+        if (whole_ms_ < 0 && !turn.answer_text.empty()) whole_ms_ = now_ms;
+        if (voice_ms_ < 0 && sounding) voice_ms_ = now_ms;
+        if (reported_ || words_ms_ < 0 || voice_ms_ < 0 || whole_ms_ < 0) return;
+        reported_ = true;
+        ESP_LOGI(kTag, "turn: after the question, first words %lld ms, voice %lld ms, whole answer %lld ms",
+                 static_cast<long long>(words_ms_ - asked_ms_), static_cast<long long>(voice_ms_ - asked_ms_),
+                 static_cast<long long>(whole_ms_ - asked_ms_));
+    }
+
+private:
+    std::int64_t asked_ms_{-1};
+    std::int64_t words_ms_{-1};
+    std::int64_t voice_ms_{-1};
+    std::int64_t whole_ms_{-1};
+    bool reported_{false};
 };
 
 const aura::l10n::CompanionStrings& companion_strings(aura::InterfaceLanguage language) {
@@ -374,6 +411,8 @@ extern "C" void app_main(void) {
     static aura::WeatherModel weather;
     static aura::firmware::Esp32AudioBackend audio;
     static aura::firmware::Esp32WeatherBackend weather_backend;
+    static aura::FuelPriceModel fuel;
+    static aura::firmware::Esp32FuelBackend fuel_backend;
     static aura::firmware::Esp32Network network;
     static aura::WifiModel wifi;
     static aura::firmware::Esp32Companion companion(audio, device_status);
@@ -397,9 +436,12 @@ extern "C" void app_main(void) {
         ui.apply_radio(radio_model.snapshot());
     };
     static aura::firmware::Esp32HttpsClient cloud_https;
+    static aura::firmware::Esp32HttpsClient voice_https;
     static aura::firmware::Esp32CloudKeyStore cloud_keys;
-    static std::unique_ptr<aura::CloudWorker> cloud_worker = start_cloud_worker();
+    static std::unique_ptr<aura::CloudWorker> cloud_worker = start_cloud_worker("aura_cloud");
+    static std::unique_ptr<aura::CloudWorker> voice_worker = start_cloud_worker("aura_voice");
     static CloudAssistant assistant;
+    static TurnTimes turn_times;
     static aura::InterfaceLanguage assistant_language = aura::InterfaceLanguage::Greek;
     // Ήχος → «Ακρόαση φωνής»: the preview phrase on its way from Azure.
     static std::future<aura::SpeechResult> voice_preview;
@@ -444,6 +486,9 @@ extern "C" void app_main(void) {
             weather.fetch_failed("WEATHER_BUSY", false);
         }
     };
+    // The week's fuel prices: half a minute after the start, then as the model says.
+    fuel_backend.initialize();
+    std::uint32_t fuel_refresh_ms = aura::fuel_refresh_interval_ms(fuel.snapshot()) - 30000U;
     // The saved city is fetched once the station first obtains an IP address.
     bool boot_weather_pending = false;
     std::uint32_t weather_refresh_ms = 0;
@@ -479,6 +524,10 @@ extern "C" void app_main(void) {
     // LVGL callbacks run in the BSP's LVGL task while it holds the display lock;
     // the loop below touches the same models only under that lock as well.
     if (aura_board_display_lock(-1)) {
+        // A fading screen is drawn whole, through a layer, for each step of the
+        // fade: 150-190 ms a frame on the board, ten frames to open the menu
+        // (measured 2026-11-18). Here a new screen is simply there.
+        ui.set_view_fade(false);
         aura::AuraUiCallbacks callbacks;
         callbacks.on_local_time = [network_started](std::int64_t timestamp) -> std::optional<aura::LocalDateTime> {
             if (!network_started) return std::nullopt;
@@ -627,6 +676,14 @@ extern "C" void app_main(void) {
         // The assistant's spoken question: the companion records it with the
         // microphone it shares with notes; the turn transcribes, asks and speaks.
         callbacks.on_ask = [] { start_listening(false); };
+        // The read-aloud button of Σήμερα and of an answer.
+        callbacks.on_speak = [](const std::string& text, const std::string&) {
+            if (assistant.turn) assistant.turn->read_aloud(text);
+        };
+        callbacks.on_speak_stop = [] {
+            if (assistant.turn) assistant.turn->stop_speaking();
+            audio.stop();
+        };
         callbacks.on_end_listening = [] { companion.end_question(); };
         // A proposed action (a timer, an alarm, a note...) runs only once the
         // owner confirms it, as in the simulator.
@@ -694,14 +751,15 @@ extern "C" void app_main(void) {
         assistant.speech.reset();
         assistant.provider.reset();
         auto keys = cloud_keys.load();
-        if (keys.groq_api_key.empty() || !cloud_worker) {
+        if (keys.groq_api_key.empty() || !cloud_worker || !voice_worker) {
             companion.set_speech_available(false, false);
             ESP_LOGI(kTag, "Assistant: no cloud keys yet (send them from the PC over the file transfer session)");
             return;
         }
         assistant.provider = std::make_unique<aura::CloudAssistantProvider>(cloud_https, *cloud_worker,
                                                                             keys.groq_api_key);
-        assistant.speech = std::make_unique<aura::CloudSpeechService>(cloud_https, *cloud_worker, keys);
+        assistant.speech = std::make_unique<aura::CloudSpeechService>(cloud_https, *cloud_worker, voice_https,
+                                                                      *voice_worker, keys);
         aura::wipe_cloud_keys(keys);
         assistant.turn = std::make_unique<aura::VoiceAssistantTurn>(controller, *assistant.speech,
                                                                     *assistant.provider, audio);
@@ -725,20 +783,45 @@ extern "C" void app_main(void) {
         // "Βάλε Σφαίρα", "σταμάτα το ραδιόφωνο": the radio does it, decided as
         // in the simulator (radio_request); the assistant is not asked.
         assistant.turn->set_local_request([](const std::string& question) {
-            if (!radio) return false;
-            const auto request = aura::radio_request(question, radio_model);
-            if (request.kind == aura::RadioRequestKind::None) return false;
+            if (radio) {
+                const auto request = aura::radio_request(question, radio_model);
+                if (request.kind != aura::RadioRequestKind::None) {
+                    controller.dispatch({aura::EventType::Cancel, {}, 0});
+                    ui.show(aura::UiView::Radio);
+                    if (request.kind == aura::RadioRequestKind::Stop) stop_radio();
+                    else if (request.kind == aura::RadioRequestKind::Play) play_radio(*request.station);
+                    else ui.apply_radio(radio_model.snapshot());
+                    return true;
+                }
+            }
+            // The owner's own words for the device, matched here and never by
+            // the model, are done at once (the owner, 2026-11-18). What the
+            // model proposes still waits for a tap. The time and the battery
+            // are answered from the device's facts.
+            const auto command = aura::parse_offline_command(question);
+            if (command.kind == aura::OfflineCommandKind::None || command.kind == aura::OfflineCommandKind::ShowTime ||
+                command.kind == aura::OfflineCommandKind::ShowBattery) {
+                return false;
+            }
             controller.dispatch({aura::EventType::Cancel, {}, 0});
-            ui.show(aura::UiView::Radio);
-            if (request.kind == aura::RadioRequestKind::Stop) stop_radio();
-            else if (request.kind == aura::RadioRequestKind::Play) play_radio(*request.station);
-            else ui.apply_radio(radio_model.snapshot());
+            if (command.kind == aura::OfflineCommandKind::Restart) {
+                companion.system_action(aura::SystemAction::Restart);
+            } else if (command.kind == aura::OfflineCommandKind::PowerOff) {
+                companion.system_action(aura::SystemAction::PowerOff);
+            } else if (const char* app = aura::offline_command_app(command.kind)) {
+                ui.open_app(app);
+            } else if (command.has_action) {
+                const bool done = companion.perform_action(command.action);
+                const auto& strings = companion_strings(companion.language());
+                ui.show_message(done ? strings.action_done : strings.action_failed, !done);
+            }
             return true;
         });
         assistant.turn->set_context([](const std::string& question) {
             aura::DeviceContextInput input;
             input.status = &device_status.snapshot();
             input.weather = &weather.snapshot();
+            input.fuel = &fuel.snapshot();
             input.clock = &companion.clock();
             input.notes = &companion.notes();
             input.organizer = &companion.organizer();
@@ -872,15 +955,23 @@ extern "C" void app_main(void) {
                 assistant.turn->set_voice(aura::assistant_voice_id(companion.sound().assistant_voice));
                 assistant.turn->set_follow_up(companion.sound().continuous_conversation);
                 assistant.turn->poll();
+                companion.set_speaking(assistant.turn->speaking());
+                turn_times.follow(controller.snapshot(),
+                                  assistant.turn->speaking() && audio.diagnostics().state == aura::AudioState::Playing,
+                                  esp_timer_get_time() / 1000);
                 if (voice_preview.valid() &&
                     voice_preview.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
                     const auto spoken = voice_preview.get();
                     if (spoken.ok) audio.play_pcm(spoken.clip);
                 }
                 // Barge-in: the microphone listens while the answer is spoken (not
-                // while it is paused, so a paused answer does not keep it open).
+                // while it is paused, so a paused answer does not keep it open). It
+                // opens once the voice is sounding: opening beside the speaker, it kept
+                // the voice waiting 120 ms.
+                const auto sounding = audio.diagnostics().state;
                 companion.set_barge_monitor(assistant.turn->speaking() && companion.sound().barge_in &&
-                                            audio.diagnostics().state != aura::AudioState::Paused);
+                                            sounding != aura::AudioState::Paused &&
+                                            (companion.barge_monitoring() || sounding == aura::AudioState::Playing));
                 if (companion.take_barge_in()) {
                     assistant.turn->stop_speaking();
                     audio.stop();
@@ -889,8 +980,35 @@ extern "C" void app_main(void) {
             }
             aura::WeatherFetchResult weather_result;
             if (weather_backend.poll(weather_result)) {
-                if (weather_result.ok) weather.fetch_succeeded(weather_result.data);
-                else weather.fetch_failed(weather_result.error_code, weather_result.offline);
+                if (weather_result.ok) {
+                    ESP_LOGI(kTag, "weather: code %d, %s, %.0f degrees", weather_result.data.weather_code,
+                             weather_result.data.is_day ? "day" : "night",
+                             static_cast<double>(weather_result.data.temperature_c));
+                    weather.fetch_succeeded(weather_result.data);
+                } else {
+                    ESP_LOGW(kTag, "weather: %s", weather_result.error_code.c_str());
+                    weather.fetch_failed(weather_result.error_code, weather_result.offline);
+                }
+            }
+            std::optional<aura::FuelPriceData> fuel_prices;
+            if (fuel_backend.poll(fuel_prices)) {
+                if (fuel_prices) {
+                    const auto& today = device_status.snapshot();
+                    if (today.date_valid) {
+                        fuel_prices->stale = aura::fuel_prices_stale(*fuel_prices, today.year, today.month, today.day);
+                    }
+                    ESP_LOGI(kTag, "fuel: week of %s, unleaded %d, diesel %d", fuel_prices->period_date.c_str(),
+                             fuel_prices->unleaded95_millieur_per_litre, fuel_prices->diesel_millieur_per_litre);
+                    fuel.fetch_succeeded(std::move(*fuel_prices));
+                } else if (fuel.snapshot().state == aura::FuelPriceState::Ready) {
+                    // The prices known stay, marked as old, and are asked for again sooner.
+                    auto kept = fuel.snapshot().data;
+                    kept.stale = true;
+                    fuel.fetch_succeeded(std::move(kept));
+                } else {
+                    fuel.fetch_failed("FUEL_DATA_UNAVAILABLE");
+                }
+                ui.apply_fuel(fuel.snapshot());
             }
             aura::WeatherGeocodingResult geocoding_result;
             if (weather_backend.poll_search(geocoding_result)) {
@@ -964,6 +1082,7 @@ extern "C" void app_main(void) {
                 }
             }
             weather_refresh_ms = std::min<std::uint32_t>(weather_refresh_ms + elapsed_ms, 24U * 60U * 60U * 1000U);
+            fuel_refresh_ms = std::min<std::uint32_t>(fuel_refresh_ms + elapsed_ms, 24U * 60U * 60U * 1000U);
             if (status_ms >= 1000) {
                 status_ms = 0;
                 if (network_started) {
@@ -988,6 +1107,10 @@ extern "C" void app_main(void) {
                         weather_refresh_ms = 0;
                         weather.begin_fetch(weather_snapshot.saved_location, false);
                         request_weather(weather_snapshot.saved_location);
+                    }
+                    if (online && fuel_refresh_ms >= aura::fuel_refresh_interval_ms(fuel.snapshot()) &&
+                        fuel_backend.request()) {
+                        fuel_refresh_ms = 0;
                     }
                 }
                 if (network.time_valid()) {

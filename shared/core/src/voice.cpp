@@ -341,6 +341,8 @@ void EchoReferenceGate::reset() noexcept {
     weights_.fill(0.0F);
     kept_weights_.fill(0.0F);
     position_ = 0;
+    power_ = 0.0;
+    update_turn_ = 0;
     adapt_ = false;
     owner_ = false;
     glitch_ = false;
@@ -375,20 +377,23 @@ bool EchoReferenceGate::observe(const std::int16_t* microphone, const std::int16
             weights_ = kept_weights_;
         }
         position_ = position_ == 0 ? kTaps - 1 : position_ - 1;
+        const double leaving = history_[position_];
+        power_ = std::max(0.0, power_ + static_cast<double>(input) * input - leaving * leaving);
         history_[position_] = input;
         history_[position_ + kTaps] = input;
         const float* window = history_.data() + position_;
         float echo = 0.0F;
-        float power = 0.0F;
-        for (std::size_t tap = 0; tap < kTaps; ++tap) {
-            echo += weights_[tap] * window[tap];
-            power += window[tap] * window[tap];
-        }
+        for (std::size_t tap = 0; tap < kTaps; ++tap) echo += weights_[tap] * window[tap];
         const float left = heard - echo;
-        if (adapt_) {
+        // Once it has learnt the room, which does not move, one sample in four
+        // keeps it there: this runs beside the animation, and at every sample it
+        // took a third of the frames away while the device spoke (2026-11-18).
+        update_turn_ = (update_turn_ + 1U) & 3U;
+        if (adapt_ && (learned_ms_ < kLearnMs || update_turn_ == 0U)) {
             // Slower while the owner may be speaking: a filter that learnt too
             // little would otherwise freeze, and take its own echo for them.
-            const float step = (owner_ ? kGateStep * 0.1F : kGateStep) * left / (power + kGateRegularisation);
+            const float step = (owner_ ? kGateStep * 0.1F : kGateStep) * left /
+                               (static_cast<float>(power_) + kGateRegularisation);
             for (std::size_t tap = 0; tap < kTaps; ++tap) weights_[tap] += step * window[tap];
         }
         residual_[index] = static_cast<std::int16_t>(std::clamp(left, -32768.0F, 32767.0F));

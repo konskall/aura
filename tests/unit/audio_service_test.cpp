@@ -1,7 +1,10 @@
 #include "aura/audio_service.hpp"
 
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <thread>
+#include <vector>
 
 namespace {
 void expect(bool value, const char* message) {
@@ -72,6 +75,58 @@ int main() {
     expect(muted.play_pcm(beep), "an ordinary clip starts");
     muted.tick(20);
     expect(muted.diagnostics().envelope == 0.0F, "an ordinary clip stays muted");
+
+    // A voice still arriving: the speaker reads what has come while the rest is
+    // being decoded.
+    PcmFeed feed({16000, 1, 16});
+    expect(feed.format().sample_rate == 16000 && feed.size() == 0, "a feed knows its format");
+    std::int16_t heard[8]{};
+    bool ended = true;
+    expect(feed.read(0, heard, 8, ended) == 0 && !ended, "nothing has come yet, and more will");
+    const std::int16_t first[5] = {1, 2, 3, 4, 5};
+    expect(feed.append(first, 5) && feed.size() == 5, "samples arrive");
+    expect(feed.read(0, heard, 3, ended) == 3 && heard[0] == 1 && heard[2] == 3 && !ended, "the first of them");
+    expect(feed.read(3, heard, 8, ended) == 2 && heard[0] == 4 && heard[1] == 5 && !ended, "and the rest that came");
+    expect(feed.read(5, heard, 8, ended) == 0 && !ended, "the reader waits at the end of what came");
+    expect(feed.read(9, heard, 8, ended) == 0 && !ended, "a reader past the end reads nothing");
+    feed.finish();
+    expect(feed.read(0, heard, 3, ended) == 3 && !ended, "with more left to read it has not ended yet");
+    expect(feed.finished() && feed.read(3, heard, 8, ended) == 2 && ended, "the last samples say they are the last");
+    expect(feed.read(5, heard, 8, ended) == 0 && ended, "and after them it has ended");
+    expect(!feed.append(first, 5) && feed.size() == 5, "nothing comes after the end");
+
+    // A voice has a length: forty seconds at most, what the decoder may hold.
+    PcmFeed bounded({16000, 1, 16});
+    const std::vector<std::int16_t> second(16000, 7);
+    int seconds = 0;
+    while (seconds < 100 && bounded.append(second.data(), second.size())) ++seconds;
+    expect(seconds == 40 && bounded.size() == 40U * 16000U, "a feed takes forty seconds and no more");
+
+    // Written and read at once, every sample arrives once and in order.
+    PcmFeed shared({16000, 1, 16});
+    std::thread writer([&shared] {
+        std::int16_t next = 0;
+        for (int block = 0; block < 400; ++block) {
+            std::int16_t samples[64];
+            for (auto& sample : samples) sample = next++;
+            shared.append(samples, 64);
+        }
+        shared.finish();
+    });
+    std::size_t offset = 0;
+    bool in_order = true;
+    for (bool finished = false; !finished;) {
+        std::int16_t samples[50];
+        const auto count = shared.read(offset, samples, 50, finished);
+        for (std::size_t index = 0; index < count; ++index) {
+            in_order = in_order && samples[index] == static_cast<std::int16_t>(offset + index);
+        }
+        offset += count;
+        if (count == 0 && !finished) std::this_thread::yield();
+    }
+    writer.join();
+    expect(in_order && offset == 400U * 64U, "a feed read while it is written loses nothing");
+
     std::cout << "audio_service_test: PASS\n";
     return 0;
 }

@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <string>
 
 namespace {
 void expect(bool condition, const char* message) {
@@ -111,5 +112,95 @@ int main() {
     const auto absolute = parse_offline_command("Χαμήλωσε την ένταση στο 20");
     expect(absolute.has_action && absolute.action.type == AssistantActionType::Volume && !absolute.action.relative &&
            absolute.action.value == 20, "a number still sets the volume");
+
+    // The device by voice (the owner, 2026-11-18): said outright, it is a command;
+    // a sentence that only mentions it goes to the assistant.
+    const auto kind = [](const char* text) { return parse_offline_command(text).kind; };
+    expect(kind("Κάνε επανεκκίνηση") == OfflineCommandKind::Restart, "restart");
+    expect(kind("Κάνε επανεκκίνηση στη συσκευή παρακαλώ.") == OfflineCommandKind::Restart, "restart the device");
+    expect(kind("Μπορείς να κάνεις επανεκκίνηση;") == OfflineCommandKind::Restart, "a polite restart");
+    expect(kind("Restart the device") == OfflineCommandKind::Restart && kind("Reboot") == OfflineCommandKind::Restart,
+           "restart in English");
+    expect(kind("Τι κάνει η επανεκκίνηση;") == OfflineCommandKind::None, "a question about restarting");
+    expect(kind("Πώς κάνω επανεκκίνηση στο κινητό μου;") == OfflineCommandKind::None, "the phone's restart");
+    expect(kind("Restart the timer") == OfflineCommandKind::None, "restarting a timer is not the device");
+    expect(kind("Απενεργοποιήσου") == OfflineCommandKind::PowerOff, "switch yourself off");
+    expect(kind("Κλείσε τη συσκευή") == OfflineCommandKind::PowerOff, "close the device");
+    expect(kind("Σβήσε τη συσκευή τώρα") == OfflineCommandKind::PowerOff, "put the device out");
+    expect(kind("Turn off the device") == OfflineCommandKind::PowerOff, "turn off the device");
+    expect(kind("Shut down") == OfflineCommandKind::PowerOff && kind("Power off") == OfflineCommandKind::PowerOff,
+           "power off in English");
+    expect(kind("Κλείσε την πόρτα") == OfflineCommandKind::None, "a door is not the device");
+    expect(kind("Κλείσε το φως") == OfflineCommandKind::None, "nor a light");
+    expect(kind("Turn off") == OfflineCommandKind::None, "turn off what?");
+    expect(kind("Κλείσε") == OfflineCommandKind::None && kind("Σβήσε το") == OfflineCommandKind::None,
+           "close what?");
+    expect(kind("Η συσκευή") == OfflineCommandKind::None && kind("The device") == OfflineCommandKind::None,
+           "the device's name alone asks for nothing");
+    expect(kind("Πώς απενεργοποιώ τη συσκευή;") == OfflineCommandKind::None, "a question about switching off");
+
+    const auto relative_brightness = [](const char* text) {
+        const auto command = parse_offline_command(text);
+        return command.has_action && command.action.type == AssistantActionType::Brightness &&
+                       command.action.relative ? command.action.value : 0;
+    };
+    expect(relative_brightness("Αύξησε τη φωτεινότητα") == 20, "brighter");
+    expect(relative_brightness("Μείωσε λίγο τη φωτεινότητα") == -20, "dimmer");
+    expect(relative_brightness("Κάνε την οθόνη πιο φωτεινή") == 20, "a brighter screen");
+    expect(relative_brightness("Make the screen brighter") == 20 && relative_brightness("Lower the brightness") == -20,
+           "brightness steps in English");
+    const auto brightness_to = parse_offline_command("Αύξησε τη φωτεινότητα στο 70");
+    expect(brightness_to.has_action && brightness_to.action.type == AssistantActionType::Brightness &&
+               !brightness_to.action.relative && brightness_to.action.value == 70, "a number sets the brightness");
+    expect(!parse_offline_command("Αύξησε τη φωτεινότητα στο 200").has_action, "a brightness out of range is no step");
+    expect(!parse_offline_command("Τι φωτεινότητα έχει ο ήλιος;").has_action, "the sun's brightness is a question");
+    const auto volume_to = parse_offline_command("Μείωσε την ένταση στο 30");
+    expect(volume_to.has_action && volume_to.action.type == AssistantActionType::Volume &&
+               !volume_to.action.relative && volume_to.action.value == 30, "μείωσε with a number");
+
+    expect(kind("Άνοιξε τον καιρό") == OfflineCommandKind::OpenWeather, "the weather");
+    expect(kind("Άνοιξε τις ρυθμίσεις") == OfflineCommandKind::OpenSettings, "settings");
+    expect(kind("Άνοιξε το Σήμερα") == OfflineCommandKind::OpenToday, "today");
+    expect(kind("Άνοιξε τα μηνύματα") == OfflineCommandKind::OpenMessages, "messages");
+    expect(kind("Δείξε μου τις φωτογραφίες") == OfflineCommandKind::OpenPhotos, "photos");
+    expect(kind("Πήγαινε στην αρχική") == OfflineCommandKind::OpenHome, "home");
+    expect(kind("Άνοιξε το μενού") == OfflineCommandKind::OpenApps, "the menu");
+    expect(kind("Άνοιξε το wifi") == OfflineCommandKind::OpenWifi && kind("Open Wi-Fi") == OfflineCommandKind::OpenWifi,
+           "wifi");
+    expect(kind("Άνοιξε τη μεταφορά αρχείων") == OfflineCommandKind::OpenFiles, "file transfer");
+    expect(kind("Δείξε την μπαταρία") == OfflineCommandKind::OpenBattery, "the battery screen");
+    expect(kind("Δείξε μου τα μηνύματα που έστειλε η Μαρία") == OfflineCommandKind::None,
+           "a question about messages goes to the assistant");
+    expect(std::string(offline_command_app(OfflineCommandKind::OpenWeather)) == "weather" &&
+               std::string(offline_command_app(OfflineCommandKind::OpenToday)) == "today" &&
+               offline_command_app(OfflineCommandKind::Restart) == nullptr, "each opening command names its app");
+    for (const auto opening : {OfflineCommandKind::OpenClock, OfflineCommandKind::OpenNotes,
+                               OfflineCommandKind::OpenCalendar, OfflineCommandKind::OpenTasks,
+                               OfflineCommandKind::OpenShopping, OfflineCommandKind::OpenRadio,
+                               OfflineCommandKind::OpenWeather, OfflineCommandKind::OpenToday,
+                               OfflineCommandKind::OpenSettings, OfflineCommandKind::OpenMessages,
+                               OfflineCommandKind::OpenPhotos, OfflineCommandKind::OpenHome,
+                               OfflineCommandKind::OpenApps, OfflineCommandKind::OpenBattery,
+                               OfflineCommandKind::OpenWifi, OfflineCommandKind::OpenFiles}) {
+        const char* app = offline_command_app(opening);
+        expect(app && assistant_app_known(app), "each opening command names a known app");
+    }
+
+    const auto alarm_at = [](const char* text, int hour, int minute) {
+        const auto command = parse_offline_command(text);
+        return command.has_action && command.action.type == AssistantActionType::Alarm &&
+               command.action.hour == hour && command.action.minute == minute;
+    };
+    expect(alarm_at("Βάλε ξυπνητήρι στις 7", 7, 0), "an alarm at 7");
+    expect(alarm_at("Βάλε ξυπνητήρι στις 7.30", 7, 30), "an alarm at 7.30");
+    expect(alarm_at("Βάλε ένα ξυπνητήρι στις εφτά και μισή", 7, 30), "half past, the article is no hour");
+    expect(alarm_at("Βάλε ξυπνητήρι στις οχτώ και τέταρτο", 8, 15), "quarter past");
+    expect(alarm_at("Βάλε ξυπνητήρι στις εφτά παρά τέταρτο", 6, 45), "quarter to");
+    expect(alarm_at("Βάλε ξυπνητήρι στις 8 το βράδυ", 20, 0), "in the evening");
+    expect(alarm_at("Βάλε ξυπνητήρι στις 6:45 το πρωί", 6, 45), "in the morning");
+    expect(alarm_at("Set an alarm for 7 pm", 19, 0) && alarm_at("Set an alarm at 6:30 am", 6, 30), "am and pm");
+    expect(alarm_at("Ξύπνησέ με στις 7", 7, 0), "wake me at 7");
+    expect(!parse_offline_command("Βάλε ξυπνητήρι").has_action, "no time goes to the assistant");
+    expect(!parse_offline_command("Βάλε ξυπνητήρι στις 25").has_action, "no such hour");
     std::cout << "offline command tests passed\n";
 }

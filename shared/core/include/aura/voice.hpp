@@ -116,6 +116,8 @@ private:
     std::array<float, kTaps> weights_{};
     std::array<float, kTaps> kept_weights_{};  // the last frame's, restored after a glitch
     std::size_t position_{0};
+    double power_{0.0};  // of the window, kept as samples enter and leave it
+    std::uint32_t update_turn_{0};
     bool adapt_{false};
     bool owner_{false};  // the last frame sounded like the owner
     bool glitch_{false};
@@ -245,6 +247,9 @@ struct SpeechResult {
 class ISpeechService {
 public:
     virtual ~ISpeechService() = default;
+    // The owner has begun to speak: what the question and (`voice`) the spoken
+    // answer will need may get ready meanwhile.
+    virtual void prepare(bool voice) { (void)voice; }
     virtual bool stt_available() const = 0;
     virtual bool tts_available(const std::string& language) const = 0;
     virtual std::future<TranscriptResult> transcribe(std::vector<std::uint8_t> wav, std::string language) = 0;

@@ -81,6 +81,7 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.action_volume_title = "Αλλαγή έντασης";
         s.action_brightness_title = "Αλλαγή φωτεινότητας";
         s.action_mute_title = "Σίγαση ήχου";
+        s.action_open_title = "Άνοιγμα εφαρμογής";
         s.action_unmute_title = "Ενεργοποίηση ήχου";
         s.action_done = "Έγινε";
         s.action_failed = "Δεν έγινε";
@@ -560,6 +561,7 @@ const CompanionStrings& companion_en_us() noexcept {
         s.action_volume_title = "Change volume";
         s.action_brightness_title = "Change brightness";
         s.action_mute_title = "Mute audio";
+        s.action_open_title = "Open app";
         s.action_unmute_title = "Unmute audio";
         s.action_done = "Done";
         s.action_failed = "Couldn't do that";

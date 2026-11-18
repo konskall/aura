@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -36,9 +38,38 @@ struct AudioFormat {
     std::uint8_t bits_per_sample{16};
 };
 
+// A voice still arriving: one thread decodes it and appends, the speaker's
+// thread reads what has come. The voice starts with its first tenths of a
+// second instead of waiting for the whole download (the board, 2026-11-16).
+class PcmFeed {
+public:
+    static constexpr std::uint32_t kMaxSeconds = 40;
+
+    explicit PcmFeed(AudioFormat format);
+    const AudioFormat& format() const noexcept { return format_; }
+    // False once it has finished or holds kMaxSeconds: the writer stops.
+    bool append(const std::int16_t* samples, std::size_t count);
+    // Nothing more will come.
+    void finish();
+    bool finished() const;
+    std::size_t size() const;
+    // Copies up to `count` samples from `offset` and returns how many. `ended`:
+    // nothing is left after them, and nothing more will come.
+    std::size_t read(std::size_t offset, std::int16_t* output, std::size_t count, bool& ended) const;
+
+private:
+    AudioFormat format_;
+    std::size_t max_samples_;
+    mutable std::mutex mutex_;
+    std::vector<std::int16_t> samples_;
+    bool finished_{false};
+};
+
+// Samples held whole, or (`feed`) a voice that plays as it arrives.
 struct PcmClip {
     AudioFormat format{};
     std::vector<std::int16_t> samples;
+    std::shared_ptr<PcmFeed> feed;
 };
 
 struct AudioDiagnostics {

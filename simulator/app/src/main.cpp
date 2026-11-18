@@ -6071,10 +6071,136 @@ int main(int argc, char** argv) {
                             }
                         }
                     }
+                    // The weather's icon follows the sky while the ambient screen
+                    // stays on: the moon on a clear night, and a new forecast's icon
+                    // as soon as it arrives. It kept the day's icon through the night
+                    // (the owner, 2026-11-18).
+                    std::string sky_detail;
+                    bool sky_followed = true;
+                    const auto weather_before = weather_model.snapshot().data;
+                    for (const auto look : aura::kAppearances) {
+                        ui.set_appearance(look);
+                        const auto& look_fonts = aura::ui::fonts_for(look);
+                        auto ambient_display = companion.display().snapshot();
+                        ambient_display.mode = aura::DisplayMode::AlwaysOn;
+                        ambient_display.sequence += 1000;
+                        ui.apply_display(ambient_display);
+                        const struct {
+                            aura::WeatherCondition condition;
+                            bool is_day;
+                            aura::ui::IconRole icon;
+                            const char* name;
+                        } skies[] = {
+                            {aura::WeatherCondition::Clear, true, aura::ui::IconRole::Sun, "clear day"},
+                            {aura::WeatherCondition::Clear, false, aura::ui::IconRole::Moon, "clear night"},
+                            {aura::WeatherCondition::PartlyCloudy, true, aura::ui::IconRole::Weather, "broken clouds by day"},
+                            {aura::WeatherCondition::PartlyCloudy, false, aura::ui::IconRole::Cloud, "broken clouds at night"},
+                            {aura::WeatherCondition::Rain, false, aura::ui::IconRole::CloudRain, "rain"},
+                        };
+                        for (const auto& sky : skies) {
+                            weather_model.fetch_succeeded(demo_weather_data(sky.condition, {}, ui.language(), sky.is_day));
+                            apply_weather();
+                            lv_obj_update_layout(ui.root());
+                            auto* temperature = label_in_font(view_content(), look_fonts.display);
+                            auto* weather_row = temperature ? lv_obj_get_parent(temperature) : nullptr;
+                            auto* icon = weather_row ? lv_obj_get_child(weather_row, 0) : nullptr;
+                            if (ui.view() != aura::UiView::AlwaysOn || !icon ||
+                                lv_image_get_src(icon) != aura::ui::icon_asset(sky.icon)) {
+                                sky_followed = false;
+                                sky_detail += std::string(aura::appearance_id(look)) + ": " + sky.name + "; ";
+                            }
+                        }
+                        ambient_display.mode = aura::DisplayMode::Active;
+                        ambient_display.sequence += 1;
+                        ui.apply_display(ambient_display);
+                    }
+                    weather_model.fetch_succeeded(weather_before);
+                    apply_weather();
                     ui.set_appearance(aura::Appearance::Graphite);
                     companion.clock().remove_alarm(alarm_id);
                     pump(2);
                     record("ambient.every_look", "large-weather-lines-on-screen", every_look, detail);
+                    record("ambient.weather_icon", "the-icon-follows-the-sky", sky_followed, sky_detail);
+                }
+
+                // A spoken answer's screen stays built from its first piece to the
+                // end of its last: the sound stops between two pieces, and each
+                // rebuild started the animation again (the owner, 2026-11-18).
+                {
+                    std::string problem;
+                    reset_to(aura::UiView::Home);
+                    controller.dispatch({aura::EventType::Reset});
+                    controller.dispatch({aura::EventType::TurnStarted, text().capture_speaking_prompt});
+                    controller.dispatch({aura::EventType::PartialResult, text().capture_speaking_answer});
+                    apply();
+                    aura::AssistantExtras voice;
+                    voice.sequence = 900001;
+                    voice.speaking = true;
+                    voice.voice_on = true;
+                    ui.apply_assistant_extras(voice);
+                    aura::AudioDiagnostics sound = audio.diagnostics();
+                    sound.state = aura::AudioState::Playing;
+                    ui.apply_audio(sound);
+                    lv_obj_update_layout(ui.root());
+                    auto* stage = lv_obj_get_child(view_content(), 0);
+                    if (ui.view() != aura::UiView::Assistant || !stage) problem += "no speaking screen; ";
+                    if (stage) lv_obj_set_user_data(stage, stage);
+                    const auto unchanged = [&](const char* moment) {
+                        if (!stage || lv_obj_get_child(view_content(), 0) != stage ||
+                            lv_obj_get_user_data(lv_obj_get_child(view_content(), 0)) != stage) {
+                            problem += std::string("rebuilt at ") + moment + "; ";
+                            stage = lv_obj_get_child(view_content(), 0);
+                            if (stage) lv_obj_set_user_data(stage, stage);
+                        }
+                    };
+                    sound.state = aura::AudioState::Ready;
+                    ui.apply_audio(sound);
+                    unchanged("the end of a piece");
+                    sound.state = aura::AudioState::Buffering;
+                    ui.apply_audio(sound);
+                    unchanged("the next piece's start");
+                    sound.state = aura::AudioState::Playing;
+                    ui.apply_audio(sound);
+                    unchanged("the next piece sounding");
+                    controller.dispatch({aura::EventType::FinalResult, text().capture_speaking_answer});
+                    apply();
+                    unchanged("the whole answer arriving");
+                    sound.state = aura::AudioState::Paused;
+                    ui.apply_audio(sound);
+                    if (stage && lv_obj_get_user_data(lv_obj_get_child(view_content(), 0)) == stage) {
+                        problem += "the pause button did not change; ";
+                    }
+                    sound.state = aura::AudioState::Ready;
+                    ui.apply_audio(sound);
+                    voice.sequence += 1;
+                    voice.speaking = false;
+                    voice.voice_on = false;
+                    ui.apply_assistant_extras(voice);
+                    lv_obj_update_layout(ui.root());
+                    if (ui.view() != aura::UiView::Assistant) problem += "the answer's text did not come back; ";
+                    controller.dispatch({aura::EventType::Reset});
+                    apply();
+                    voice.sequence += 1;
+                    ui.apply_assistant_extras(voice);
+                    ui.apply_audio(audio.diagnostics());
+                    reset_to(aura::UiView::Home);
+                    record("assistant.voice_screen", "one-screen-for-the-whole-voice", problem.empty(), problem);
+                }
+
+                // Every app the assistant can name opens its screen, and no other name does.
+                {
+                    std::string missing;
+                    for (const auto app : aura::kAssistantApps) {
+                        reset_to(aura::UiView::Launcher);
+                        const bool opened = ui.open_app(app);
+                        pump(1);
+                        const bool left = ui.view() != aura::UiView::Launcher || app == "apps";
+                        if (!opened || !left) missing += std::string(app) + " ";
+                    }
+                    reset_to(aura::UiView::Launcher);
+                    if (ui.open_app("terminal") || ui.view() != aura::UiView::Launcher) missing += "terminal ";
+                    reset_to(aura::UiView::Home);
+                    record("assistant.open_app", "every-app-opens-its-screen", missing.empty(), missing);
                 }
 
                 // System and Οθόνη in every look and language: no row title is cut

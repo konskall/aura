@@ -51,7 +51,7 @@ private:
     bool play_clip(const PcmClip& clip, bool alert);
     void play_clip_now(std::uint32_t generation, const std::string& wav_path);
     void play_stream_now();
-    bool clip_pending_locked() const { return !clip_.samples.empty() || !pending_wav_path_.empty(); }
+    bool clip_pending_locked() const { return !clip_.samples.empty() || clip_.feed || !pending_wav_path_.empty(); }
     bool stream_ready_locked() const { return stream_open_ && !stream_hold_ && ring_size_ > 0; }
     bool load_pcm_wav(const std::string& path, PcmClip& clip);
     void set_error_locked(const char* code);

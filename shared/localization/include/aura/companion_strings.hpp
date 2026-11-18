@@ -86,6 +86,7 @@ struct CompanionStrings {
     const char* action_brightness_title;
     const char* action_mute_title;
     const char* action_unmute_title;
+    const char* action_open_title;
     const char* action_done;
     const char* action_failed;
     // Under an answer whose proposed action was refused: nothing was done.

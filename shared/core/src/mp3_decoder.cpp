@@ -28,7 +28,8 @@ struct Mp3StreamDecoder::State {
     mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME]{};
 };
 
-Mp3StreamDecoder::Mp3StreamDecoder() : state_(std::make_unique<State>()) {
+Mp3StreamDecoder::Mp3StreamDecoder(std::size_t lookahead)
+    : state_(std::make_unique<State>()), lookahead_(lookahead) {
     mp3dec_init(&state_->decoder);
     state_->decoder.external_scratch = &state_->scratch;
 }
@@ -57,13 +58,10 @@ void Mp3StreamDecoder::feed(const std::uint8_t* data, std::size_t size) {
 }
 
 std::size_t Mp3StreamDecoder::decode(Mp3Pcm& out, std::size_t max_frames, bool drain) {
-    // A frame cut off at the end of the buffer would be skipped as junk, so
-    // two of the largest frames must be waiting unless the stream has ended.
-    constexpr std::size_t kLookahead = 2 * 1441;
     std::size_t added = 0;
     while (added < max_frames && consumed_ < input_.size()) {
         const auto available = input_.size() - consumed_;
-        if (!drain && available < kLookahead) break;
+        if (!drain && available < lookahead_) break;
         mp3dec_frame_info_t info{};
         const int samples = mp3dec_decode_frame(&state_->decoder, input_.data() + consumed_,
                                                 static_cast<int>(available), state_->pcm, &info);

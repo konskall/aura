@@ -81,17 +81,32 @@ public:
     void set_message_sink(std::function<void(std::vector<std::uint8_t>)> sink) { message_sink_ = std::move(sink); }
     // Speech recognition and spoken replies, once the cloud keys are there.
     void set_speech_available(bool recognition, bool output);
+    // The assistant's voice is on: the read-aloud buttons become stop buttons.
+    void set_speaking(bool speaking) {
+        if (extras_.speaking == speaking) return;
+        extras_.speaking = speaking;
+        extras_.voice_on = speaking;
+        ++extras_.sequence;
+        extras_dirty_ = true;
+    }
     // An action the assistant proposed, kept for the confirmation screen.
     void propose_action(const AssistantAction& action);
     // The owner confirmed it: true when it was done. Declined: dropped.
     bool confirm_action();
     void decline_action();
+    // Carries out an action: confirmed on the screen, or said outright by the
+    // owner (parse_offline_command). True when it was done.
+    bool perform_action(const AssistantAction& action);
+    // A restart or a switch-off, its screen at once and the rest outside the
+    // display lock (run_deferred_system_action).
+    void system_action(SystemAction action);
     // The assistant's speech service (null without the cloud keys): voice
     // notes are transcribed with it, as in the simulator.
     void set_speech_service(ISpeechService* speech) noexcept { speech_ = speech; }
     // Barge-in: while a spoken answer plays the microphone listens for the
     // owner speaking over it. take_barge_in() is true once, when they did.
     void set_barge_monitor(bool on);
+    bool barge_monitoring() const noexcept { return barge_monitoring_; }
     bool take_barge_in() noexcept;
     // The Sound settings the voice turn follows (spoken answers, the voice).
     const SoundSettings& sound() const noexcept { return sound_; }
@@ -194,6 +209,8 @@ private:
     // Barge-in, with the speaker's own signal as reference (ES7210 MIC3); in
     // PSRAM (the filter and the owner's first words).
     std::unique_ptr<EchoReferenceGate> barge_gate_;
+    std::size_t barge_words_next_{0};   // where the ring of barge_words_ goes on
+    std::size_t barge_words_count_{0};  // how much of it is the owner's so far
     std::vector<std::int16_t> reference_;
     // The last second without the device's voice: the words that interrupted
     // it begin the question.

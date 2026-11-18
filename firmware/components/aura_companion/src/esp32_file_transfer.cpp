@@ -1,5 +1,6 @@
 #include "esp32_file_transfer.hpp"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_random.h"
@@ -18,6 +19,7 @@
 
 namespace aura::firmware {
 namespace {
+constexpr const char* kTag = "aura_transfer";
 constexpr const char* kRoot = "/sdcard/aura";
 constexpr const char* kStage = "/sdcard/aura/.transfer/upload.part";
 std::uint64_t transfer_now() { return static_cast<std::uint64_t>(esp_timer_get_time() / 1000); }
@@ -69,6 +71,7 @@ public:
     bool begin(const std::string& name, std::uint64_t bytes) override {
         disposition_ = transfer_attachment_header(name);
         announced_ = bytes;
+        started_ms_ = transfer_now();
         httpd_resp_set_status(request_, "200 OK");
         httpd_resp_set_type(request_, "application/octet-stream");
         security_headers(request_);
@@ -82,13 +85,19 @@ public:
         return true;
     }
     // ESP_FAIL makes the server close the connection of an unfinished download.
-    esp_err_t finish() { return written_ == announced_ ? httpd_resp_send_chunk(request_, nullptr, 0) : ESP_FAIL; }
+    esp_err_t finish() {
+        ESP_LOGI(kTag, "download: %llu of %llu bytes sent in %llu ms", static_cast<unsigned long long>(written_),
+                 static_cast<unsigned long long>(announced_),
+                 static_cast<unsigned long long>(transfer_now() - started_ms_));
+        return written_ == announced_ ? httpd_resp_send_chunk(request_, nullptr, 0) : ESP_FAIL;
+    }
 
 private:
     httpd_req_t* request_;
     std::string disposition_;
     std::uint64_t announced_{0};
     std::uint64_t written_{0};
+    std::uint64_t started_ms_{0};
 };
 bool directory(const std::string& name) {
     mkdir(name.c_str(), 0775);
@@ -325,12 +334,14 @@ void Esp32FileTransfer::manage() {
         // unless it may close the least recently used one: the login's request
         // then waited forever (the first flash, 2026-11-14).
         config.lru_purge_enable = true;
-        config.max_uri_handlers = 13;
+        config.max_uri_handlers = 14;
         config.max_resp_headers = 8;
         config.max_req_hdr_len = 8192;
         config.max_uri_len = 512;
         config.recv_wait_timeout = 1;
-        config.send_wait_timeout = 1;
+        // A download waits out a lost packet, which lwIP resends after 1.5 s and
+        // then 3 s (CONFIG_LWIP_TCP_RTO_TIME); a second here would cut the file.
+        config.send_wait_timeout = 5;
         httpd_handle_t server = nullptr;
         if (httpd_start(&server, &config) != ESP_OK) {
             session_.fail(state.generation, TransferError::Network);
@@ -349,6 +360,8 @@ void Esp32FileTransfer::manage() {
         uri.uri = "/api/upload";
         ok |= httpd_register_uri_handler(server, &uri);
         uri.uri = "/api/files";
+        ok |= httpd_register_uri_handler(server, &uri);
+        uri.uri = "/api/download";
         ok |= httpd_register_uri_handler(server, &uri);
         uri.uri = "/api/delete";
         ok |= httpd_register_uri_handler(server, &uri);

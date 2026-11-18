@@ -5,6 +5,49 @@
 
 namespace aura {
 
+namespace {
+// Room kept from the start: a piece of an answer lasts 11-13 s at most, and most
+// sentences fit here without moving what is being read.
+constexpr std::size_t kFeedReservedSeconds = 6;
+}  // namespace
+
+PcmFeed::PcmFeed(AudioFormat format)
+    : format_(format),
+      max_samples_(static_cast<std::size_t>(format.sample_rate) * format.channels * kMaxSeconds) {
+    samples_.reserve(static_cast<std::size_t>(format.sample_rate) * format.channels * kFeedReservedSeconds);
+}
+
+bool PcmFeed::append(const std::int16_t* samples, std::size_t count) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (finished_ || samples_.size() + count > max_samples_) return false;
+    samples_.insert(samples_.end(), samples, samples + count);
+    return true;
+}
+
+void PcmFeed::finish() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    finished_ = true;
+}
+
+bool PcmFeed::finished() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return finished_;
+}
+
+std::size_t PcmFeed::size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return samples_.size();
+}
+
+std::size_t PcmFeed::read(std::size_t offset, std::int16_t* output, std::size_t count, bool& ended) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::size_t available = offset < samples_.size() ? samples_.size() - offset : 0;
+    const std::size_t taken = std::min(count, available);
+    if (taken > 0) std::copy_n(samples_.data() + offset, taken, output);
+    ended = finished_ && taken == available;
+    return taken;
+}
+
 bool AudioStateMachine::dispatch(AudioCommand command) noexcept {
     AudioState next = state_;
     bool accepted = true;

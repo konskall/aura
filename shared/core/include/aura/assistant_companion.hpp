@@ -9,6 +9,7 @@
 #include "aura/provider.hpp"
 #include "aura/weather.hpp"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -70,7 +71,17 @@ enum class AssistantActionType {
     Brightness,
     Mute,
     Message,
+    OpenApp,
+    Restart,
+    PowerOff,
 };
+
+// The apps the assistant can open, by the names its ACTION line uses.
+inline constexpr std::array<std::string_view, 19> kAssistantApps{
+    "weather", "clock",    "notes",  "calendar", "tasks", "shopping", "radio", "today", "messages", "notifications",
+    "photos",  "files",    "settings", "sound",  "display", "wifi",   "battery", "home", "apps",
+};
+bool assistant_app_known(std::string_view app) noexcept;
 
 // An action the model proposed. It is untrusted: parsed strictly, bounded,
 // and executed only after the owner confirms it on the device.
@@ -88,7 +99,8 @@ struct AssistantAction {
     std::int64_t start_minute{0};  // CalendarEvent
     std::uint32_t duration_minutes{60};
     int value{0};        // Volume/Brightness percentage, Mute: 0 or 1
-    bool relative{false};  // Volume: `value` is a step ("louder": +10)
+    bool relative{false};  // Volume, Brightness: `value` is a step ("louder": +10)
+    std::string app;     // OpenApp: one of kAssistantApps
 };
 
 struct ParsedAnswer {

@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "aura/https_client.hpp"
@@ -23,16 +24,21 @@ class Esp32HttpsClient final : public IHttpsClient {
 public:
     ~Esp32HttpsClient() override;
     HttpsResponse post(const HttpsRequest& request, const HttpsChunk& on_chunk) override;
+    // A HEAD request opens the connection to the server ahead of a request, or
+    // finds that the one kept still works; nothing when it served one moments ago.
+    void warm(const HttpsRequest& request) override;
     void cancel() override { cancelled_.store(true); }
 
 private:
     struct Kept {
         void* client{nullptr};  // esp_http_client_handle_t
         std::string origin;
+        std::int64_t used_ms{0};  // when it last finished an exchange
     };
 
+    HttpsResponse send(const HttpsRequest& request, const HttpsChunk& on_chunk, bool head);
     HttpsResponse exchange(const HttpsRequest& request, const HttpsChunk& on_chunk, Kept& kept,
-                           const std::string& origin, bool reuse, bool& transport_failed);
+                           const std::string& origin, bool reuse, bool head, bool& transport_failed);
     static void drop(Kept& kept);
 
     std::array<Kept, 2> kept_{};

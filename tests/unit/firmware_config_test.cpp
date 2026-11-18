@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -199,6 +200,94 @@ void check_transfer_server(const std::string& root) {
                text.find("written_ == announced_ ? httpd_resp_send_chunk(request_, nullptr, 0) : ESP_FAIL") !=
                    std::string::npos,
            "the device streams downloads and never ends a cut one as complete");
+    // The page downloads through /api/download, a path the server never
+    // registered: ESP-IDF answered 404 and the page said there was no connection,
+    // while sending to the device worked (the owner, 2026-11-18).
+    const std::string code = without_comments(text);
+    for (const char* path : {"/api/session", "/api/upload", "/api/files", "/api/download", "/api/delete", "/api/keys"}) {
+        expect(code.find(std::string("uri.uri = \"") + path + "\";") != std::string::npos,
+               std::string("the file transfer server registers ") + path);
+    }
+    // One path more than the server has room for refuses the whole transfer.
+    const auto count = [&code](const std::string& needle) {
+        std::size_t found = 0;
+        for (auto at = code.find(needle); at != std::string::npos; at = code.find(needle, at + 1)) ++found;
+        return found;
+    };
+    const auto setting = [&code](const std::string& name) -> unsigned long {
+        const auto at = code.find(name);
+        return at == std::string::npos ? 0UL : std::strtoul(code.c_str() + at + name.size(), nullptr, 10);
+    };
+    expect(setting("config.max_uri_handlers = ") >= 1 + count("\"/api/") + count("\"/aoraton/"),
+           "the file transfer server has room for every path it registers");
+    // lwIP resends a lost packet after 1.5 s, then 3 s (CONFIG_LWIP_TCP_RTO_TIME):
+    // a send that gives up within a second cuts the download at the first one.
+    expect(setting("config.send_wait_timeout = ") >= 5, "a download outlasts a lost packet");
+}
+
+// The device by voice (the owner, 2026-11-18): the owner's own words, matched on
+// the device, are done at once; what the model proposes waits for a tap.
+void check_device_commands(const std::string& root) {
+    constexpr auto none = std::string::npos;
+    const std::string main = without_comments(read_file(root + "/firmware/main/app_main.cpp"));
+    const auto local = main.find("assistant.turn->set_local_request(");
+    const auto parsed = main.find("aura::parse_offline_command(question)", local);
+    expect(local != none && parsed != none, "the owner's words for the device are matched on the device");
+    expect(main.find("companion.system_action(aura::SystemAction::Restart)", parsed) != none &&
+               main.find("companion.system_action(aura::SystemAction::PowerOff)", parsed) != none,
+           "the device restarts and switches off when told to");
+    expect(main.find("ui.open_app(app)", parsed) != none, "the device opens the app it is told to");
+    expect(main.find("companion.perform_action(command.action)", parsed) != none,
+           "the volume, the brightness and the alarms are set when the owner says so");
+    expect(main.find("companion.propose_action(action);") != none, "what the model proposes is only proposed");
+    const std::string companion =
+        without_comments(read_file(root + "/firmware/components/aura_companion/src/esp32_companion.cpp"));
+    expect(companion.find("active_ui_->open_app(action.app)") != none &&
+               companion.find("case AssistantActionType::Restart: system_action(SystemAction::Restart)") != none &&
+               companion.find("case AssistantActionType::PowerOff: system_action(SystemAction::PowerOff)") != none,
+           "a confirmed proposal reaches the screens and the board's power");
+}
+
+// While the device speaks the microphone's last second is kept for the words that
+// interrupt it. Moving those 32 KB at every pass emptied the data cache, and the
+// animation's frames took a third longer (measured on the board, 2026-11-18).
+void check_barge_words(const std::string& root) {
+    const std::string companion =
+        without_comments(read_file(root + "/firmware/components/aura_companion/src/esp32_companion.cpp"));
+    expect(companion.find("barge_words_.erase(") == std::string::npos &&
+               companion.find("barge_words_next_ = (barge_words_next_ + 1U) % kWordsKept;") != std::string::npos,
+           "the words over the answer are kept in a ring, never moved");
+}
+
+// The menus' movement on the board (the owner, 2026-11-18): a whole-screen fade
+// took ten frames of 150-190 ms to open a screen.
+void check_view_fade(const std::string& root) {
+    const std::string main = without_comments(read_file(root + "/firmware/main/app_main.cpp"));
+    const auto off = main.find("ui.set_view_fade(false);");
+    const auto created = main.find("ui.create(display");
+    expect(off != std::string::npos && created != std::string::npos && off < created,
+           "screens open at once on the board, without a fade");
+}
+
+// Σήμερα on the board (the owner, 2026-11-18): the read-aloud button needs a
+// handler to exist at all, and the fuel prices a source of the device's own.
+void check_today(const std::string& root) {
+    constexpr auto none = std::string::npos;
+    const std::string main = without_comments(read_file(root + "/firmware/main/app_main.cpp"));
+    const auto created = main.find("ui.create(display");
+    const auto speak = main.find("callbacks.on_speak = ");
+    const auto stop = main.find("callbacks.on_speak_stop = ");
+    expect(speak != none && stop != none && created != none && speak < created && stop < created,
+           "the device handles the read-aloud button before the UI is built");
+    expect(main.find("assistant.turn->read_aloud(text)") != none &&
+               main.find("companion.set_speaking(assistant.turn->speaking())") != none,
+           "the button reads aloud and turns into a stop button while the voice is on");
+    expect(main.find("fuel_backend.request()") != none && main.find("fuel_backend.poll(fuel_prices)") != none &&
+               main.find("ui.apply_fuel(fuel.snapshot())") != none,
+           "the week's fuel prices reach Σήμερα");
+    expect(main.find("input.fuel = &fuel.snapshot();") != none, "and the assistant's facts");
+    const std::string component = read_file(root + "/firmware/components/aura_weather/CMakeLists.txt");
+    expect(component.find("src/esp32_fuel_backend.cpp") != none, "the fuel backend is built");
 }
 
 // Ήχος → «Ακρόαση φωνής» speaks the preview phrase in the chosen voice. The UI
@@ -270,7 +359,7 @@ void check_echo_reference(const std::string& root) {
     expect(companion.find("barge_gate_->observe(samples_.data(), reference_.data(), samples_.size())") != none,
            "barge-in takes the speaker's signal out of the microphone");
     expect(companion.find("microphone_.discard()") != none &&
-               companion.find("recorder_.append(barge_words_.data(), barge_words_.size())") != none,
+               companion.find("recorder_.append(words.data(), words.size())") != none,
            "a question after an answer keeps the open microphone, and a barge-in's words");
     const std::string main = without_comments(read_file(root + "/firmware/main/app_main.cpp"));
     const auto listen = main.find("static const auto start_listening");
@@ -278,6 +367,58 @@ void check_echo_reference(const std::string& root) {
     expect(listen != none && question != none &&
                main.substr(listen, question - listen).find("set_barge_monitor(false)") == none,
            "listening does not close the barge-in monitor's microphone first");
+}
+
+// The voice is asked for while the answer is still being written. Behind the
+// answer on one worker it came seconds late («με το που έρχεται το μήνυμα αργεί
+// να παίξει ο ήχος», the owner, 2026-11-16): it has a thread and a connection
+// of its own, the thread's stack in PSRAM like the first's.
+void check_voice_worker(const std::string& root) {
+    constexpr auto none = std::string::npos;
+    const std::string main = without_comments(read_file(root + "/firmware/main/app_main.cpp"));
+    expect(main.find("voice_worker = start_cloud_worker(\"aura_voice\")") != none &&
+               main.find("cloud_worker = start_cloud_worker(\"aura_cloud\")") != none,
+           "the voice has a worker of its own");
+    expect(main.find("worker.stack_alloc_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT") != none,
+           "both workers keep their stacks in PSRAM");
+    const auto speech = main.find("make_unique<aura::CloudSpeechService>(cloud_https, *cloud_worker, voice_https,");
+    expect(speech != none && main.find("*voice_worker, keys);", speech) != none,
+           "the voice goes over its own connection");
+    expect(main.find("!cloud_worker || !voice_worker") != none, "the assistant waits for both workers");
+    // It plays as it arrives, from the first tenths of a second: read outside
+    // the backend's lock, waiting while the rest is on its way, and dropped when
+    // the voice is stopped.
+    const std::string audio =
+        without_comments(read_file(root + "/firmware/components/aura_audio/src/esp32_audio_backend.cpp"));
+    const std::string header =
+        without_comments(read_file(root + "/firmware/components/aura_audio/include/esp32_audio_backend.hpp"));
+    expect(audio.find("(clip.samples.empty() && !clip.feed)") != none &&
+               header.find("!clip_.samples.empty() || clip_.feed || !pending_wav_path_.empty()") != none,
+           "the speaker takes a voice still arriving");
+    const auto voice_loop = audio.find("feed->read(fed, chunk.data(), kChunkSamples, ended)");
+    expect(voice_loop != none && audio.rfind("xSemaphoreGive(mutex_);", voice_loop) != none &&
+               audio.find("if (ended) break;", voice_loop) != none,
+           "it reads the voice without holding the backend's lock, to the voice's end");
+    const auto stop = audio.find("void Esp32AudioBackend::stop()");
+    const auto stop_end = audio.find("void Esp32AudioBackend::set_volume", stop);
+    expect(stop != none && audio.substr(stop, stop_end - stop).find("clip_.feed.reset()") != none,
+           "stopping the voice drops it");
+    // The connections open while the owner speaks, with a HEAD that asks for
+    // nothing, unless one served a request moments ago.
+    const std::string https =
+        without_comments(read_file(root + "/firmware/components/aura_network/src/esp32_https_client.cpp"));
+    const auto warm = https.find("void Esp32HttpsClient::warm(const HttpsRequest& request)");
+    expect(warm != none && https.find("candidate.used_ms < kFreshMs", warm) != none &&
+               https.find("send(request, {}, true)", warm) != none,
+           "a connection is opened ahead of a request, once");
+    expect(https.find("head ? HTTP_METHOD_HEAD : HTTP_METHOD_POST") != none &&
+               https.find("if (head) return finish(nullptr, true);") != none,
+           "a HEAD reads no body, and its connection serves the next request");
+    // The speaker opens first: the microphone's start kept the voice waiting.
+    const auto monitor = main.find("companion.set_barge_monitor(");
+    expect(monitor != none && main.find("companion.barge_monitoring()", monitor) != none &&
+               main.find("aura::AudioState::Playing", monitor) != none,
+           "barge-in's microphone opens once the voice is sounding");
 }
 
 // A question's recording reached Groq at 20-58 KB/s: one TCP window of 5760
@@ -407,9 +548,14 @@ int main() {
     check_voice_preview(root);
     check_panel_memory(root);
     check_echo_reference(root);
+    check_voice_worker(root);
     check_upload_window(defaults);
     check_network_name(defaults);
     check_transfer_server(root);
+    check_device_commands(root);
+    check_today(root);
+    check_barge_words(root);
+    check_view_fade(root);
     check_power(defaults);
     check_security(defaults, read_file(root + "/firmware/sdkconfig.production.defaults"));
     check_partitions(defaults, read_file(root + "/firmware/partitions.csv"),

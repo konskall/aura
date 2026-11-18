@@ -146,6 +146,7 @@ struct AuraUi::Impl {
     lv_obj_t* header_title{};
     lv_obj_t* header_glass{};
     bool header_action{false};
+    bool view_fade{true};
     lv_obj_t* home_clock{};
     lv_obj_t* home_date{};
     lv_obj_t* home_date_detail{};  // Γραφίτης: the day and month under the weekday
@@ -1940,6 +1941,11 @@ struct AuraUi::Impl {
         motion.enter(error ? MotionMode::Error : MotionMode::None);
     }
 
+    // The answer is being spoken: the screen with the presence, not its text.
+    bool speaking_screen() const {
+        return audio.state == AudioState::Playing || audio.state == AudioState::Paused || extras.voice_on;
+    }
+
     void render_assistant() {
         switch (snapshot.state) {
             case AssistantState::Listening:
@@ -1947,7 +1953,7 @@ struct AuraUi::Impl {
             case AssistantState::Transcribing:
             case AssistantState::Thinking: render_thinking(); break;
             case AssistantState::Responding:
-                if (audio.state == AudioState::Playing || audio.state == AudioState::Paused) render_speaking();
+                if (speaking_screen()) render_speaking();
                 else render_answer_reader();
                 break;
             case AssistantState::Offline: render_offline(false); break;
@@ -4300,7 +4306,9 @@ struct AuraUi::Impl {
         if (toast) lv_obj_move_foreground(toast);
         update_status();
         lv_obj_invalidate(status_bar);
-        if (fade && !capture_mode && !reduced_motion) lv_obj_fade_in(content, ui::tokens::content_ms, 0);
+        if (fade && view_fade && !capture_mode && !reduced_motion) {
+            lv_obj_fade_in(content, ui::tokens::content_ms, 0);
+        }
     }
 
     void update_status() {
@@ -4471,6 +4479,10 @@ void AuraUi::apply(const AssistantSnapshot& snapshot) {
         impl_->render(UiView::Assistant, true);
     } else if (streamed_delta && impl_->current_view == UiView::Assistant) {
         impl_->update_streamed_answer();
+    } else if (impl_->current_view == UiView::Assistant && snapshot.state == AssistantState::Responding &&
+               old_state == AssistantState::Responding && impl_->extras.voice_on) {
+        // The rest of the answer arrives under its voice: the speaking screen
+        // shows no text, and building it again would restart its animation.
     } else if (impl_->current_view == UiView::Home || impl_->current_view == UiView::Assistant ||
                impl_->current_view == UiView::Launcher || impl_->current_view == UiView::Settings ||
                impl_->current_view == UiView::Notifications ||
@@ -4546,6 +4558,10 @@ void AuraUi::apply_audio(const AudioDiagnostics& diagnostics) {
         diagnostics.device_available != impl_->audio.device_available ||
         diagnostics.error_code != impl_->audio.error_code;
     const bool mute_changed = diagnostics.muted != impl_->audio.muted;
+    const bool pause_changed = (diagnostics.state == AudioState::Paused) != (impl_->audio.state == AudioState::Paused);
+    const bool device_changed = diagnostics.device_available != impl_->audio.device_available ||
+                                diagnostics.error_code != impl_->audio.error_code;
+    const bool was_speaking = impl_->speaking_screen();
     impl_->audio = diagnostics;
     if (mute_changed) impl_->update_status();
     if (impl_->current_view == UiView::Battery) {
@@ -4558,7 +4574,11 @@ void AuraUi::apply_audio(const AudioDiagnostics& diagnostics) {
         else impl_->update_audio_widgets();
     } else if (impl_->current_view == UiView::Assistant &&
                impl_->snapshot.state == AssistantState::Responding) {
-        if (structural_change) impl_->render(UiView::Assistant);
+        // Between two pieces of a spoken answer the sound stops for a moment;
+        // the screen stays, or its animation would start again at each one.
+        const bool same_screen = impl_->extras.voice_on && was_speaking == impl_->speaking_screen() &&
+                                 !pause_changed && !mute_changed && !device_changed;
+        if (structural_change && !same_screen) impl_->render(UiView::Assistant);
         else impl_->update_audio_widgets();
     }
 }
@@ -4757,6 +4777,8 @@ void AuraUi::show(UiView view) {
     impl_->navigation.replace(view);
     impl_->render(view);
 }
+
+void AuraUi::set_view_fade(bool fade) { impl_->view_fade = fade; }
 
 void AuraUi::show_from_home(UiView view) {
     impl_->weather_typing = false;

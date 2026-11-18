@@ -101,6 +101,13 @@ std::string chat_instructions(const TurnRequest& request, const std::string& pro
          "\"text\":\"dentist\"}");
     line("For calendar_event, use the local date/time from device facts and the exact YYYY-MM-DDTHH:MM format.");
     line("ACTION: {\"type\":\"message\",\"room\":\"Family\",\"text\":\"I will be late\"}");
+    line("ACTION: {\"type\":\"volume\",\"value\":40}  (or \"step\":10 for louder, \"step\":-10 for quieter)");
+    line("ACTION: {\"type\":\"brightness\",\"value\":70}  (or \"step\":20 for brighter, \"step\":-20 for dimmer)");
+    line("ACTION: {\"type\":\"mute\",\"on\":true}");
+    line("ACTION: {\"type\":\"open\",\"app\":\"weather\"}  (app is weather, clock, notes, calendar, tasks, shopping, "
+         "radio, today, messages, notifications, photos, files, settings, sound, display, wifi, battery, home or apps)");
+    line("ACTION: {\"type\":\"restart\"}");
+    line("ACTION: {\"type\":\"power_off\"}");
     line("Before the action line, say in one sentence what will happen. The user must confirm it on the device,");
     line("so never claim that it is already done. Use no other action types.");
     const std::string context = clean(cap(request.context, kTurnMaxContextBytes));

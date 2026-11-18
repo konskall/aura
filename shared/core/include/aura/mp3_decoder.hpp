@@ -20,8 +20,12 @@ struct Mp3Pcm {
 class Mp3StreamDecoder {
 public:
     static constexpr std::size_t kMaxBuffered = 64 * 1024;
+    // A frame cut off at the end of the buffer would be skipped as junk, so this
+    // much must wait behind the next frame unless the stream has ended: two of
+    // the largest frames an MP3 may have, or less for a stream of known frames.
+    static constexpr std::size_t kLargestLookahead = 2 * 1441;
 
-    Mp3StreamDecoder();
+    explicit Mp3StreamDecoder(std::size_t lookahead = kLargestLookahead);
     ~Mp3StreamDecoder();
     Mp3StreamDecoder(const Mp3StreamDecoder&) = delete;
     Mp3StreamDecoder& operator=(const Mp3StreamDecoder&) = delete;
@@ -39,6 +43,7 @@ private:
     std::unique_ptr<State> state_;
     std::vector<std::uint8_t> input_;
     std::size_t consumed_{0};
+    std::size_t lookahead_;
 };
 
 }  // namespace aura

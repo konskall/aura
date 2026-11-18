@@ -37,6 +37,9 @@ class IHttpsClient {
 public:
     virtual ~IHttpsClient() = default;
     virtual HttpsResponse post(const HttpsRequest& request, const HttpsChunk& on_chunk) = 0;
+    // Opens the connection to `request.url`'s server ahead of a request, asking
+    // for nothing. A client that keeps no connections does nothing.
+    virtual void warm(const HttpsRequest& request) { (void)request; }
     // Ends the request in progress, from another thread.
     virtual void cancel() = 0;
 };

@@ -256,17 +256,7 @@ void Esp32Companion::install(AuraUiCallbacks& callbacks, IAoratonService* aorato
         if (ota_.begin_download() && !updater_.request_install(manifest)) ota_.fail("OTA_BUSY");
     };
     callbacks.on_update_restart = [this] { updater_.restart(); };
-    callbacks.on_system_action = [this](SystemAction action) {
-        // Its screen at once, as the simulator shows it: switched off for a
-        // switch-off; for a restart, reset or format its screen with a bar,
-        // held until the board restarts (run_deferred_system_action).
-        if (active_ui_) {
-            if (action == SystemAction::PowerOff) active_ui_->power_off();
-            else active_ui_->show_system_progress(action);
-        }
-        system_percent_ = 0;
-        pending_system_action_.store(static_cast<int>(action));
-    };
+    callbacks.on_system_action = [this](SystemAction action) { system_action(action); };
 }
 
 bool Esp32Companion::begin_question() {
@@ -296,14 +286,19 @@ bool Esp32Companion::begin_question() {
     if (warm) {
         microphone_.set_gain(Esp32Microphone::kVoiceGainDb);
         microphone_.discard();  // the answer's last moments
-        if (interrupted && !barge_words_.empty()) {
-            // Heard 6 dB lower while the device spoke (kMonitorGainDb).
-            for (auto& sample : barge_words_) sample = static_cast<std::int16_t>(std::clamp(sample * 2, -32768, 32767));
-            recorder_.append(barge_words_.data(), barge_words_.size());
+        if (interrupted && barge_words_count_ > 0) {
+            // Oldest first, and heard 6 dB lower while the device spoke (kMonitorGainDb).
+            std::vector<std::int16_t> words(barge_words_count_);
+            const std::size_t first = barge_words_next_ + barge_words_.size() - barge_words_count_;
+            for (std::size_t index = 0; index < words.size(); ++index) {
+                const int sample = barge_words_[(first + index) % barge_words_.size()];
+                words[index] = static_cast<std::int16_t>(std::clamp(sample * 2, -32768, 32767));
+            }
+            recorder_.append(words.data(), words.size());
         }
         ESP_LOGI(kTag, "question: from the open microphone%s", interrupted ? ", after the owner's words" : "");
     }
-    barge_words_.clear();
+    barge_words_next_ = barge_words_count_ = 0;
     recording_question_ = true;
     voice_.state = VoiceCaptureState::Recording;
     voice_.purpose = VoicePurpose::Assistant;
@@ -435,7 +430,7 @@ void Esp32Companion::set_barge_monitor(bool on) {
     microphone_.set_gain(Esp32Microphone::kMonitorGainDb);
     if (!barge_gate_) barge_gate_ = std::make_unique<EchoReferenceGate>();
     barge_gate_->reset();
-    barge_words_.clear();
+    barge_words_next_ = barge_words_count_ = 0;
     samples_.clear();
     barge_monitoring_ = true;
 }
@@ -456,8 +451,30 @@ bool Esp32Companion::confirm_action() {
     if (!extras_.pending_action) return false;
     const auto action = *extras_.pending_action;
     decline_action();
+    return perform_action(action);
+}
+
+bool Esp32Companion::perform_action(const AssistantAction& action) {
+    switch (action.type) {
+        case AssistantActionType::OpenApp: return active_ui_ && active_ui_->open_app(action.app);
+        case AssistantActionType::Restart: system_action(SystemAction::Restart); return true;
+        case AssistantActionType::PowerOff: system_action(SystemAction::PowerOff); return true;
+        default: break;
+    }
     // The changed models are stored by poll(), as after a tap.
     return execute_assistant_action(action, {clock_, notes_, organizer_, display_, audio_, sound_, now_minute()});
+}
+
+void Esp32Companion::system_action(SystemAction action) {
+    // Its screen at once, as the simulator shows it: switched off for a
+    // switch-off; for a restart, reset or format its screen with a bar,
+    // held until the board restarts (run_deferred_system_action).
+    if (active_ui_) {
+        if (action == SystemAction::PowerOff) active_ui_->power_off();
+        else active_ui_->show_system_progress(action);
+    }
+    system_percent_ = 0;
+    pending_system_action_.store(static_cast<int>(action));
 }
 
 void Esp32Companion::decline_action() {
@@ -552,13 +569,17 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
         microphone_.drain(samples_, reference_);
         if (!samples_.empty()) {
             const bool spoke = barge_gate_->observe(samples_.data(), reference_.data(), samples_.size());
+            // The last second, in a ring: moving 32 KB at every pass emptied the
+            // processor's data cache, and the animation's frames took a third
+            // longer while the device spoke (measured on the board, 2026-11-18).
             const auto& left = barge_gate_->residual();
-            barge_words_.insert(barge_words_.end(), left.begin(), left.end());
-            constexpr std::size_t kWordsKept = VoiceRecorder::kSampleRate;  // a second
-            if (barge_words_.size() > kWordsKept) {
-                barge_words_.erase(barge_words_.begin(),
-                                   barge_words_.begin() + static_cast<std::ptrdiff_t>(barge_words_.size() - kWordsKept));
+            constexpr std::size_t kWordsKept = VoiceRecorder::kSampleRate;
+            if (barge_words_.size() != kWordsKept) barge_words_.assign(kWordsKept, 0);
+            for (const auto sample : left) {
+                barge_words_[barge_words_next_] = sample;
+                barge_words_next_ = (barge_words_next_ + 1U) % kWordsKept;
             }
+            barge_words_count_ = std::min(barge_words_count_ + left.size(), kWordsKept);
             if (spoke) {
                 ESP_LOGI(kTag, "barge-in: the owner spoke over the answer (its echo %.1f dB down)",
                          static_cast<double>(barge_gate_->cancelled_db()));

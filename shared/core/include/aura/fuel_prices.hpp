@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -39,6 +40,17 @@ private:
 };
 
 std::optional<FuelPriceData> parse_fuel_price_json(std::string_view json);
+
+// The European Commission's Weekly Oil Bulletin, read by the device itself: this
+// page names the week's workbook.
+inline constexpr char kFuelBulletinPage[] = "https://energy.ec.europa.eu/data-and-analysis/weekly-oil-bulletin_en";
+// The address of the week's workbook in that page; empty when it names none on
+// the Commission's own site.
+std::string fuel_bulletin_link(std::string_view page);
+// Greece's prices from the workbook (an .xlsx: XML files in a ZIP). Nothing
+// when a part is missing, damaged, too large or out of range.
+std::optional<FuelPriceData> parse_fuel_bulletin(const std::uint8_t* workbook, std::size_t size);
+
 bool fuel_prices_stale(const FuelPriceData& data, int current_year, int current_month, int current_day,
                        int maximum_age_days = 14) noexcept;
 const char* fuel_price_state_name(FuelPriceState state) noexcept;

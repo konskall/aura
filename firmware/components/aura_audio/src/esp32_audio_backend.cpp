@@ -18,6 +18,8 @@ constexpr char kTag[] = "aura_audio";
 // of 11-13 s (VoiceAssistantTurn), and this leaves room for a slow voice.
 constexpr std::size_t kMaxPcmSamples = 24000U * 30U;
 constexpr std::size_t kChunkSamples = 512;
+// A voice whose next samples are still on their way is looked at again this soon.
+constexpr std::uint32_t kVoiceWaitMs = 10;
 // The radio's ring: three seconds of its own format (576 KiB at 48 kHz stereo).
 constexpr std::size_t kStreamSeconds = 3;
 constexpr std::size_t kMaxPushFrames = 1152U * 32U;
@@ -99,6 +101,7 @@ void Esp32AudioBackend::shutdown() {
     }
     xSemaphoreTake(mutex_, portMAX_DELAY);
     clip_.samples.clear();
+    clip_.feed.reset();
     std::int16_t* ring = ring_;
     ring_ = nullptr;
     ring_capacity_ = ring_read_ = ring_size_ = 0;
@@ -116,7 +119,7 @@ bool Esp32AudioBackend::play_pcm(const PcmClip& clip) { return play_clip(clip, f
 bool Esp32AudioBackend::play_alert(const PcmClip& clip) { return play_clip(clip, true); }
 
 bool Esp32AudioBackend::play_clip(const PcmClip& clip, bool alert) {
-    if (!mutex_ || !codec_ || clip.samples.empty() || clip.samples.size() > kMaxPcmSamples ||
+    if (!mutex_ || !codec_ || (clip.samples.empty() && !clip.feed) || clip.samples.size() > kMaxPcmSamples ||
         clip.format.bits_per_sample != 16 || clip.format.channels < 1 || clip.format.channels > 2 ||
         (clip.format.sample_rate != 16000 && clip.format.sample_rate != 24000)) return false;
     stop();
@@ -241,6 +244,7 @@ void Esp32AudioBackend::stop() {
     diagnostics_.progress = 0.0F;
     diagnostics_.buffered_frames = 0;
     clip_.samples.clear();
+    clip_.feed.reset();
     pending_wav_path_.clear();
     alert_clip_ = false;
     // Stopping a clip leaves the radio playing.
@@ -332,11 +336,13 @@ void Esp32AudioBackend::play_clip_now(std::uint32_t generation, const std::strin
     }
 
     xSemaphoreTake(mutex_, portMAX_DELAY);
-    if (shutting_down_ || generation != generation_ || clip_.samples.empty()) {
+    if (shutting_down_ || generation != generation_ || (clip_.samples.empty() && !clip_.feed)) {
         xSemaphoreGive(mutex_);
         return;
     }
     const AudioFormat format = clip_.format;
+    // A voice still arriving plays from what has come (PcmFeed).
+    const std::shared_ptr<PcmFeed> feed = clip_.feed;
     xSemaphoreGive(mutex_);
 
     // C++ requires designated initializers in declaration order
@@ -349,7 +355,10 @@ void Esp32AudioBackend::play_clip_now(std::uint32_t generation, const std::strin
         xSemaphoreTake(mutex_, portMAX_DELAY);
         set_error_locked("ES8311_OPEN_FAILED");
         // Not tried again in a loop: the clip is dropped.
-        if (generation == generation_) clip_.samples.clear();
+        if (generation == generation_) {
+            clip_.samples.clear();
+            clip_.feed.reset();
+        }
         xSemaphoreGive(mutex_);
         return;
     }
@@ -368,6 +377,8 @@ void Esp32AudioBackend::play_clip_now(std::uint32_t generation, const std::strin
     if (!muted || alert) amplifier_.enable();
 
     bool failed = false;
+    std::size_t fed = 0;           // what has played of a voice still arriving
+    std::uint32_t waited_ms = 0;   // how long it kept the speaker waiting
     for (;;) {
         xSemaphoreTake(mutex_, portMAX_DELAY);
         if (shutting_down_ || generation != generation_) {
@@ -379,18 +390,37 @@ void Esp32AudioBackend::play_clip_now(std::uint32_t generation, const std::strin
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
-        if (cursor_ >= clip_.samples.size()) {
+        std::size_t count = 0;
+        if (feed) {
             xSemaphoreGive(mutex_);
-            break;
+            bool ended = false;
+            count = feed->read(fed, chunk.data(), kChunkSamples, ended);
+            if (count == 0) {
+                if (ended) break;
+                waited_ms += kVoiceWaitMs;
+                vTaskDelay(pdMS_TO_TICKS(kVoiceWaitMs));
+                continue;
+            }
+            fed += count;
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+            if (shutting_down_ || generation != generation_) {
+                xSemaphoreGive(mutex_);
+                break;
+            }
+        } else {
+            if (cursor_ >= clip_.samples.size()) {
+                xSemaphoreGive(mutex_);
+                break;
+            }
+            count = std::min(kChunkSamples, clip_.samples.size() - cursor_);
+            std::copy_n(clip_.samples.data() + cursor_, count, chunk.data());
+            cursor_ += count;
+            diagnostics_.progress = static_cast<float>(cursor_) / clip_.samples.size();
+            diagnostics_.buffered_frames = (clip_.samples.size() - cursor_) / std::max<std::uint8_t>(1, format.channels);
         }
-        const std::size_t count = std::min(kChunkSamples, clip_.samples.size() - cursor_);
-        std::copy_n(clip_.samples.data() + cursor_, count, chunk.data());
-        cursor_ += count;
         float peak = 0.0F;
         for (std::size_t i = 0; i < count; ++i) peak = std::max(peak, std::abs(static_cast<float>(chunk[i])) / 32768.0F);
         diagnostics_.envelope = diagnostics_.muted && !alert ? 0.0F : diagnostics_.envelope * 0.7F + peak * 0.3F;
-        diagnostics_.progress = static_cast<float>(cursor_) / clip_.samples.size();
-        diagnostics_.buffered_frames = (clip_.samples.size() - cursor_) / std::max<std::uint8_t>(1, format.channels);
         xSemaphoreGive(mutex_);
         for (std::size_t i = 0; i < count; ++i) wide_[i] = static_cast<std::int32_t>(chunk[i]) * 65536;
         if (esp_codec_dev_write(codec_, wide_, count * sizeof(std::int32_t)) != ESP_CODEC_DEV_OK) {
@@ -415,9 +445,15 @@ void Esp32AudioBackend::play_clip_now(std::uint32_t generation, const std::strin
         diagnostics_.envelope = 0.0F;
         diagnostics_.buffered_frames = 0;
         clip_.samples.clear();
+        clip_.feed.reset();
         cursor_ = 0;
     }
     xSemaphoreGive(mutex_);
+    if (feed) {
+        ESP_LOGI(kTag, "voice: %u ms played as it arrived, %u ms waited for it",
+                 static_cast<unsigned>(fed * 1000U / (std::size_t{format.sample_rate} * std::max<std::uint8_t>(1, format.channels))),
+                 static_cast<unsigned>(waited_ms));
+    }
 }
 
 // The radio, until a clip comes, the stream closes or is held, or the network

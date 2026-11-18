@@ -66,6 +66,9 @@ public:
     // The owner stopped the voice: the pieces still to come are dropped, and
     // there is no follow-up.
     void stop_speaking() noexcept;
+    // The read-aloud button: `text` is spoken as an answer is, in pieces, but with
+    // no answer open and nothing listening after it.
+    void read_aloud(const std::string& text);
 
     // The talk target was pressed (or, `automatic`, a follow-up or a barge-in
     // started): the assistant listens (the host starts its microphone).
@@ -106,6 +109,8 @@ private:
     // when (a voice that never starts is given up after a while).
     bool reply_playing_{false};
     bool reply_started_{false};
+    bool reading_{false};  // read_aloud(): the voice goes on without an answer
+
     std::uint64_t reply_since_ms_{0};
     // A long answer is spoken in pieces (speech_pieces): the board's speaker
     // takes about 16 s at once, and a 21 s answer was never heard

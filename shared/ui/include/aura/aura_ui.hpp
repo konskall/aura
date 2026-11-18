@@ -130,6 +130,9 @@ struct AssistantExtras {
     bool web_search_ready{false};
     bool spoken_reply{false};  // the reply is being or was spoken
     bool speaking{false};      // speech is being prepared or played; a read-aloud tap stops it
+    // A spoken answer is under way, from its first piece to the end of its last:
+    // the sound stops between two pieces, its screen and animation do not.
+    bool voice_on{false};
     std::uint64_t sequence{0};
 };
 
@@ -315,6 +318,8 @@ public:
     // Opens "Today" (the platform does so once each morning).
     void open_briefing();
     void open_organizer(OrganizerKind kind);
+    // An app the assistant was asked to open (kAssistantApps); false for any other name.
+    bool open_app(std::string_view app);
     void open_note(std::uint32_t id);
     void open_clock_item(ClockAlertKind kind, std::uint32_t id);
     void open_phone_notification(std::uint32_t uid);
@@ -329,6 +334,8 @@ public:
     // none before the loop's own pace.
     std::uint32_t next_tick_ms() const noexcept;
     void show(UiView view);
+    // Screens fade in as they open; off, a new screen is simply there.
+    void set_view_fade(bool fade);
     // The device cannot open Google's page: its sign-in button opens File
     // transfer for the PC helper instead (ADR 0010).
     void set_aoraton_sign_in_relay(bool relay);

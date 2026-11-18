@@ -1197,6 +1197,38 @@
         std::string detail;
     };
 
+    // The screen an app of the assistant's opens (kAssistantApps); Home for none.
+    static UiView app_view(std::string_view app) {
+        static constexpr struct { std::string_view app; UiView view; } kViews[]{
+            {"weather", UiView::Weather},   {"clock", UiView::Clock},       {"notes", UiView::Notes},
+            {"calendar", UiView::Calendar}, {"tasks", UiView::Calendar},    {"shopping", UiView::Calendar},
+            {"radio", UiView::Radio},       {"today", UiView::Briefing},    {"messages", UiView::AoratonRooms},
+            {"notifications", UiView::Notifications},                       {"photos", UiView::Photos},
+            {"files", UiView::FileTransfer},                                {"settings", UiView::Settings},
+            {"sound", UiView::Audio},       {"display", UiView::DisplaySettings},
+            {"wifi", UiView::Wifi},         {"battery", UiView::Battery},   {"home", UiView::Home},
+            {"apps", UiView::Launcher},
+        };
+        for (const auto& entry : kViews) {
+            if (entry.app == app) return entry.view;
+        }
+        return UiView::Home;
+    }
+
+    // What the confirmation card calls an app: the name its own screen goes by.
+    std::string app_title(std::string_view app) const {
+        if (app == "weather") return v().weather;
+        if (app == "clock") return c().app_clock;
+        if (app == "notes") return c().app_notes;
+        if (app == "calendar" || app == "tasks" || app == "shopping") return c().app_organizer;
+        if (app == "radio") return c().app_radio;
+        if (app == "today") return c().app_today;
+        if (app == "messages") return v().apps_messages;
+        if (app == "settings") return t().settings_title;
+        if (app == "display") return c().display_title;
+        return std::string(app);
+    }
+
     ActionCopy describe_action(const AssistantAction& action) const {
         char text[96];
         switch (action.type) {
@@ -1239,12 +1271,18 @@
                 std::snprintf(text, sizeof(text), action.relative ? "%+d%%" : "%d%%", action.value);
                 return {ui::IconRole::VolumeUp, ui::tokens::mint, c().action_volume_title, text};
             case AssistantActionType::Brightness:
-                std::snprintf(text, sizeof(text), "%d%%", action.value);
+                std::snprintf(text, sizeof(text), action.relative ? "%+d%%" : "%d%%", action.value);
                 return {ui::IconRole::Brightness, ui::tokens::amber, c().action_brightness_title, text};
             case AssistantActionType::Mute:
                 return {action.value != 0 ? ui::IconRole::Muted : ui::IconRole::VolumeUp,
                         ui::tokens::lilac,
                         action.value != 0 ? c().action_mute_title : c().action_unmute_title, {}};
+            case AssistantActionType::OpenApp:
+                return {ui::IconRole::Apps, ui::tokens::blue, c().action_open_title, app_title(action.app)};
+            case AssistantActionType::Restart:
+                return {ui::IconRole::Refresh, ui::tokens::ice, c().system_restart, {}};
+            case AssistantActionType::PowerOff:
+                return {ui::IconRole::Power, ui::tokens::amber, c().system_power_off, {}};
             case AssistantActionType::Message:
             case AssistantActionType::None: break;
         }
@@ -1264,7 +1302,7 @@
     // label (the speaking screen shows no text) instead of rebuilding the screen.
     void update_streamed_answer() {
         if (answer_label) lv_label_set_text(answer_label, shown_answer());
-        else if (audio.state != AudioState::Playing && audio.state != AudioState::Paused) render(UiView::Assistant);
+        else if (!speaking_screen()) render(UiView::Assistant);
     }
 
     bool can_speak_answer() const {
@@ -2262,7 +2300,7 @@
         int y = top;
         if (has_weather) {
             auto* row = centered_row(y, 14);
-            if (auto* icon = icon_view(row, weather_condition_icon(sky.condition), kWeatherIcon, tint)) {
+            if (auto* icon = icon_view(row, weather_condition_icon(sky.condition, sky.is_day), kWeatherIcon, tint)) {
                 lv_obj_set_style_opa(icon, LV_OPA_80, 0);
             }
             char temperature[16];

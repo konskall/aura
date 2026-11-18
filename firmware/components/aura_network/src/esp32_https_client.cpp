@@ -18,6 +18,8 @@ constexpr const char* kTag = "aura_cloud";
 // A read waits at most this long, so a cancel or the request's own deadline
 // takes effect soon even while the service is silent.
 constexpr int kReadTimeoutMs = 5000;
+// A connection that served a request this recently needs no warming.
+constexpr std::int64_t kFreshMs = 20000;
 
 std::int64_t now_ms() { return esp_timer_get_time() / 1000; }
 
@@ -66,6 +68,19 @@ void Esp32HttpsClient::drop(Kept& kept) {
 }
 
 HttpsResponse Esp32HttpsClient::post(const HttpsRequest& request, const HttpsChunk& on_chunk) {
+    return send(request, on_chunk, false);
+}
+
+void Esp32HttpsClient::warm(const HttpsRequest& request) {
+    const std::string origin = origin_of(request.url);
+    const std::int64_t now = now_ms();
+    for (const auto& candidate : kept_) {
+        if (candidate.client != nullptr && candidate.origin == origin && now - candidate.used_ms < kFreshMs) return;
+    }
+    send(request, {}, true);
+}
+
+HttpsResponse Esp32HttpsClient::send(const HttpsRequest& request, const HttpsChunk& on_chunk, bool head) {
     cancelled_.store(false);
     if (request.url.rfind("https://", 0) != 0) {
         HttpsResponse response;
@@ -84,17 +99,17 @@ HttpsResponse Esp32HttpsClient::post(const HttpsRequest& request, const HttpsChu
         drop(*kept);
     }
     bool transport_failed = false;
-    HttpsResponse response = exchange(request, on_chunk, *kept, origin, reuse, transport_failed);
+    HttpsResponse response = exchange(request, on_chunk, *kept, origin, reuse, head, transport_failed);
     // A kept connection the server closed meanwhile fails before any answer
     // (nothing was streamed): the request goes again, once, on a new one.
     if (transport_failed && reuse && !cancelled_.load()) {
-        response = exchange(request, on_chunk, *kept, origin, false, transport_failed);
+        response = exchange(request, on_chunk, *kept, origin, false, head, transport_failed);
     }
     return response;
 }
 
 HttpsResponse Esp32HttpsClient::exchange(const HttpsRequest& request, const HttpsChunk& on_chunk, Kept& kept,
-                                         const std::string& origin, bool reuse, bool& transport_failed) {
+                                         const std::string& origin, bool reuse, bool head, bool& transport_failed) {
     HttpsResponse response;
     transport_failed = false;
     esp_http_client_handle_t client = nullptr;
@@ -106,13 +121,13 @@ HttpsResponse Esp32HttpsClient::exchange(const HttpsRequest& request, const Http
             response.error = "NETWORK";
             return response;
         }
-        esp_http_client_set_method(client, HTTP_METHOD_POST);
+        esp_http_client_set_method(client, head ? HTTP_METHOD_HEAD : HTTP_METHOD_POST);
         esp_http_client_set_timeout_ms(client, kReadTimeoutMs);
     } else {
         drop(kept);
         esp_http_client_config_t config{};
         config.url = request.url.c_str();
-        config.method = HTTP_METHOD_POST;
+        config.method = head ? HTTP_METHOD_HEAD : HTTP_METHOD_POST;
         config.timeout_ms = kReadTimeoutMs;
         config.crt_bundle_attach = esp_crt_bundle_attach;
         config.buffer_size = 4096;
@@ -150,13 +165,14 @@ HttpsResponse Esp32HttpsClient::exchange(const HttpsRequest& request, const Http
         ram.sample();
         for (const auto& header : request.headers) esp_http_client_delete_header(client, header.name.c_str());
         if (!whole || error != nullptr) drop(kept);
+        else kept.used_ms = now_ms();
         if (error != nullptr && response.error.empty()) response.error = error;
         if (error != nullptr && !on_chunk) response.body.clear();
         const auto since = [started](std::int64_t at) { return static_cast<long long>(at < 0 ? -1 : at - started); };
         ESP_LOGI(kTag,
-                 "https POST %s%s -> %d%s%s, sent %u of %u, got %u bytes; open %lld, sent %lld, headers %lld, "
+                 "https %s %s%s -> %d%s%s, sent %u of %u, got %u bytes; open %lld, sent %lld, headers %lld, "
                  "total %lld ms; internal %u KiB, DMA block %u KiB",
-                 shown_url(request.url).c_str(), reuse ? " (kept)" : "", response.status,
+                 head ? "HEAD" : "POST", shown_url(request.url).c_str(), reuse ? " (kept)" : "", response.status,
                  error != nullptr ? " " : "", error != nullptr ? error : "", static_cast<unsigned>(sent),
                  static_cast<unsigned>(request.body.size()), static_cast<unsigned>(received), since(opened),
                  since(uploaded), since(answered), static_cast<long long>(now_ms() - started), ram.free_kib,
@@ -186,6 +202,7 @@ HttpsResponse Esp32HttpsClient::exchange(const HttpsRequest& request, const Http
     }
     answered = now_ms();
     response.status = esp_http_client_get_status_code(client);
+    if (head) return finish(nullptr, true);
     char buffer[2048];
     for (;;) {
         if (cancelled_.load()) {

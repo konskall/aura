@@ -219,7 +219,14 @@ void AuraUi::apply_fuel(const FuelPriceSnapshot& snapshot) {
 void AuraUi::apply_assistant_extras(const AssistantExtras& extras) {
     auto& self = *impl_;
     if (extras.sequence == self.extras.sequence) return;
+    const bool was_speaking = self.speaking_screen();
+    const bool voice_changed = extras.voice_on != self.extras.voice_on;
     self.extras = extras;
+    // The voice went on or off with the same screen in view: nothing to build again.
+    if (voice_changed && self.current_view == UiView::Assistant && self.snapshot.state == AssistantState::Responding &&
+        was_speaking == self.speaking_screen()) {
+        return;
+    }
     if (self.current_view == UiView::Assistant || self.current_view == UiView::ConversationHistory ||
         self.current_view == UiView::Launcher || self.current_view == UiView::Battery ||
         self.current_view == UiView::Briefing) {
@@ -250,6 +257,21 @@ void AuraUi::open_organizer(OrganizerKind kind) {
     impl_->organizer_kind = kind;
     impl_->navigation.reset();
     impl_->navigate(UiView::Calendar);
+}
+
+bool AuraUi::open_app(std::string_view app) {
+    if (!assistant_app_known(app)) return false;
+    if (app == "tasks" || app == "shopping" || app == "calendar") {
+        open_organizer(app == "tasks" ? OrganizerKind::Task : app == "shopping" ? OrganizerKind::Shopping
+                                                                                : OrganizerKind::Event);
+        return true;
+    }
+    const UiView view = Impl::app_view(app);
+    show_from_home(view);
+    // What opening them from the launcher asks for: a fresh forecast, today's prices.
+    if (view == UiView::Weather && impl_->callbacks.on_weather_open) impl_->callbacks.on_weather_open();
+    if (view == UiView::Briefing && impl_->callbacks.on_briefing_open) impl_->callbacks.on_briefing_open();
+    return true;
 }
 
 void AuraUi::open_note(std::uint32_t id) {

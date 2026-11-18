@@ -53,7 +53,9 @@ bool only_phrase(const Words& words, std::initializer_list<std::string_view> phr
 bool has_request_verb(const Words& words) {
     return folded_has_word(words, {"βαλε", "βαλεισ", "κανε", "κανεισ", "ρυθμισε", "ρυθμισεισ", "χαμηλωσε",
                                    "χαμηλωσεισ", "ανεβασε", "ανεβασεισ", "δυναμωσε", "αλλαξε", "θεσε",
-                                   "ενεργοποιησε", "set", "make", "turn", "change", "lower", "raise", "put"});
+                                   "ενεργοποιησε", "αυξησε", "αυξησεισ", "μειωσε", "μειωσεισ", "κατεβασε",
+                                   "κατεβασεισ", "set", "make", "turn", "change", "lower", "raise", "put",
+                                   "increase", "decrease", "reduce"});
 }
 
 // "ένταση στο 40", "σίγαση": the setting alone, with numbers and filler.
@@ -222,10 +224,85 @@ int volume_step(const Words& words) {
     return 0;
 }
 
+constexpr int kBrightnessStep = 20;
+
+// "Αύξησε τη φωτεινότητα", "κάνε την οθόνη πιο φωτεινή": one step up or down; 0
+// when the words ask for no step.
+int brightness_step(const Words& words) {
+    const bool named = folded_has_word_prefix(words, {"φωτεινοτητ"}) || folded_has_word(words, {"brightness"});
+    const bool turn = folded_has_word(words, {"turn"});
+    const bool up = folded_has_word(words, {"αυξησε", "αυξησεισ", "ανεβασε", "ανεβασεισ", "δυναμωσε", "δυναμωσεισ",
+                                            "raise", "increase"}) ||
+                    (turn && folded_has_word(words, {"up"}));
+    const bool down = folded_has_word(words, {"μειωσε", "μειωσεισ", "χαμηλωσε", "χαμηλωσεισ", "κατεβασε", "κατεβασεισ",
+                                              "lower", "decrease", "reduce", "dim"}) ||
+                      (turn && folded_has_word(words, {"down"}));
+    if (named && up != down) return up ? kBrightnessStep : -kBrightnessStep;
+    const std::initializer_list<std::string_view> screen{"κανε", "κανεισ", "την", "τη", "η", "οθονη", "λιγο", "make",
+                                                         "the", "screen", "a", "little", "bit"};
+    if (only_phrase(words, {"πιο φωτεινη", "πιο φωτεινα", "brighter"}, screen)) return kBrightnessStep;
+    if (only_phrase(words, {"πιο σκοτεινη", "πιο σκοτεινα", "dimmer", "darker"}, screen)) return -kBrightnessStep;
+    return 0;
+}
+
+// What may stand beside a command for the device itself ("Μπορείς να κάνεις
+// επανεκκίνηση στη συσκευή;"). Any other word makes it a sentence for the
+// assistant: "τι κάνει η επανεκκίνηση", "στο κινητό μου".
+bool device_request(const Words& words, std::initializer_list<std::string_view> own_words) {
+    return std::all_of(words.begin(), words.end(), [&](const std::string& word) {
+        return filler_word(word) || is_one_of(word, own_words) ||
+               is_one_of(word, {"κανε", "κανεισ", "μπορεισ", "να", "θελω", "ξανα", "τη", "την", "το", "τον", "στη",
+                                "στην", "στο", "σου", "εαυτο", "συσκευη", "συσκευησ", "the", "this", "your", "device",
+                                "yourself", "can", "could", "would", "you"});
+    });
+}
+
+bool asks_restart(const Words& words) {
+    const std::initializer_list<std::string_view> restart{"επανεκκινηση", "επανεκκινησε", "επανεκκινησεισ",
+                                                          "επανεκκινησου", "restart", "reboot"};
+    return folded_has_word(words, restart) && device_request(words, restart);
+}
+
+bool asks_power_off(const Words& words) {
+    if (!device_request(words, {"απενεργοποιησου", "απενεργοποιηση", "απενεργοποιησε", "απενεργοποιησεισ", "κλεισου",
+                                "σβησου", "κλεισε", "κλεισεισ", "σβησε", "σβησεισ", "turn", "switch", "shut", "power",
+                                "down", "off", "shutdown", "poweroff"})) {
+        return false;
+    }
+    const bool itself = folded_has_word(words, {"απενεργοποιησου", "απενεργοποιηση", "κλεισου", "σβησου", "shutdown",
+                                                "poweroff"});
+    const bool device = folded_has_word(words, {"συσκευη", "συσκευησ", "εαυτο", "device", "yourself"});
+    const bool closes = folded_has_word(words, {"απενεργοποιησε", "απενεργοποιησεισ", "κλεισε", "κλεισεισ", "σβησε",
+                                                "σβησεισ"});
+    const bool off = folded_has_word(words, {"off"});
+    const bool english = (folded_has_word(words, {"power"}) && off) ||
+                         (folded_has_word(words, {"shut"}) && folded_has_word(words, {"down"})) ||
+                         (folded_has_word(words, {"turn", "switch"}) && off && device);
+    return itself || (closes && device) || english;
+}
+
+// "Άνοιξε τις ρυθμίσεις": a verb, the app's name and nothing that makes it
+// another request ("Show me the shower settings").
+bool opens_only(const Words& words, std::initializer_list<std::string_view> names) {
+    bool named = false;
+    for (const auto& word : words) {
+        if (is_one_of(word, names)) {
+            named = true;
+        } else if (!filler_word(word) &&
+                   !is_one_of(word, {"ανοιξε", "ανοιξεισ", "δειξε", "δειξεισ", "πηγαινε", "παμε", "open", "show", "go",
+                                     "to", "the", "my", "me", "το", "τα", "τη", "την", "τον", "τισ", "στο", "στα",
+                                     "στη", "στην", "στον", "στισ", "σε", "να", "μπορεισ"})) {
+            return false;
+        }
+    }
+    return named;
+}
+
 bool parse_clock(const std::string& text, int& hour, int& minute) {
     for (std::size_t index = 0; index + 3 < text.size(); ++index) {
         if (!std::isdigit(static_cast<unsigned char>(text[index]))) continue;
-        std::size_t colon = text.find(':', index);
+        // Whisper writes a time as 7:30 or as 7.30.
+        std::size_t colon = text.find_first_of(":.", index);
         if (colon == std::string::npos || colon > index + 2 || colon + 2 >= text.size()) continue;
         std::size_t end = colon + 1;
         while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) ++end;
@@ -241,6 +318,38 @@ bool parse_clock(const std::string& text, int& hour, int& minute) {
         }
     }
     return false;
+}
+
+// The hour said after "στις", "at" or "for"; -1 when the word is none.
+int hour_word(const std::string& word) {
+    if (all_digits(word)) return word.size() <= 2 && std::atoi(word.c_str()) <= 23 ? std::atoi(word.c_str()) : -1;
+    const int value = number_word(word);
+    return value >= 1 && value <= 12 ? value : -1;
+}
+
+// An alarm's time: "07:30", "7.30", "στις 7", "στις εφτά και μισή", "στις οχτώ
+// παρά τέταρτο", "8 το βράδυ", "at 7 pm". False when no time is said.
+bool alarm_time(const std::string& clean, const Words& words, int& hour, int& minute) {
+    if (!parse_clock(clean, hour, minute)) {
+        std::size_t at = words.size();
+        for (std::size_t index = 0; index + 1 < words.size() && at == words.size(); ++index) {
+            if (is_one_of(words[index], {"στισ", "at", "for"}) && hour_word(words[index + 1]) >= 0) at = index + 1;
+        }
+        if (at == words.size()) return false;
+        hour = hour_word(words[at]);
+        minute = 0;
+        if (at + 2 < words.size() && words[at + 1] == "και") {
+            if (words[at + 2] == "μιση") minute = 30;
+            else if (words[at + 2] == "τεταρτο") minute = 15;
+        } else if (at + 2 < words.size() && words[at + 1] == "παρα" && words[at + 2] == "τεταρτο") {
+            hour = (hour + 23) % 24;
+            minute = 45;
+        }
+    }
+    if (folded_has_word(words, {"βραδυ", "απογευμα", "pm"}) && hour < 12) hour += 12;
+    else if (folded_has_word(words, {"μεσημερι"}) && hour < 6) hour += 12;
+    else if (folded_has_word(words, {"πρωι", "am"}) && hour == 12) hour = 0;
+    return true;
 }
 
 OfflineCommand action(AssistantActionType type) {
@@ -273,7 +382,17 @@ OfflineCommand parse_offline_command(const std::string& text) {
         return command;
     }
 
-    const bool open = folded_has_word(words, {"ανοιξε", "ανοιξεισ", "δειξε", "δειξεισ", "πηγαινε", "open", "show"});
+    if (asks_restart(words)) {
+        command.kind = OfflineCommandKind::Restart;
+        return command;
+    }
+    if (asks_power_off(words)) {
+        command.kind = OfflineCommandKind::PowerOff;
+        return command;
+    }
+
+    const bool open = folded_has_word(words, {"ανοιξε", "ανοιξεισ", "δειξε", "δειξεισ", "πηγαινε", "παμε", "open",
+                                              "show"});
     if (open && ((folded_has_word(words, {"λιστα"}) && folded_has_word_prefix(words, {"αγορ"})) ||
                  folded_has_word_prefix(words, {"ψων"}) || folded_has_word(words, {"shopping", "groceries"}))) {
         command.kind = OfflineCommandKind::OpenShopping;
@@ -305,6 +424,26 @@ OfflineCommand parse_offline_command(const std::string& text) {
     if (open && (folded_has_word_prefix(words, {"καιρ"}) || folded_has_word(words, {"weather"}))) {
         command.kind = OfflineCommandKind::OpenWeather;
         return command;
+    }
+    if (open) {
+        struct App { OfflineCommandKind kind; std::initializer_list<std::string_view> names; };
+        const App apps[]{
+            {OfflineCommandKind::OpenToday, {"σημερα", "today"}},
+            {OfflineCommandKind::OpenSettings, {"ρυθμισεισ", "settings"}},
+            {OfflineCommandKind::OpenMessages, {"μηνυματα", "messages", "aoraton", "αορατον"}},
+            {OfflineCommandKind::OpenPhotos, {"φωτογραφιεσ", "photos", "pictures", "gallery"}},
+            {OfflineCommandKind::OpenHome, {"αρχικη", "home"}},
+            {OfflineCommandKind::OpenApps, {"μενου", "εφαρμογεσ", "menu", "apps"}},
+            {OfflineCommandKind::OpenBattery, {"μπαταρια", "battery"}},
+            {OfflineCommandKind::OpenWifi, {"wifi", "wi", "fi"}},
+            {OfflineCommandKind::OpenFiles, {"μεταφορα", "αρχειων", "αρχεια", "files", "transfer"}},
+        };
+        for (const auto& app : apps) {
+            if (opens_only(words, app.names)) {
+                command.kind = app.kind;
+                return command;
+            }
+        }
     }
 
     // Mute and unmute only on a request ("Κάνε σίγαση", "σίγασε", "mute"), never
@@ -349,6 +488,12 @@ OfflineCommand parse_offline_command(const std::string& text) {
             return command;
         }
     }
+    if (const int step = brightness_step(words); step != 0 && first_number(folded, 0, 100000) < 0) {
+        command = action(AssistantActionType::Brightness);
+        command.action.value = step;
+        command.action.relative = true;
+        return command;
+    }
 
     if ((folded_has_word_prefix(words, {"χρονομετρ"}) || folded_has_word(words, {"timer"})) &&
         folded_has_word(words, {"βαλε", "βαλεισ", "ξεκινα", "ξεκινησε", "start", "set"})) {
@@ -359,11 +504,13 @@ OfflineCommand parse_offline_command(const std::string& text) {
             return command;
         }
     }
-    if ((folded_has_word_prefix(words, {"ξυπνητ"}) || folded_has_word(words, {"alarm"})) &&
-        folded_has_word(words, {"βαλε", "βαλεισ", "ρυθμισε", "set"})) {
+    const bool wake_me = (folded_has_word(words, {"ξυπνησε", "ξυπνησεισ"}) && folded_has_word(words, {"με"})) ||
+                         folded_contains_phrase(folded, "wake me");
+    if (wake_me || ((folded_has_word_prefix(words, {"ξυπνητ"}) || folded_has_word(words, {"alarm"})) &&
+                    folded_has_word(words, {"βαλε", "βαλεισ", "ρυθμισε", "set"}))) {
         int hour = 0;
         int minute = 0;
-        if (parse_clock(clean, hour, minute)) {
+        if (alarm_time(clean, words, hour, minute)) {
             command = action(AssistantActionType::Alarm);
             command.action.hour = hour;
             command.action.minute = minute;
@@ -393,6 +540,34 @@ OfflineCommand parse_offline_command(const std::string& text) {
         return command;
     }
     return command;
+}
+
+const char* offline_command_app(OfflineCommandKind kind) noexcept {
+    switch (kind) {
+        case OfflineCommandKind::OpenClock: return "clock";
+        case OfflineCommandKind::OpenNotes: return "notes";
+        case OfflineCommandKind::OpenCalendar: return "calendar";
+        case OfflineCommandKind::OpenTasks: return "tasks";
+        case OfflineCommandKind::OpenShopping: return "shopping";
+        case OfflineCommandKind::OpenRadio: return "radio";
+        case OfflineCommandKind::OpenWeather: return "weather";
+        case OfflineCommandKind::OpenToday: return "today";
+        case OfflineCommandKind::OpenSettings: return "settings";
+        case OfflineCommandKind::OpenMessages: return "messages";
+        case OfflineCommandKind::OpenPhotos: return "photos";
+        case OfflineCommandKind::OpenHome: return "home";
+        case OfflineCommandKind::OpenApps: return "apps";
+        case OfflineCommandKind::OpenBattery: return "battery";
+        case OfflineCommandKind::OpenWifi: return "wifi";
+        case OfflineCommandKind::OpenFiles: return "files";
+        case OfflineCommandKind::None:
+        case OfflineCommandKind::ShowTime:
+        case OfflineCommandKind::ShowBattery:
+        case OfflineCommandKind::Restart:
+        case OfflineCommandKind::PowerOff:
+        case OfflineCommandKind::ConfirmAction: break;
+    }
+    return nullptr;
 }
 
 }  // namespace aura

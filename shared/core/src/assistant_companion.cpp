@@ -176,10 +176,53 @@ std::optional<AssistantAction> validate_action(const FlatJsonObject& object) {
         if (action.text.empty()) return std::nullopt;
         return action;
     }
+    if (*type == "volume" || *type == "brightness") {
+        const bool volume = *type == "volume";
+        action.type = volume ? AssistantActionType::Volume : AssistantActionType::Brightness;
+        const auto value = object.integer("value");
+        const auto step = object.integer("step");
+        if (value.has_value() == step.has_value()) return std::nullopt;
+        if (value) {
+            // Οθόνη goes no lower than 5%: a dark screen could not be read to undo it.
+            if (*value < (volume ? 0 : 5) || *value > 100) return std::nullopt;
+            action.value = static_cast<int>(*value);
+            return action;
+        }
+        if (*step == 0 || *step < -100 || *step > 100) return std::nullopt;
+        action.value = static_cast<int>(*step);
+        action.relative = true;
+        return action;
+    }
+    if (*type == "mute") {
+        const auto on = object.boolean("on");
+        if (!on) return std::nullopt;
+        action.type = AssistantActionType::Mute;
+        action.value = *on ? 1 : 0;
+        return action;
+    }
+    if (*type == "open") {
+        const auto app = object.string("app");
+        if (!app || !assistant_app_known(*app)) return std::nullopt;
+        action.type = AssistantActionType::OpenApp;
+        action.app = *app;
+        return action;
+    }
+    if (*type == "restart") {
+        action.type = AssistantActionType::Restart;
+        return action;
+    }
+    if (*type == "power_off") {
+        action.type = AssistantActionType::PowerOff;
+        return action;
+    }
     return std::nullopt;
 }
 
 }  // namespace
+
+bool assistant_app_known(std::string_view app) noexcept {
+    return std::find(kAssistantApps.begin(), kAssistantApps.end(), app) != kAssistantApps.end();
+}
 
 void ConversationMemory::record(const std::string& question, const std::string& answer, std::uint64_t now_ms) {
     if (!active(now_ms)) turns_.clear();
@@ -452,6 +495,9 @@ const char* assistant_action_name(AssistantActionType type) noexcept {
         case AssistantActionType::Brightness: return "brightness";
         case AssistantActionType::Mute: return "mute";
         case AssistantActionType::Message: return "message";
+        case AssistantActionType::OpenApp: return "open";
+        case AssistantActionType::Restart: return "restart";
+        case AssistantActionType::PowerOff: return "power_off";
     }
     return "none";
 }

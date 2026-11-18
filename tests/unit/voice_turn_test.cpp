@@ -40,6 +40,8 @@ struct FakeSpeech final : aura::ISpeechService {
     std::vector<std::string> transcribed_languages;
     std::vector<std::string> spoken;
     std::string voice;
+    std::vector<bool> prepared;
+    void prepare(bool with_voice) override { prepared.push_back(with_voice); }
     bool stt_available() const override { return true; }
     bool tts_available(const std::string&) const override { return tts; }
     std::future<aura::TranscriptResult> transcribe(std::vector<std::uint8_t>, std::string language) override {
@@ -127,6 +129,9 @@ int main() {
 
     turn.begin_listening();
     expect(controller.snapshot().state == AssistantState::Listening, "the talk target starts listening");
+    // While the owner speaks the connections open: a TLS handshake took 0.7-1.5 s
+    // on the board, each, after the question (2026-11-16).
+    expect(speech.prepared.size() == 1 && speech.prepared[0], "listening readies the connections, the voice's too");
     turn.finish_listening(aura::make_wav(std::vector<std::int16_t>(8000, 0), 16000));
     expect(controller.snapshot().state == AssistantState::Transcribing && speech.transcribed_languages.size() == 1 &&
                speech.transcribed_languages[0] == "el",
@@ -519,6 +524,10 @@ int main() {
     provider.reply = {true, "Είναι 10:00. Κάνει ζέστη σήμερα.", {}};
     spoken_at = speech.spoken.size();
     turn.set_spoken_replies(false);
+    turn.begin_listening();
+    expect(!speech.prepared.back(), "with spoken answers off the voice's connection is left alone");
+    turn.cancel();
+    controller.dispatch({aura::EventType::Reset});
     turn.ask("Τι ώρα είναι;");
     provider.requests.back().stream->publish_delta("10:00. Κάνει");
     settle(turn);
@@ -571,6 +580,50 @@ int main() {
     action = {};
     action.type = aura::AssistantActionType::Message;
     expect(!aura::execute_assistant_action(action, targets()), "a message is not the executor's");
+
+    // The read-aloud button (Σήμερα, an answer): spoken in pieces with no answer
+    // around it, and nothing listens after it.
+    {
+        aura::AssistantController idle;
+        FakeSpeech reader_speech;
+        FakeProvider reader_provider;
+        FakeAudio reader_audio;
+        aura::VoiceAssistantTurn reader(idle, reader_speech, reader_provider, reader_audio);
+        int listened = 0;
+        reader.set_follow_up(true);
+        reader.set_listen_again([&listened] { ++listened; });
+        reader.set_spoken_replies(false);
+        reader.read_aloud("Καλησπέρα. Σήμερα έχει ήλιο. Το πετρέλαιο ανέβηκε.");
+        settle(reader);
+        expect(reader.speaking() && reader_audio.played == 1 && reader_speech.spoken.size() == 2 &&
+                   reader_speech.spoken[0] == "Καλησπέρα." &&
+                   reader_speech.spoken[1] == "Σήμερα έχει ήλιο. Το πετρέλαιο ανέβηκε.",
+               "the text is spoken in pieces, even with spoken answers off");
+        reader_audio.state = aura::AudioState::Playing;
+        settle(reader);
+        reader_audio.state = aura::AudioState::Ready;
+        settle(reader);
+        expect(reader.speaking() && reader_audio.played == 2, "the next piece follows");
+        reader_audio.state = aura::AudioState::Playing;
+        settle(reader);
+        reader_audio.state = aura::AudioState::Ready;
+        settle(reader);
+        expect(!reader.speaking() && listened == 0, "at its end nothing listens");
+        expect(idle.snapshot().state == AssistantState::Idle, "and no answer was ever open");
+
+        reader.read_aloud("Μία πρόταση. Και δεύτερη.");
+        settle(reader);
+        expect(reader.speaking(), "it can be read again");
+        reader.stop_speaking();
+        const auto played = reader_audio.played;
+        settle(reader);
+        expect(!reader.speaking() && reader_audio.played == played, "the button stops it");
+
+        reader_speech.tts = false;
+        reader.read_aloud("Χωρίς φωνή.");
+        settle(reader);
+        expect(!reader.speaking(), "without a voice nothing starts");
+    }
     std::cout << "voice_turn_test: PASS\n";
     return 0;
 }

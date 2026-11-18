@@ -16,6 +16,8 @@ namespace aura {
 namespace {
 
 constexpr const char* kGroqChatUrl = "https://api.groq.com/openai/v1/chat/completions";
+constexpr const char* kGroqModelsUrl = "https://api.groq.com/openai/v1/models";
+constexpr std::uint32_t kWarmTimeoutMs = 8000;
 constexpr const char* kGroqTranscriptionUrl = "https://api.groq.com/openai/v1/audio/transcriptions";
 constexpr const char* kTranscriptionModel = "whisper-large-v3-turbo";
 // 16 kHz, the microphone's rate: the board's speaker and microphone share one
@@ -27,6 +29,14 @@ constexpr std::size_t kMaxWavBytes = 1100000;
 constexpr std::size_t kMinWavSamples = 4800;
 constexpr std::size_t kMaxTtsTextBytes = 2000;
 constexpr std::size_t kMaxTtsAudioBytes = 2 * 1024 * 1024;
+// The voice starts once this much of it has come. Azure sends it faster than
+// it plays, but a download may stall: with 300 ms in hand one left a second of
+// silence in a sentence, and over 34 answers' pieces on the board the longest
+// pause between two reads was over a second (2026-11-18). It costs ~170 ms.
+constexpr std::size_t kVoiceLeadMs = 1200;
+// Azure's frames are 144 bytes (kAzureOutputFormat): the voice need not wait
+// behind them for the 2.9 KB the radio's largest frames need.
+constexpr std::size_t kVoiceLookahead = 3 * 144;
 constexpr std::size_t kMaxTranscriptCharacters = 600;
 
 // The languages AURA speaks, their locales and the two voice profiles
@@ -344,8 +354,62 @@ TranscriptResult transcribe_with_groq(IHttpsClient& https, const std::string& ke
     return {true, text, {}};
 }
 
-SpeechResult synthesize_with_azure(IHttpsClient& https, const std::string& key, const std::string& url,
-                                   const std::string& text, const std::string& language, const std::string& voice) {
+// Azure's voice as it downloads: decoded into a feed, and ready for the speaker
+// once kVoiceLeadMs of it has come (Azure sends it faster than it plays).
+class VoiceDownload {
+public:
+    explicit VoiceDownload(std::promise<SpeechResult>& promise) : promise_(promise) {}
+
+    bool push(std::string_view bytes) {
+        received_ += bytes.size();
+        if (received_ > kMaxTtsAudioBytes) return false;
+        decoder_.feed(reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+        return decode(false);
+    }
+
+    // The download is over, however it ended: the last bytes are decoded.
+    void end() { decode(true); }
+    bool told() const noexcept { return told_; }
+    bool heard() const noexcept { return feed_ && feed_->size() > 0; }
+
+    void tell() {
+        if (told_) return;
+        told_ = true;
+        SpeechResult result;
+        result.ok = true;
+        result.clip.format = feed_->format();
+        result.clip.feed = feed_;
+        promise_.set_value(std::move(result));
+    }
+
+    void finish() {
+        if (feed_) feed_->finish();
+    }
+
+private:
+    bool decode(bool last) {
+        while (decoder_.decode(pcm_, 1152 * 8, last) > 0) {
+            if (!feed_) feed_ = std::make_shared<PcmFeed>(AudioFormat{pcm_.sample_rate, pcm_.channels, 16});
+            const auto& format = feed_->format();
+            if (pcm_.sample_rate != format.sample_rate || pcm_.channels != format.channels) return false;
+            if (!feed_->append(pcm_.samples.data(), pcm_.samples.size())) return false;
+            pcm_.samples.clear();
+            const auto lead = std::size_t{format.sample_rate} * format.channels * kVoiceLeadMs / 1000U;
+            if (feed_->size() >= lead) tell();
+        }
+        return true;
+    }
+
+    std::promise<SpeechResult>& promise_;
+    Mp3StreamDecoder decoder_{kVoiceLookahead};
+    Mp3Pcm pcm_;
+    std::shared_ptr<PcmFeed> feed_;
+    std::size_t received_{0};
+    bool told_{false};
+};
+
+SpeechResult azure_voice(IHttpsClient& https, const std::string& key, const std::string& url, const std::string& text,
+                         const std::string& language, const std::string& voice, VoiceDownload& download) {
     const auto* locale = find_locale(language);
     if (!locale) return {false, {}, "INVALID_LANGUAGE"};
     if (voice != "athina" && voice != "nestoras") return {false, {}, "INVALID_VOICE"};
@@ -368,33 +432,29 @@ SpeechResult synthesize_with_azure(IHttpsClient& https, const std::string& key, 
     http.body = std::string("<speak version=\"1.0\" xml:lang=\"") + locale->locale + "\"><voice name=\"" +
                 (voice == "athina" ? locale->athina : locale->nestoras) + "\">" + xml_escape(said) +
                 "</voice></speak>";
-    http.max_body_bytes = kMaxTtsAudioBytes;
-    const auto response = https.post(http, {});
+    const auto response = https.post(http, [&download](std::string_view chunk) { return download.push(chunk); });
     wipe_headers(http);
+    download.end();
+    if (download.told()) return {true, {}, {}};  // playing already: it ends with what came
     if (response.status == 0) return {false, {}, transport_error(response, "TTS_UNAVAILABLE")};
     if (response.status == 401 || response.status == 403) return {false, {}, "PROVIDER_AUTH_FAILED"};
     if (response.status == 429) return {false, {}, "RATE_LIMIT"};
     if (response.status >= 500) return {false, {}, "TTS_UNAVAILABLE"};
     if (response.status < 200 || response.status >= 300) return {false, {}, "TTS_FAILED"};
-    // The MP3 becomes PCM for the speaker, fed in pieces the decoder can hold.
-    Mp3StreamDecoder decoder;
-    Mp3Pcm pcm;
-    const auto* bytes = reinterpret_cast<const std::uint8_t*>(response.body.data());
-    constexpr std::size_t kPiece = 16 * 1024;
-    for (std::size_t offset = 0; offset < response.body.size(); offset += kPiece) {
-        decoder.feed(bytes + offset, std::min(kPiece, response.body.size() - offset));
-        while (decoder.decode(pcm) > 0) {
-        }
-    }
-    while (decoder.decode(pcm, 1152 * 8, true) > 0) {
-    }
-    if (pcm.samples.empty() || pcm.sample_rate == 0 || pcm.channels == 0) return {false, {}, "TTS_FAILED"};
-    SpeechResult result;
-    result.ok = true;
-    result.clip.format.sample_rate = pcm.sample_rate;
-    result.clip.format.channels = pcm.channels;
-    result.clip.samples = std::move(pcm.samples);
-    return result;
+    if (!download.heard()) return {false, {}, "TTS_FAILED"};
+    return {true, {}, {}};
+}
+
+// Keeps `promise` once: with the voice as soon as it may start, or with why
+// there is none.
+void synthesize_with_azure(IHttpsClient& https, const std::string& key, const std::string& url,
+                           const std::string& text, const std::string& language, const std::string& voice,
+                           std::promise<SpeechResult>& promise) {
+    VoiceDownload download(promise);
+    auto outcome = azure_voice(https, key, url, text, language, voice, download);
+    if (outcome.ok) download.tell();  // shorter than the lead
+    download.finish();
+    if (!outcome.ok) promise.set_value(std::move(outcome));
 }
 
 }  // namespace
@@ -559,10 +619,38 @@ std::future<AssistantReply> CloudAssistantProvider::start_turn(TurnRequest reque
 
 void CloudAssistantProvider::cancel() { https_.cancel(); }
 
-CloudSpeechService::CloudSpeechService(IHttpsClient& https, CloudWorker& worker, CloudKeys keys)
-    : https_(https), worker_(worker), keys_(std::move(keys)), azure_url_(azure_url(keys_.azure_speech_region)) {}
+CloudSpeechService::CloudSpeechService(IHttpsClient& https, CloudWorker& worker, IHttpsClient& voice_https,
+                                       CloudWorker& voice_worker, CloudKeys keys)
+    : https_(https),
+      worker_(worker),
+      voice_https_(voice_https),
+      voice_worker_(voice_worker),
+      keys_(std::move(keys)),
+      azure_url_(azure_url(keys_.azure_speech_region)) {}
 
 CloudSpeechService::~CloudSpeechService() { wipe_cloud_keys(keys_); }
+
+void CloudSpeechService::prepare(bool voice) {
+    // A question then waits for no TLS handshake, nor its voice: 0.7-1.5 s each
+    // on the board (2026-11-16). Each connection on the worker that will use it.
+    const auto warm = [](IHttpsClient* https, std::string url, std::string header, std::string value) {
+        return [https, url = std::move(url), header = std::move(header), value = std::move(value)]() mutable {
+            HttpsRequest http;
+            http.url = std::move(url);
+            http.headers = {{std::move(header), value}};
+            http.timeout_ms = kWarmTimeoutMs;
+            https->warm(http);
+            wipe_headers(http);
+            wipe(value);
+        };
+    };
+    if (stt_available()) {
+        worker_.post(warm(&https_, kGroqModelsUrl, "Authorization", "Bearer " + keys_.groq_api_key));
+    }
+    if (voice && !keys_.azure_speech_key.empty() && !azure_url_.empty()) {
+        voice_worker_.post(warm(&voice_https_, azure_url_, "Ocp-Apim-Subscription-Key", keys_.azure_speech_key));
+    }
+}
 
 bool CloudSpeechService::stt_available() const { return !keys_.groq_api_key.empty(); }
 
@@ -589,10 +677,10 @@ std::future<TranscriptResult> CloudSpeechService::transcribe(std::vector<std::ui
 std::future<SpeechResult> CloudSpeechService::synthesize(std::string text, std::string language, std::string voice) {
     auto promise = std::make_shared<std::promise<SpeechResult>>();
     auto future = promise->get_future();
-    IHttpsClient* https = &https_;
-    worker_.post([https, key = keys_.azure_speech_key, url = azure_url_, text = std::move(text),
-                  language = std::move(language), voice = std::move(voice), promise]() mutable {
-        promise->set_value(synthesize_with_azure(*https, key, url, text, language, voice));
+    IHttpsClient* https = &voice_https_;
+    voice_worker_.post([https, key = keys_.azure_speech_key, url = azure_url_, text = std::move(text),
+                        language = std::move(language), voice = std::move(voice), promise]() mutable {
+        synthesize_with_azure(*https, key, url, text, language, voice, *promise);
         wipe(key);
     });
     return future;
