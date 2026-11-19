@@ -1,6 +1,15 @@
     PhotoSnapshot photos{};
     std::size_t photo_page{0};
     bool photo_fullscreen{false};
+    PhotoZoom photo_zoom;
+    PhotoBuffer<std::uint16_t> photo_zoom_pixels;
+    lv_image_dsc_t photo_zoom_descriptor{};
+    lv_obj_t* photo_frame{};
+    lv_obj_t* photo_zoom_image{};
+    const PhotoImage* photo_zoom_shown{nullptr};
+    bool photo_touch_moved{false};
+    int photo_touch_travel{0};
+    std::size_t photo_touch_points{0};
     std::string photo_delete_name;
     lv_image_dsc_t photo_descriptor{}, ambient_descriptor{};
     const l10n::PhotoStrings& p() const { return l10n::photo_strings(interface_language); }
@@ -41,9 +50,95 @@
     }
     static void photo_fullscreen_event(lv_event_t* event) {
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
-        if (!self->accept_action()) return;
+        // A tap only: never the end of a pinch or of a drag across the picture.
+        if (self->photo_touch_moved || !self->accept_action()) return;
         self->photo_fullscreen = !self->photo_fullscreen;
         self->render(UiView::PhotoViewer);
+    }
+
+    // ---- Zooming with two fingers (the owner, 2026-11-18) -------------------
+
+    // The picture as it is zoomed now, in the frame's own image: a plain copy to
+    // draw, where LVGL's own scaling would transform every pixel of every frame.
+    void photo_zoom_show(bool smooth) {
+        if (!photo_frame || !photos.image) return;
+        auto* picture = lv_obj_get_child(photo_frame, 0);
+        if (!photo_zoom.zoomed()) {
+            if (photo_zoom_image) lv_obj_set_hidden(photo_zoom_image, true);
+            if (picture) lv_obj_set_hidden(picture, false);
+            return;
+        }
+        const auto width = photo_zoom.frame_width();
+        const auto height = photo_zoom.frame_height();
+        const auto count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+        if (photo_zoom_pixels.size() != count && !photo_zoom_pixels.resize(count)) {
+            photo_zoom.reset();
+            return;
+        }
+        photo_zoom_render(*photos.image, photo_zoom, photo_zoom_pixels.data(), smooth);
+        photo_zoom_descriptor = {};
+        photo_zoom_descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
+        photo_zoom_descriptor.header.cf = LV_COLOR_FORMAT_RGB565;
+        photo_zoom_descriptor.header.w = static_cast<std::uint32_t>(width);
+        photo_zoom_descriptor.header.h = static_cast<std::uint32_t>(height);
+        photo_zoom_descriptor.header.stride = static_cast<std::uint32_t>(width) * 2U;
+        photo_zoom_descriptor.data_size = static_cast<std::uint32_t>(count * 2U);
+        photo_zoom_descriptor.data = reinterpret_cast<const std::uint8_t*>(photo_zoom_pixels.data());
+        if (!photo_zoom_image) {
+            photo_zoom_image = lv_image_create(photo_frame);
+            lv_obj_set_pos(photo_zoom_image, 0, 0);
+            lv_obj_set_clickable(photo_zoom_image, false);
+        }
+        lv_image_cache_drop(&photo_zoom_descriptor);
+        lv_image_set_src(photo_zoom_image, &photo_zoom_descriptor);
+        lv_obj_set_hidden(photo_zoom_image, false);
+        if (picture && picture != photo_zoom_image) lv_obj_set_hidden(picture, true);
+        lv_obj_invalidate(photo_zoom_image);
+    }
+
+    // Each read of the fingers: two of them on an open photo zoom it.
+    void photo_touch(const TouchPoint* points, std::size_t count) {
+        if (current_view != UiView::PhotoViewer || !photo_frame) return;
+        if (count >= 2U) {
+            lv_area_t area{};
+            lv_obj_get_coords(photo_frame, &area);
+            const auto before = photo_zoom.zoom();
+            const auto center_x = photo_zoom.center_x();
+            const auto center_y = photo_zoom.center_y();
+            photo_zoom.pinch(static_cast<float>(points[0].x - area.x1), static_cast<float>(points[0].y - area.y1),
+                             static_cast<float>(points[1].x - area.x1), static_cast<float>(points[1].y - area.y1));
+            photo_touch_moved = true;
+            if (photo_zoom.zoom() != before || photo_zoom.center_x() != center_x || photo_zoom.center_y() != center_y) {
+                photo_zoom_show(false);
+            }
+            return;
+        }
+        if (photo_zoom.pinching()) {
+            photo_zoom.pinch_end();
+            photo_zoom_show(true);
+        }
+    }
+
+    // One finger on the picture: a drag moves a zoomed one.
+    static void photo_frame_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        const auto code = lv_event_get_code(event);
+        if (code == LV_EVENT_PRESSED) {
+            self->photo_touch_moved = false;
+            self->photo_touch_travel = 0;
+            return;
+        }
+        if (code == LV_EVENT_RELEASED) {
+            if (self->photo_zoom.zoomed() && !self->photo_zoom.pinching()) self->photo_zoom_show(true);
+            return;
+        }
+        lv_point_t step{};
+        lv_indev_get_vect(lv_indev_active(), &step);
+        self->photo_touch_travel += std::abs(step.x) + std::abs(step.y);
+        if (self->photo_touch_travel > 10) self->photo_touch_moved = true;
+        if (!self->photo_zoom.zoomed() || self->photo_zoom.pinching() || (step.x == 0 && step.y == 0)) return;
+        self->photo_zoom.pan(static_cast<float>(step.x), static_cast<float>(step.y));
+        self->photo_zoom_show(false);
     }
     static void photo_settings_event(lv_event_t* event) {
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
@@ -157,9 +252,9 @@
                   kGutter, 230, kWidth, ui::font_headline(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);
             label(content, photos.desktop ? p().desktop_hint : p().card_hint, kGutter + 8, 286, kWidth - 16,
                   ui::font_caption(), ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
-            auto* send = pill(content, f().entry, ui::ButtonTone::Primary, 24, 396, 344, nav_event);
+            // Files arrive through Αρχεία now, where File transfer lives.
+            auto* send = pill(content, fx().title, ui::ButtonTone::Primary, 24, 396, 344, files_open_event);
             lv_obj_set_height(send, 64);
-            set_target(send, UiView::FileTransfer);
             auto* refresh =
                 round_button(content, 400, 400, 56, ui::IconRole::Refresh, ui::tokens::mint, photos_refresh_event);
             ui::set_button_disabled(refresh, photos.scanning);
@@ -192,8 +287,6 @@
             ui::set_button_disabled(next, photo_page + 1 >= pages);
             y += 72;
         }
-        settings_row(list, y, f().entry, nullptr, ui::IconRole::Download, ui::tokens::mint, UiView::FileTransfer);
-        y += kRowPitch;
         auto* refresh = list_row(list, y, p().refresh, nullptr, ui::IconRole::Refresh, ui::tokens::mint);
         tappable(refresh, photos_refresh_event, 0);
         y += kRowPitch;
@@ -206,10 +299,23 @@
             header_action = true;
         }
         const int top = photo_fullscreen ? 0 : 96, height = photo_fullscreen ? 480 : 268;
+        photo_frame = nullptr;
+        photo_zoom_image = nullptr;
         if (photos.image && !photos.loading) {
             if (auto* frame = photo_image(content, *photos.image, photo_descriptor, 0, top, 480, height)) {
                 lv_obj_set_clickable(frame, true);
                 lv_obj_add_event_cb(frame, photo_fullscreen_event, LV_EVENT_CLICKED, this);
+                for (const auto code : {LV_EVENT_PRESSED, LV_EVENT_PRESSING, LV_EVENT_RELEASED})
+                    lv_obj_add_event_cb(frame, photo_frame_event, code, this);
+                // Another picture starts whole; the same one keeps its zoom.
+                if (photo_zoom_shown != photos.image.get()) {
+                    photo_zoom_shown = photos.image.get();
+                    photo_zoom.reset();
+                }
+                photo_zoom.set_frame(static_cast<int>(photos.image->width), static_cast<int>(photos.image->height), 480,
+                                     height);
+                photo_frame = frame;
+                photo_zoom_show(true);
             }
         } else {
             label(content, photos.loading ? p().loading : photo_error_text(), kGutter + 12, top + 96, kWidth - 24,

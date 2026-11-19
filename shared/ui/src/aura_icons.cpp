@@ -60,6 +60,7 @@ const lv_image_dsc_t* lucide_asset(IconRole role) noexcept {
         AURA_ICON_CASE(Ear, ear);
         AURA_ICON_CASE(Swap, arrow_left_right);
         AURA_ICON_CASE(Palette, palette);
+        AURA_ICON_CASE(Folder, folder);
         case IconRole::Count: break;
     }
     return nullptr;
@@ -104,7 +105,7 @@ const char* icon_role_name(IconRole role) noexcept {
         "navigation", "globe", "wifi-low", "wifi-medium", "visibility-off", "sparkles",
         "chevron-left", "check", "plus",
         "languages", "notebook", "sunrise", "smartphone", "phone", "phone-off", "download", "bell-ring", "moon", "hand", "flip", "ear", "swap",
-        "palette"
+        "palette", "folder"
     };
     const auto index = static_cast<std::size_t>(role);
     return index < icon_role_count() ? names[index] : "invalid";

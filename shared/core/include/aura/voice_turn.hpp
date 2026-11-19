@@ -56,6 +56,13 @@ public:
     void set_message_handler(std::function<void(const AssistantAction&)> handler) {
         message_handler_ = std::move(handler);
     }
+    // A question and its answer, once the answer is final: the host keeps them
+    // in the history the owner can read again.
+    void set_turn_recorded(std::function<void(const std::string&, const std::string&)> recorded) {
+        turn_recorded_ = std::move(recorded);
+    }
+    // A new topic: the next question comes without the last ones.
+    void forget_conversation() noexcept { memory_.clear(); }
     // Continuous conversation: once a spoken answer has been heard to its
     // end, `listen_again` starts listening for a follow-up.
     void set_follow_up(bool enabled) noexcept { follow_up_ = enabled; }
@@ -103,6 +110,7 @@ private:
     std::function<bool(const std::string&)> local_;
     std::function<void(const AssistantAction&)> action_handler_;
     std::function<void(const AssistantAction&)> message_handler_;
+    std::function<void(const std::string&, const std::string&)> turn_recorded_;
     std::function<void()> listen_again_;
     bool follow_up_{false};
     // The spoken answer: handed to the audio service, heard sounding, and

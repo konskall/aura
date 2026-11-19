@@ -4,6 +4,9 @@ idf_component_register(
     SRCS
         "${AURA_ROOT}/shared/core/src/app_layout.cpp"
         "${AURA_ROOT}/shared/core/src/photos.cpp"
+        "${AURA_ROOT}/shared/core/src/photo_zoom.cpp"
+        "${AURA_ROOT}/shared/core/src/file_browser.cpp"
+        "${AURA_ROOT}/shared/core/src/conversation_log.cpp"
         "${AURA_ROOT}/shared/core/src/file_transfer.cpp"
         "${AURA_ROOT}/shared/third_party/qrcodegen/qrcodegen.c"
         "${AURA_ROOT}/shared/core/src/photo_decoder.cpp"
@@ -54,6 +57,7 @@ idf_component_register(
         "${AURA_ROOT}/shared/core/src/wifi.cpp"
         "${AURA_ROOT}/shared/localization/src/companion_strings.cpp"
         "${AURA_ROOT}/shared/localization/src/photo_strings.cpp"
+        "${AURA_ROOT}/shared/localization/src/file_strings.cpp"
         "${AURA_ROOT}/shared/localization/src/transfer_strings.cpp"
         "${AURA_ROOT}/shared/localization/src/transfer_page.cpp"
         "${AURA_ROOT}/shared/localization/src/strings.cpp"

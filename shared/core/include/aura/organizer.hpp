@@ -87,6 +87,21 @@ private:
 // minutes away. Late in the evening that is early tomorrow.
 std::int64_t organizer_default_start(std::int64_t now_minute) noexcept;
 
+// A month as the calendar lays it out, Monday first. A month outside 1-12
+// carries into the year before or after it.
+struct CalendarMonth {
+    int year{1970};
+    int month{1};
+    int days{31};
+    int first_column{3};  // the 1st's column: 0 is Monday, 6 Sunday
+};
+CalendarMonth calendar_month(int year, int month) noexcept;
+// The month's days that hold an appointment: bit n for day n. An appointment
+// that runs past midnight marks each day it touches.
+std::uint32_t organizer_event_days(const OrganizerSnapshot& snapshot, int year, int month) noexcept;
+// The appointments of one day, in time order.
+std::vector<OrganizerEvent> organizer_events_on(const OrganizerSnapshot& snapshot, int year, int month, int day);
+
 bool question_mentions_organizer(const std::string& question);
 bool question_mentions_shopping(const std::string& question);
 

@@ -169,6 +169,7 @@ CompanionRuntime::CompanionRuntime(CompanionContext context) : ctx_(std::move(co
     photos_ = std::make_unique<PhotoRuntime>(ctx_.store_dir, ctx_.deterministic);
     transfer_ = std::make_unique<FileTransferRuntime>(ctx_.store_dir, ctx_.deterministic, std::string{}, 0,
                                                       ctx_.aoraton_link);
+    files_ = std::make_unique<FileBrowserRuntime>(ctx_.store_dir, ctx_.deterministic);
     capabilities_.imu = true;          // simulated through the control panel
     // A normal interactive run exposes pairing only when a real platform
     // transport exists. Deterministic evidence retains its labelled DEMO path.
@@ -297,8 +298,14 @@ void CompanionRuntime::install(AuraUiCallbacks& callbacks) {
     };
     callbacks.on_conversation_clear = [this] {
         memory_.clear();
+        conversation_log_.clear();
         extras_.memory_turns = 0;
         extras_.conversation_history.clear();
+        bump_extras();
+    };
+    callbacks.on_conversation_new = [this] {
+        memory_.clear();
+        extras_.memory_turns = 0;
         bump_extras();
     };
     callbacks.on_language_changed = [this](InterfaceLanguage language) { set_language(language); };
@@ -366,6 +373,9 @@ void CompanionRuntime::install(AuraUiCallbacks& callbacks) {
     };
     callbacks.on_display_settings = [this](const DisplaySettings& settings) { display_.set_settings(settings); };
     callbacks.on_photos_refresh = [this] { photos().refresh(); };
+    callbacks.on_files_open = [this](const std::string& path) { return files().open(path); };
+    callbacks.on_files_refresh = [this] { files().refresh(); };
+    callbacks.on_files_delete = [this](const std::string& path) { return files().erase(path); };
     callbacks.on_transfer_start = [this] { return transfer().start(); };
     callbacks.on_transfer_stop = [this] { transfer().stop(); };
     callbacks.on_transfer_browser = [this] { transfer().open_browser(); };
@@ -458,7 +468,6 @@ TurnRequest CompanionRuntime::turn_request(std::string prompt, bool private_mess
     request.history = private_message ? std::vector<ConversationTurn>{} : memory_.recent(now_ms());
     if (!private_message && extras_.memory_turns != request.history.size()) {
         extras_.memory_turns = request.history.size();
-        extras_.conversation_history = request.history;
         bump_extras();
     }
     DeviceContextInput input;
@@ -486,9 +495,7 @@ void CompanionRuntime::finish_local_reply(const std::string& text, std::optional
     auto& controller = *ctx_.controller;
     const std::string question = controller.snapshot().user_text;
     controller.dispatch({EventType::FinalResult, text});
-    memory_.record(question, text, now_ms());
-    extras_.conversation_history = memory_.recent(now_ms());
-    extras_.memory_turns = extras_.conversation_history.size();
+    remember_turn(question, text);
     extras_.pending_action = action;
     bump_extras();
     if (action) controller.dispatch({EventType::RequireConfirmation, assistant_action_name(action->type)});
@@ -502,6 +509,13 @@ void CompanionRuntime::finish_local_reply(const std::string& text, std::optional
     assistant_reply_final_ = true;
     voice_turn_ = false;
     streamed_spoken_prefix_.clear();
+}
+
+void CompanionRuntime::remember_turn(const std::string& question, const std::string& answer) {
+    memory_.record(question, answer, now_ms());
+    conversation_log_.add(question, answer, now_minute());
+    extras_.conversation_history = conversation_log_.turns();
+    extras_.memory_turns = memory_.recent(now_ms()).size();
 }
 
 void CompanionRuntime::answer_locally(const std::string& text) { finish_local_reply(text); }
@@ -611,9 +625,7 @@ void CompanionRuntime::deliver_reply(const std::string& raw) {
     std::string text = answer_display_text(parsed, strings.action_question, strings.action_refused);
     if (text.empty()) text = strings.empty_answer;
     controller.dispatch({EventType::FinalResult, text});
-    if (!private_message_turn_) memory_.record(question, text, now_ms());
-    extras_.conversation_history = memory_.recent(now_ms());
-    extras_.memory_turns = extras_.conversation_history.size();
+    if (!private_message_turn_) remember_turn(question, text);
     std::optional<AssistantAction> action = parsed.action;
     // A message is confirmed on the Aoraton confirmation screen itself.
     if (action && action->type == AssistantActionType::Message) {
@@ -1107,7 +1119,8 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
                           job_ != VoiceJob::None || audio_state == AudioState::Playing ||
                           phone_.snapshot().incoming_call || ota_.snapshot().state == UpdateState::Downloading ||
                           photos().snapshot().playing || transfer_state.state == TransferState::Receiving ||
-                          (ctx_.ui->view() == UiView::FileTransfer && (transfer_state.state == TransferState::Ready || transfer_state.state == TransferState::Starting));
+                          ((ctx_.ui->view() == UiView::FileTransfer || ctx_.ui->view() == UiView::AoratonSignIn) &&
+                           (transfer_state.state == TransferState::Ready || transfer_state.state == TransferState::Starting));
         display_.hold_awake(busy, now);
         display_.tick(now);
         const bool dark = display_.snapshot().mode == DisplayMode::AlwaysOn ||
@@ -1150,8 +1163,12 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
     if (extras_.memory_turns > 0 && !memory_.active(now)) {
         memory_.clear();
         extras_.memory_turns = 0;
-        extras_.conversation_history.clear();
         bump_extras();
+    }
+    files_->poll();
+    if (files().snapshot().erased != files_erased_) {
+        files_erased_ = files().snapshot().erased;
+        photos().external_removal();
     }
     if (!ctx_.deterministic) save_stores();
 }
@@ -1168,6 +1185,7 @@ void CompanionRuntime::apply() {
     ui.apply_display(display_.snapshot());
     ui.apply_photos(photos().snapshot());
     ui.apply_transfer(transfer().session().snapshot());
+    ui.apply_files(files().snapshot());
     ui.apply_clock(clock_.snapshot());
     ui.apply_notes(notes_.snapshot());
     ui.apply_organizer(organizer_.snapshot());
@@ -1198,7 +1216,7 @@ void CompanionRuntime::soft_restart() {
     memory_.clear();
     extras_.pending_action.reset();
     extras_.memory_turns = 0;
-    extras_.conversation_history.clear();
+    extras_.conversation_history = conversation_log_.turns();
     bump_extras();
     ctx_.controller->dispatch({EventType::Reset});
     set_powered_off(false);
@@ -1217,6 +1235,7 @@ void CompanionRuntime::format_card() {
 void CompanionRuntime::factory_reset() {
     transfer().stop();
     photos().reset();
+    conversation_log_.clear();
     if (ctx_.aoraton) ctx_.aoraton->set_sync_settings({});
     for (const auto& timer : std::vector<TimerItem>(clock_.snapshot().timers)) clock_.cancel_timer(timer.id);
     clock_.dismiss_alert();
@@ -1246,7 +1265,8 @@ void CompanionRuntime::factory_reset() {
     if (!ctx_.deterministic) {
         const std::filesystem::path root(ctx_.store_dir);
         std::error_code error;
-        for (const char* name : {"clock.txt", "notes.txt", "organizer.txt", "sound.txt", "display.txt", "language.txt", "aoraton-sync.txt"}) {
+        for (const char* name : {"clock.txt", "notes.txt", "organizer.txt", "sound.txt", "display.txt", "language.txt",
+                                 "aoraton-sync.txt", "conversations.txt"}) {
             const auto path = root / name;
             std::filesystem::remove(path, error);
             auto temporary = path;
@@ -1262,6 +1282,7 @@ void CompanionRuntime::factory_reset() {
         saved_notes_text_ = notes_.serialize();
         saved_organizer_sequence_ = organizer_.snapshot().sequence;
         saved_organizer_text_ = organizer_.serialize();
+        saved_conversation_sequence_ = conversation_log_.sequence();
         saved_sound_text_ = serialize_sound_settings(sound_);
         saved_display_text_ = serialize_display_settings(display_.snapshot().settings);
     }
@@ -1399,6 +1420,12 @@ void CompanionRuntime::load_stores() {
     if (!notes_data.empty()) notes_.restore(notes_data);
     const auto organizer_data = read_file(root / "organizer.txt");
     if (!organizer_data.empty()) organizer_.restore(organizer_data);
+    const auto conversations = read_file(root / "conversations.txt");
+    if (!conversations.empty() && conversation_log_.restore(conversations)) {
+        extras_.conversation_history = conversation_log_.turns();
+        bump_extras();
+    }
+    saved_conversation_sequence_ = conversation_log_.sequence();
     saved_clock_sequence_ = clock_.snapshot().sequence;
     saved_clock_text_ = clock_.serialize();
     saved_notes_sequence_ = notes_.snapshot().sequence;
@@ -1450,6 +1477,10 @@ void CompanionRuntime::save_stores(bool flush) {
             saved_organizer_sequence_ = sequence;
             saved_organizer_text_ = std::move(organizer_text);
         }
+    }
+    if (conversation_log_.sequence() != saved_conversation_sequence_ &&
+        write_file(root / "conversations.txt", conversation_log_.serialize())) {
+        saved_conversation_sequence_ = conversation_log_.sequence();
     }
     // Values are compared every poll; text is built only after a change. A
     // dragged volume slider is written once it rests, not on every step.
@@ -1547,11 +1578,18 @@ bool CompanionRuntime::capture(const std::string& scenario) {
             const auto generation = transfer().session().snapshot().generation;
             if (scenario == "file-transfer-receiving") transfer().session().progress(generation, "DEMO photo.jpg", 131072, 262144);
             else if (scenario == "file-transfer-expired") transfer().session().tick(kTransferLeaseMs);
-            // The phone sign-in's QR (ADR 0010), with a DEMO secret.
+            // The phone sign-in's QR (ADR 0010), with a DEMO secret, on the account's own screen.
             else if (scenario == "file-transfer-phone-sign-in")
                 ui.set_aoraton_phone_sign_in("http://192.168.1.23:8788/aoraton/phone?s=DEMOdemoDEMOdemoDEMO12");
         }
-        ui.apply_transfer(transfer().session().snapshot()); ui.show(UiView::FileTransfer);
+        ui.apply_transfer(transfer().session().snapshot());
+        ui.show(scenario == "file-transfer-phone-sign-in" ? UiView::AoratonSignIn : UiView::FileTransfer);
+    } else if (scenario == "files" || scenario == "files-folder") {
+        // Αρχεία on the deterministic DEMO card.
+        files().open(scenario == "files" ? std::string{} : std::string("DEMO Μουσική"));
+        files_->poll();
+        ui.apply_files(files().snapshot());
+        ui.show(UiView::Files);
     } else if (scenario == "photos" || scenario == "photo-viewer" || scenario == "photo-settings" || scenario == "photo-ambient" || scenario == "photo-delete") {
         photos().seed_demo();
         if (scenario == "photo-ambient") photos().set_ambient(true);
@@ -1607,14 +1645,15 @@ bool CompanionRuntime::capture(const std::string& scenario) {
         ui.show(UiView::Briefing);
     } else if (scenario == "conversation-history") {
         memory_.clear();
-        memory_.record(english ? "DEMO · Find pizza in Sparta" : "DEMO · Ψάξε για πίτσα στη Σπάρτη",
-                       english ? "DEMO · Three verified results were found" :
-                                 "DEMO · Βρέθηκαν τρία επιβεβαιωμένα αποτελέσματα", now_ms());
-        memory_.record(english ? "DEMO · Which one is open late?" : "DEMO · Ποιο μένει ανοιχτό αργά;",
-                       english ? "DEMO · Opening times need a live check" :
-                                 "DEMO · Τα ωράρια χρειάζονται ζωντανό έλεγχο", now_ms());
-        extras_.conversation_history = memory_.recent(now_ms());
-        extras_.memory_turns = extras_.conversation_history.size();
+        conversation_log_.clear();
+        remember_turn(english ? "DEMO · Find pizza in Sparta" : "DEMO · Ψάξε για πίτσα στη Σπάρτη",
+                      english ? "DEMO · Three verified results were found" :
+                                "DEMO · Βρέθηκαν τρία επιβεβαιωμένα αποτελέσματα");
+        remember_turn(english ? "DEMO · Which one is open late?" : "DEMO · Ποιο μένει ανοιχτό αργά;",
+                      english ? "DEMO · Opening times need a live check" :
+                                "DEMO · Τα ωράρια χρειάζονται ζωντανό έλεγχο");
+        extras_.conversation_history = conversation_log_.turns();
+        extras_.memory_turns = memory_.recent(now_ms()).size();
         bump_extras();
         ui.show(UiView::ConversationHistory);
     } else if (scenario == "status-services") {

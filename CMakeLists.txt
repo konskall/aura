@@ -45,6 +45,9 @@ target_link_libraries(lvgl PRIVATE SDL2::SDL2-static)
 add_library(aura_core STATIC
     shared/core/src/app_layout.cpp
     shared/core/src/photos.cpp
+    shared/core/src/photo_zoom.cpp
+    shared/core/src/file_browser.cpp
+    shared/core/src/conversation_log.cpp
     shared/core/src/file_transfer.cpp
     shared/core/src/photo_decoder.cpp
     shared/third_party/tjpgd/tjpgd.c
@@ -94,6 +97,7 @@ add_library(aura_core STATIC
     shared/core/src/wifi.cpp
     shared/localization/src/companion_strings.cpp
     shared/localization/src/photo_strings.cpp
+    shared/localization/src/file_strings.cpp
     shared/localization/src/transfer_strings.cpp
     shared/localization/src/transfer_page.cpp
     shared/localization/src/strings.cpp
@@ -177,6 +181,7 @@ add_executable(aura_simulator
     simulator/app/src/bridge_speech_service.cpp
     simulator/app/src/companion_runtime.cpp
     simulator/app/src/photo_runtime.cpp
+    simulator/app/src/file_browser_runtime.cpp
     simulator/app/src/file_transfer_runtime.cpp
     simulator/app/src/screenshot.cpp
     simulator/app/src/open_meteo_weather_service.cpp
@@ -229,6 +234,9 @@ if(BUILD_TESTING)
         target_include_directories(aura_aoraton_link_host PRIVATE simulator/app/include)
         target_link_libraries(aura_aoraton_link_host PRIVATE aura_core ws2_32 iphlpapi bcrypt shell32)
     endif()
+    add_executable(aura_device_tools_tests tests/unit/device_tools_test.cpp)
+    target_link_libraries(aura_device_tools_tests PRIVATE aura_core)
+    add_test(NAME aura_device_tools_tests COMMAND aura_device_tools_tests)
     add_executable(aura_photos_tests tests/unit/photos_test.cpp)
     target_compile_definitions(aura_photos_tests PRIVATE AURA_PHOTO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/photos")
     target_link_libraries(aura_photos_tests PRIVATE aura_core)
@@ -334,6 +342,7 @@ if(BUILD_TESTING)
         add_executable(aura_companion_speech_tests
             tests/unit/companion_speech_test.cpp
             simulator/app/src/photo_runtime.cpp
+            simulator/app/src/file_browser_runtime.cpp
             simulator/app/src/file_transfer_runtime.cpp
             simulator/app/src/companion_runtime.cpp
             simulator/app/src/bridge_speech_service.cpp

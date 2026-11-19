@@ -33,10 +33,13 @@
 #include "esp_lcd_co5300.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
+#include "esp_lcd_touch.h"
 #include "esp_lv_adapter.h"
 #include "bsp/esp32_s3_touch_amoled_2_16.h"
 #include "bsp/display.h"
 #include "bsp/touch.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char* TAG = "aura_display";
 
@@ -169,6 +172,60 @@ static int s_brightness_percent = 100;
 // needs the board (NEEDS HARDWARE).
 static const uint8_t kMadctl[4] = {0xA0, 0xC0, 0x60, 0x00};
 
+// Two fingers (the owner's zoom in a photo, 2026-11-18). The CST9217 reports
+// them, but its component reads one (its CST9217_MAX_TOUCH_POINTS is 1): this
+// read takes the same register and layout, 5 bytes for the first finger, the
+// finger count at 5 and 0xAB at 6, then 5 bytes for the second finger, and
+// leaves them in the component's data, so the touch library still does the
+// mirroring and swapping as configured.
+enum { kTouchDataRegister = 0xD000, kTouchAck = 0xAB, kTouchPressed = 0x06, kTouchBytes = 15 };
+static int32_t s_finger_x[2];
+static int32_t s_finger_y[2];
+static int s_fingers = 0;
+
+static esp_err_t read_two_fingers(esp_lcd_touch_handle_t touch, esp_lcd_touch_point_data_t* points, uint8_t* count,
+                                  uint8_t max_count, void* context) {
+    (void)context;
+    uint8_t data[kTouchBytes] = {0};
+    const uint8_t low = kTouchDataRegister & 0xFF;
+    esp_err_t result = esp_lcd_panel_io_tx_param(touch->io, kTouchDataRegister >> 8, &low, 1);
+    if (result == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+        result = esp_lcd_panel_io_rx_param(touch->io, -1, data, sizeof(data));
+    }
+    if (result == ESP_OK && data[6] == kTouchAck) {
+        const uint8_t reported = data[5] & 0x7F;
+        portENTER_CRITICAL(&touch->data.lock);
+        touch->data.points = 0;
+        for (uint8_t finger = 0; finger < 2 && finger < reported; ++finger) {
+            const uint8_t* place = &data[finger * 5 + (finger ? 2 : 0)];
+            if ((place[0] & 0x0F) != kTouchPressed) continue;
+            const uint8_t index = touch->data.points++;
+            touch->data.coords[index].x = (uint16_t)((place[1] << 4) | (place[3] >> 4));
+            touch->data.coords[index].y = (uint16_t)((place[2] << 4) | (place[3] & 0x0F));
+        }
+        portEXIT_CRITICAL(&touch->data.lock);
+    }
+    // A read that failed keeps the fingers last seen, as the component does.
+    *count = 0;
+    const esp_err_t coordinates = esp_lcd_touch_get_data(touch, points, count, max_count);
+    s_fingers = *count > 2 ? 2 : *count;
+    for (int finger = 0; finger < s_fingers; ++finger) {
+        s_finger_x[finger] = points[finger].x;
+        s_finger_y[finger] = points[finger].y;
+    }
+    return coordinates;
+}
+
+int aura_board_touch_points(int32_t x[2], int32_t y[2]) {
+    for (int finger = 0; finger < s_fingers; ++finger) {
+        x[finger] = s_finger_x[finger];
+        y[finger] = s_finger_y[finger];
+        aura_board_rotate_touch(s_rotation, BSP_LCD_H_RES, &x[finger], &y[finger]);
+    }
+    return s_fingers;
+}
+
 static void rotated_touch_read(lv_indev_t* indev, lv_indev_data_t* data) {
     s_touch_read(indev, data);
     int32_t x = data->point.x;
@@ -295,7 +352,8 @@ lv_display_t* aura_board_display_start(int draw_rows) {
 
     esp_lcd_touch_handle_t touch = NULL;
     if (bsp_touch_new(&cfg, &touch) != ESP_OK || touch == NULL) return NULL;
-    const esp_lv_adapter_touch_config_t touch_cfg = ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(display, touch);
+    esp_lv_adapter_touch_config_t touch_cfg = ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(display, touch);
+    touch_cfg.callbacks.custom_touch_read = read_two_fingers;
     lv_indev_t* touch_input = esp_lv_adapter_register_touch(&touch_cfg);
     if (touch_input == NULL) return NULL;
     // Touches reach LVGL through the rotation (aura_board_display_set_rotation).

@@ -11,6 +11,7 @@
 #include "aura/bridge_speech_service.hpp"
 #include "aura/companion_runtime.hpp"
 #include "aura/companion_strings.hpp"
+#include "aura/file_strings.hpp"
 #include "aura/photo_strings.hpp"
 #include "aura/transfer_strings.hpp"
 #include "aura/control_events.hpp"
@@ -1190,7 +1191,7 @@ int main(int argc, char** argv) {
     companion_context.store_dir = companion_store_dir;
     companion_context.aoraton_link = aoraton_device_mode ? aoraton_device_mode->endpoint() : nullptr;
     aura::simulator::CompanionRuntime companion(std::move(companion_context));
-    // As on the board: the account's Google button opens File transfer.
+    // As on the board: the account's Google button opens the sign-in screen.
     if (aoraton_device_mode) ui.set_aoraton_sign_in_relay(true);
     if (language_override) companion.set_language(*language_override);
     ui.set_language(companion.language());
@@ -2500,7 +2501,8 @@ int main(int argc, char** argv) {
         };
         // The first two rows, in the owner's order: Συνομιλία, Σημειώσεις,
         // Μηνύματα; Σήμερα, Καιρός, Ειδοποιήσεις.
-        test_launcher_route("launcher.assistant", left_top.data(), aura::UiView::Assistant, true);
+        // The conversation opens what was said; only its button starts to listen.
+        test_launcher_route("launcher.assistant", left_top.data(), aura::UiView::ConversationHistory, false);
         test_launcher_route("launcher.notes", right_top.data(), aura::UiView::Notes, false);
         test_launcher_route("launcher.aoraton", left_middle.data(), aura::UiView::AoratonRooms, false);
         test_launcher_route("launcher.today", right_middle.data(), aura::UiView::Briefing, false);
@@ -2534,7 +2536,7 @@ int main(int argc, char** argv) {
         lv_obj_update_layout(ui.root());
         if (auto* grid = find_scrollable(ui.root())) lv_obj_scroll_to_y(grid, 680, LV_ANIM_OFF);
         pump(3);
-        tap(240, 360);
+        tap(384, 360);
         record("launcher.settings", "icon-center", ui.view() == aura::UiView::Settings,
                std::to_string(static_cast<int>(ui.view())));
         reset_to(aura::UiView::Home);
@@ -2549,7 +2551,7 @@ int main(int argc, char** argv) {
         lv_obj_update_layout(ui.root());
         if (auto* grid = find_scrollable(ui.root())) lv_obj_scroll_to_y(grid, 148, LV_ANIM_OFF);
         pump(3);
-        tap(96, 360);  // Ρολόι, the third row's first
+        tap(384, 360);  // Ρολόι, the third row's last
         const bool clock_opened = ui.view() == aura::UiView::Clock;
         swipe(60, 300, 420, 300);
         record("nav.swipe_back", "clock-screen", clock_opened && ui.view() == aura::UiView::Launcher,
@@ -3627,29 +3629,68 @@ int main(int argc, char** argv) {
             const int relay_before = interaction_counts.aoraton_sign_in;
             const int phone_before = interaction_counts.aoraton_phone_sign_in;
             tap(240, 420);
-            const bool relayed = ui.view() == aura::UiView::FileTransfer &&
+            const bool relayed = ui.view() == aura::UiView::AoratonSignIn &&
                                  interaction_counts.aoraton_sign_in == relay_before &&
                                  interaction_counts.aoraton_phone_sign_in == phone_before + 1 &&
                                  companion.transfer().session().snapshot().state == aura::TransferState::Ready;
-            record("aoraton.sign_in_relay", "button-opens-file-transfer", relay_copy && relayed,
+            record("aoraton.sign_in_relay", "button-opens-sign-in-screen", relay_copy && relayed,
                    std::to_string(relay_copy) + ":" + std::to_string(static_cast<int>(ui.view())));
-            // The phone sign-in on: the QR is the phone's, the PIN stays for the PC.
+            // Its own screen: nothing on it speaks of File transfer. Before the
+            // phone's address it shows the PC's code; then the QR with the code beside it.
             const auto& transfer_copy = aura::l10n::transfer_strings(aura::InterfaceLanguage::Greek);
-            const bool pc_only = shows(ui.root(), transfer_copy.pin) && !shows(ui.root(), transfer_copy.phone_pc);
+            const auto& account_copy = aura::l10n::companion_el_gr();
+            const bool waiting = shows(ui.root(), "123 456") &&
+                                 (holds(ui.root(), account_copy.aoraton_sign_in_pc) ||
+                                  holds(ui.root(), transfer_copy.local_only)) &&
+                                 !holds(ui.root(), account_copy.aoraton_sign_in_scan) &&
+                                 !shows(ui.root(), transfer_copy.title) && !shows(ui.root(), transfer_copy.entry);
             ui.set_aoraton_phone_sign_in("http://192.168.1.23:8788/aoraton/phone?s=DEMOdemoDEMOdemoDEMO12");
-            const bool phone_view = ui.view() == aura::UiView::FileTransfer &&
-                                    holds(ui.root(), transfer_copy.phone_scan) &&
-                                    shows(ui.root(), transfer_copy.phone_pc) &&
-                                    shows(ui.root(), transfer_copy.phone_wifi) && !shows(ui.root(), transfer_copy.pin);
-            record("aoraton.phone_sign_in", "qr-with-pc-fallback", pc_only && phone_view,
-                   std::to_string(pc_only) + ":" + std::to_string(phone_view));
+            pump(2);
+            const bool phone_view = ui.view() == aura::UiView::AoratonSignIn &&
+                                    holds(ui.root(), account_copy.aoraton_sign_in_scan) &&
+                                    shows(ui.root(), account_copy.aoraton_sign_in_pc) &&
+                                    shows(ui.root(), account_copy.aoraton_sign_in_wifi) &&
+                                    shows(ui.root(), "123 456") &&
+                                    !shows(ui.root(), transfer_copy.title) && !shows(ui.root(), transfer_copy.entry) &&
+                                    !shows(ui.root(), transfer_copy.stop);
+            record("aoraton.sign_in_screen", "the-account-not-file-transfer", waiting && phone_view,
+                   std::to_string(waiting) + ":" + std::to_string(phone_view) + ":" +
+                       std::to_string(holds(ui.root(), account_copy.aoraton_sign_in_scan)) +
+                       std::to_string(shows(ui.root(), account_copy.aoraton_sign_in_pc)) +
+                       std::to_string(shows(ui.root(), account_copy.aoraton_sign_in_wifi)) +
+                       std::to_string(shows(ui.root(), "123 456")) +
+                       std::to_string(shows(ui.root(), transfer_copy.title)) +
+                       std::to_string(shows(ui.root(), transfer_copy.entry)) +
+                       std::to_string(shows(ui.root(), transfer_copy.stop)));
             // Signed in, by the phone or the PC: back to the rooms, with a word.
             account_snapshot(aura::AoratonPairingState::Paired);
             const bool returned = ui.view() == aura::UiView::AoratonRooms &&
                                   shows(ui.root(), aura::l10n::companion_el_gr().aoraton_signed_in);
-            record("aoraton.signed_in_from_transfer", "back-to-rooms", returned,
+            record("aoraton.signed_in_from_screen", "back-to-rooms-session-ended",
+                   returned && companion.transfer().session().snapshot().state == aura::TransferState::Off,
                    std::to_string(static_cast<int>(ui.view())));
             ui.set_aoraton_phone_sign_in("");
+            // Leaving the screen before the sign-in ends the session it opened.
+            account_snapshot(aura::AoratonPairingState::NotPaired);
+            reset_to(aura::UiView::AoratonRooms);
+            tap(240, 420);
+            const bool reopened = ui.view() == aura::UiView::AoratonSignIn &&
+                                  companion.transfer().session().snapshot().state == aura::TransferState::Ready;
+            // The screen going dark and coming back keeps the sign-in.
+            companion.display().sleep_now(companion.now_ms());
+            companion.apply();
+            pump(2);
+            const bool dark = ui.view() == aura::UiView::AlwaysOn;
+            companion.display().user_activity(companion.now_ms());
+            companion.apply();
+            pump(2);
+            const bool kept = dark && ui.view() == aura::UiView::AoratonSignIn &&
+                              companion.transfer().session().snapshot().state == aura::TransferState::Ready;
+            tap(48, 48);
+            record("aoraton.sign_in_cancel", "dark-keeps-back-ends-the-session",
+                   kept && reopened && ui.view() == aura::UiView::AoratonRooms &&
+                       companion.transfer().session().snapshot().state == aura::TransferState::Off,
+                   std::to_string(static_cast<int>(ui.view())));
             companion.transfer().stop();
             ui.set_aoraton_sign_in_relay(false);
         }
@@ -3852,16 +3893,18 @@ int main(int argc, char** argv) {
 
         reset_to(aura::UiView::Launcher);
         tap(96, 188);
-        const bool conversation_started = ui.view() == aura::UiView::Assistant;
+        const bool conversation_listed = ui.view() == aura::UiView::ConversationHistory;
+        tap(128, 420);  // Νέα ερώτηση, full width or beside Νέο θέμα
+        const bool conversation_started = conversation_listed && ui.view() == aura::UiView::Assistant;
         tap(352, 420);
         record("conversation.cancel", "returns-to-apps",
                conversation_started && ui.view() == aura::UiView::Launcher &&
                    controller.snapshot().state == aura::AssistantState::Idle,
                view_text());
 
-        // Launcher: row three contains Clock, Radio and Photos.
-        const Point third_row[]{{"clock", 96, 360}, {"radio", 240, 360}, {"photos", 384, 360}};
-        const aura::UiView third_row_views[]{aura::UiView::Clock, aura::UiView::Radio, aura::UiView::Photos};
+        // Launcher: row three holds Photos, Files to its right, then Clock.
+        const Point third_row[]{{"photos", 96, 360}, {"files", 240, 360}, {"clock", 384, 360}};
+        const aura::UiView third_row_views[]{aura::UiView::Photos, aura::UiView::Files, aura::UiView::Clock};
         for (int index = 0; index < 3; ++index) {
             reset_to(aura::UiView::Launcher);
             scroll_view_to(148);
@@ -3870,7 +3913,7 @@ int main(int argc, char** argv) {
         }
         reset_to(aura::UiView::Launcher);
         scroll_view_to(680);
-        tap(240, 360);
+        tap(384, 360);
         record("launcher.row4", "settings", ui.view() == aura::UiView::Settings, view_text());
 
         // Launcher edit mode: Edit, pick an app, pick its new place. The order
@@ -3910,7 +3953,7 @@ int main(int argc, char** argv) {
 
         reset_to(aura::UiView::Launcher);
         scroll_view_to(680);
-        tap(96, 360);
+        tap(240, 360);
         record("launcher.row4", "organizer", ui.view() == aura::UiView::Calendar, view_text());
         tap(432, 48);
         record("organizer.new", "plus", ui.view() == aura::UiView::OrganizerNew, view_text());
@@ -4009,6 +4052,29 @@ int main(int argc, char** argv) {
                !radio_model.snapshot().results.empty(),
                std::to_string(radio_model.snapshot().results.size()));
         {
+            // A search under way turns its spinner, so it never reads as stuck.
+            const auto found_before = radio_model.snapshot().results;
+            radio_model.begin_search("rock");
+            apply_radio();
+            pump(3);
+            std::function<lv_obj_t*(lv_obj_t*)> find_arc = [&](lv_obj_t* object) -> lv_obj_t* {
+                if (lv_obj_check_type(object, &lv_arc_class)) return object;
+                for (std::uint32_t index = 0; index < lv_obj_get_child_count(object); ++index) {
+                    if (auto* found = find_arc(lv_obj_get_child(object, static_cast<int32_t>(index)))) return found;
+                }
+                return nullptr;
+            };
+            auto* spinner = find_arc(ui.root());
+            const auto angle_before = spinner ? lv_arc_get_rotation(spinner) : 0;
+            pump(16);
+            const auto angle_after = spinner ? lv_arc_get_rotation(spinner) : 0;
+            record("radio.search_spinner", "turns-while-searching", spinner && angle_before != angle_after,
+                   std::to_string(angle_before) + "->" + std::to_string(angle_after));
+            radio_model.search_finished(found_before, {});
+            apply_radio();
+            pump(3);
+        }
+        {
             // Radio, its search results and the conversation history swipe back
             // like every other list (a swipe over a result never plays it);
             // while typing, the keyboard keeps the swipe.
@@ -4032,6 +4098,12 @@ int main(int argc, char** argv) {
                    std::to_string(results_back) + std::to_string(typing_kept) + std::to_string(radio_back) +
                        std::to_string(history_back));
         }
+
+        reset_to(aura::UiView::Home);
+        tap(432, 20);
+        const bool battery_opened = ui.view() == aura::UiView::Battery;
+        tap(48, 48);
+        record("home.battery", "opens-device-status", battery_opened && ui.view() == aura::UiView::Home, view_text());
 
         reset_to(aura::UiView::Home);
         tap(240, 132);
@@ -5325,6 +5397,8 @@ int main(int argc, char** argv) {
                         const bool tiles = clock_cell && glass(clock_cell);
                         const bool badge = notifications && has_count(notifications);
                         const bool fit = fits();
+                        if (clock_cell) lv_obj_scroll_to_view_recursive(clock_cell, LV_ANIM_OFF);
+                        pump(2);
                         tap_center(clock_cell);
                         const bool opens = ui.view() == aura::UiView::Clock;
                         launcher_ok_aurora = launcher_ok_aurora && third_row && tiles && badge && fit && opens;
@@ -5730,6 +5804,8 @@ int main(int argc, char** argv) {
                             lv_color_to_u32(lv_obj_get_style_bg_color(settings_well, LV_PART_MAIN)) % 0x1000000U ==
                                 graphite_palette.surface_high;
                         const bool fit = fits();
+                        if (clock_cell) lv_obj_scroll_to_view_recursive(clock_cell, LV_ANIM_OFF);
+                        pump(2);
                         tap_center(clock_cell);
                         const bool opens = ui.view() == aura::UiView::Clock;
                         launcher_ok_graphite = launcher_ok_graphite && columns && live && quiet && fit && opens;
@@ -6298,7 +6374,9 @@ int main(int argc, char** argv) {
                             pump(2);
                             lv_obj_update_layout(ui.root());
                             bool tabs_clear = true;
-                            for (const char* title : {extra.organizer_events, extra.organizer_tasks,
+                            const auto& visual_copy = language == aura::InterfaceLanguage::English ?
+                                aura::l10n::visual_en_us() : aura::l10n::visual_el_gr();
+                            for (const char* title : {visual_copy.calendar, extra.organizer_tasks,
                                                       extra.organizer_shopping}) {
                                 auto* title_label = find_text(view_content(), title);
                                 auto* tab = title_label ? lv_obj_get_parent(title_label) : nullptr;
@@ -6384,9 +6462,14 @@ int main(int argc, char** argv) {
                             companion.transfer().stop(); companion.photos().reset();
                             ui.apply_photos(companion.photos().snapshot());
                             ui.apply_transfer(companion.transfer().session().snapshot());
+                            // File transfer lives in Αρχεία, reached from empty Photos too.
                             reset_to(aura::UiView::Photos);
                             tap(180, 428);
-                            check_transfer(ui.view() == aura::UiView::FileTransfer, "photo-entry");
+                            pump(4);
+                            check_transfer(ui.view() == aura::UiView::Files, "photos-open-files");
+                            check_transfer(find_target(view_content(), aura::UiView::FileTransfer) != nullptr, "files-entry");
+                            tap_center(find_target(view_content(), aura::UiView::FileTransfer));
+                            check_transfer(ui.view() == aura::UiView::FileTransfer, "transfer-opens");
                             tap(240, 424);
                             check_transfer(companion.transfer().session().snapshot().state == aura::TransferState::Ready,
                                            "enable");
@@ -6432,6 +6515,241 @@ int main(int argc, char** argv) {
                     companion.transfer().stop(); ui.apply_transfer(companion.transfer().session().snapshot());
                     ui.set_language(aura::InterfaceLanguage::Greek);
                     record("file_transfer.controls", "four-looks-two-languages", transfer_ok, transfer_detail);
+                }
+
+                // Αρχεία: the card's folders, one step at a time; only what the
+                // owner put there can be deleted, and a deletion asks first.
+                {
+                    const auto& fx = aura::l10n::file_strings(aura::InterfaceLanguage::Greek);
+                    bool files_ok = true;
+                    std::string files_detail;
+                    const auto check_files = [&](bool value, const char* stage) {
+                        files_ok = files_ok && value;
+                        if (!value) files_detail += std::string(stage) + "@" + std::to_string(static_cast<int>(ui.view())) +
+                                                    ":" + companion.files().snapshot().path + " ";
+                    };
+                    ui.set_appearance(aura::Appearance::Halo);
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    reset_to(aura::UiView::Launcher);
+                    auto* files_cell = find_target(view_content(), aura::UiView::Files);
+                    if (files_cell) lv_obj_scroll_to_view_recursive(files_cell, LV_ANIM_OFF);
+                    pump(2);
+                    tap_center(files_cell);
+                    pump(4);
+                    check_files(files_cell && ui.view() == aura::UiView::Files, "opens");
+                    check_files(find_text(view_content(), fx.card) != nullptr, "card-row");
+                    check_files(find_target(view_content(), aura::UiView::FileTransfer) != nullptr, "transfer-row");
+                    // Into a folder and back up, by the header's button and by a swipe.
+                    tap_center(find_text(view_content(), "DEMO Μουσική"));
+                    pump(4);
+                    check_files(companion.files().snapshot().path == "DEMO Μουσική" &&
+                                    find_text(view_content(), "DEMO ρυθμός.mp3") != nullptr, "folder-opens");
+                    check_files(find_text(view_content(), "Κάρτα SD / DEMO Μουσική") != nullptr, "shows-where");
+                    tap(48, 48);
+                    pump(4);
+                    check_files(ui.view() == aura::UiView::Files && companion.files().snapshot().path.empty(), "back-up");
+                    tap_center(find_text(view_content(), "DEMO Μουσική"));
+                    pump(4);
+                    swipe(60, 300, 420, 300);
+                    pump(4);
+                    check_files(ui.view() == aura::UiView::Files && companion.files().snapshot().path.empty(), "swipe-up");
+                    // The device's own files show but stay.
+                    tap_center(find_text(view_content(), "aura"));
+                    pump(4);
+                    tap_center(find_text(view_content(), "clock.txt"));
+                    check_files(ui.view() == aura::UiView::FileDetails && find_text(view_content(), fx.device_file) != nullptr &&
+                                    find_text(view_content(), fx.delete_item) == nullptr, "device-file-kept");
+                    tap(48, 48);
+                    pump(2);
+                    tap(48, 48);
+                    pump(4);
+                    // A file of the owner's: what it is, then a confirmed deletion.
+                    if (auto* row = find_text(view_content(), "DEMO.txt")) lv_obj_scroll_to_view_recursive(row, LV_ANIM_OFF);
+                    pump(2);
+                    tap_center(find_text(view_content(), "DEMO.txt"));
+                    check_files(ui.view() == aura::UiView::FileDetails && find_text(view_content(), fx.location) != nullptr &&
+                                    find_text(view_content(), "2 KB") != nullptr, "details");
+                    const auto erased_before = companion.files().snapshot().erased;
+                    tap_center(find_text(view_content(), fx.delete_item));
+                    check_files(ui.view() == aura::UiView::FileDelete &&
+                                    find_text(view_content(), fx.delete_file_hint) != nullptr &&
+                                    companion.files().snapshot().erased == erased_before, "asks-first");
+                    tap_center(find_text(view_content(), fx.cancel));
+                    check_files(ui.view() == aura::UiView::FileDetails && companion.files().snapshot().erased == erased_before,
+                                "cancel-keeps-it");
+                    tap_center(find_text(view_content(), fx.delete_item));
+                    tap_center(find_text(view_content(), fx.delete_confirm));
+                    pump(8);
+                    check_files(ui.view() == aura::UiView::Files && companion.files().snapshot().erased == erased_before + 1 &&
+                                    find_text(view_content(), "DEMO.txt") == nullptr, "deleted");
+                    // A folder is reached through its own button.
+                    auto* music = find_text(view_content(), "DEMO Μουσική");
+                    auto* music_row = music ? lv_obj_get_parent(music) : nullptr;
+                    tap_center(music_row ? lv_obj_get_child(music_row, -1) : nullptr);
+                    check_files(ui.view() == aura::UiView::FileDetails &&
+                                    find_text(view_content(), fx.delete_item) != nullptr, "folder-details");
+                    tap(48, 48);
+                    pump(2);
+                    // Every look draws the app.
+                    for (const auto look : looks) {
+                        ui.set_appearance(look);
+                        reset_to(aura::UiView::Files);
+                        pump(2);
+                        check_files(find_text(view_content(), fx.card) != nullptr, "looks");
+                    }
+                    ui.set_appearance(aura::Appearance::Halo);
+                    record("files.browser", "open-folders-details-delete", files_ok, files_detail);
+                }
+
+                // Zooming a photo with two fingers, and moving the zoomed picture.
+                {
+                    bool zoom_ok = true;
+                    std::string zoom_detail;
+                    const auto check_zoom = [&](bool value, const char* stage) {
+                        zoom_ok = zoom_ok && value;
+                        if (!value) zoom_detail += std::string(stage) + " ";
+                    };
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    companion.photos().seed_demo();
+                    ui.apply_photos(companion.photos().snapshot());
+                    reset_to(aura::UiView::Photos);
+                    tap(240, 140);
+                    pump(4);
+                    check_zoom(ui.view() == aura::UiView::PhotoViewer, "viewer");
+                    const auto selected_before = companion.photos().snapshot().selected;
+                    aura::TouchPoint fingers[2]{{200, 230}, {280, 230}};
+                    ui.set_touch_points(fingers, 2);
+                    fingers[0] = {120, 230};
+                    fingers[1] = {360, 230};
+                    ui.set_touch_points(fingers, 2);
+                    pump(2);
+                    check_zoom(ui.photo_zoom() > 2.9F && ui.photo_zoom() < 3.1F, "pinch-out");
+                    ui.set_touch_points(nullptr, 0);
+                    pump(2);
+                    check_zoom(ui.photo_zoom() > 2.9F, "stays");
+                    // A swipe moves the zoomed picture and changes nothing else.
+                    const float center_before = ui.photo_zoom_center_x();
+                    swipe(380, 230, 180, 230);
+                    pump(2);
+                    check_zoom(companion.photos().snapshot().selected == selected_before, "swipe-keeps-photo");
+                    check_zoom(ui.photo_zoom_center_x() > center_before, "drag-moves");
+                    check_zoom(ui.view() == aura::UiView::PhotoViewer, "still-open");
+                    // Fingers together: the whole picture again, and a swipe changes photo.
+                    fingers[0] = {120, 230};
+                    fingers[1] = {360, 230};
+                    ui.set_touch_points(fingers, 2);
+                    fingers[0] = {220, 230};
+                    fingers[1] = {260, 230};
+                    ui.set_touch_points(fingers, 2);
+                    ui.set_touch_points(nullptr, 0);
+                    pump(2);
+                    check_zoom(ui.photo_zoom() < 1.01F, "pinch-in");
+                    swipe(380, 230, 80, 230);
+                    pump(2);
+                    check_zoom(companion.photos().snapshot().selected != selected_before, "swipe-changes-photo");
+                    record("photo.zoom", "two-fingers-and-drag", zoom_ok, zoom_detail);
+                }
+
+                // The calendar: the month, its days, what a day holds, and a new
+                // appointment on the day picked.
+                {
+                    bool calendar_ok = true;
+                    std::string calendar_detail;
+                    const auto check_calendar = [&](bool value, const char* stage) {
+                        calendar_ok = calendar_ok && value;
+                        if (!value) calendar_detail += std::string(stage) + " ";
+                    };
+                    aura::LocalDateTime calendar_now;
+                    calendar_now.year = 2026;
+                    calendar_now.month = 11;
+                    calendar_now.day = 18;
+                    calendar_now.hour = 10;
+                    calendar_now.weekday = 3;
+                    companion.set_clock(calendar_now);
+                    companion.organizer().clear();
+                    companion.organizer().add_event("DEMO Γιατρός",
+                                                    aura::days_from_civil(2026, 11, 20) * 1440 + 9 * 60, 60);
+                    companion.apply();
+                    ui.set_appearance(aura::Appearance::Halo);
+                    ui.set_language(aura::InterfaceLanguage::Greek);
+                    reset_to(aura::UiView::Calendar);
+                    ui.open_organizer(aura::OrganizerKind::Event);
+                    pump(3);
+                    check_calendar(find_text(view_content(), "Νοέμβριος 2026") != nullptr, "month");
+                    check_calendar(find_text(view_content(), "Τετάρτη 18 Νοεμβρίου") != nullptr, "today-picked");
+                    tap_center(find_text(view_content(), "20"));
+                    pump(2);
+                    check_calendar(find_text(view_content(), "Παρασκευή 20 Νοεμβρίου") != nullptr, "day-picked");
+                    check_calendar(find_text(view_content(), "DEMO Γιατρός") != nullptr, "day-holds");
+                    tap(428, 184);
+                    pump(3);
+                    check_calendar(find_text(view_content(), "Δεκέμβριος 2026") != nullptr, "next-month");
+                    tap(52, 184);
+                    pump(3);
+                    check_calendar(find_text(view_content(), "Νοέμβριος 2026") != nullptr, "month-before");
+                    // Back on today's month, a new appointment takes the day picked.
+                    tap_center(find_text(view_content(), "27"));
+                    pump(2);
+                    tap(432, 48);
+                    pump(2);
+                    check_calendar(ui.view() == aura::UiView::OrganizerNew, "new");
+                    type_text("demo");
+                    tap(432, 48);
+                    pump(3);
+                    check_calendar(find_text(view_content(), "Παρασκευή 27 Νοεμβρίου") != nullptr, "new-on-picked-day");
+                    tap(240, 420);
+                    pump(4);
+                    check_calendar(ui.view() == aura::UiView::Calendar && companion.organizer().snapshot().events.size() == 2 &&
+                                       companion.organizer().snapshot().events.back().start_minute ==
+                                           aura::days_from_civil(2026, 11, 27) * 1440 + 9 * 60, "saved");
+                    companion.organizer().clear();
+                    companion.apply();
+                    record("organizer.calendar", "month-day-and-new-appointment", calendar_ok, calendar_detail);
+                }
+
+                // The history stays when a new topic starts, and goes only after two taps.
+                {
+                    bool history_ok = true;
+                    std::string history_detail;
+                    const auto check_history = [&](bool value, const char* stage) {
+                        history_ok = history_ok && value;
+                        if (!value) history_detail += std::string(stage) + " ";
+                    };
+                    const auto& copy = aura::l10n::companion_el_gr();
+                    companion.conversation_log().clear();
+                    controller.dispatch({aura::EventType::Reset});
+                    apply();
+                    controller.dispatch({aura::EventType::TurnStarted, "DEMO ερώτηση για το ιστορικό"});
+                    companion.deliver_reply("DEMO απάντηση για το ιστορικό.");
+                    controller.dispatch({aura::EventType::Reset});
+                    apply();
+                    companion.apply();
+                    reset_to(aura::UiView::Launcher);
+                    const int asks_before = interaction_counts.ask;
+                    tap(96, 188);
+                    pump(3);
+                    check_history(ui.view() == aura::UiView::ConversationHistory && interaction_counts.ask == asks_before,
+                                  "opens-without-listening");
+                    check_history(find_text(view_content(), "DEMO ερώτηση για το ιστορικό") != nullptr &&
+                                      find_text(view_content(), "DEMO απάντηση για το ιστορικό.") != nullptr, "shows");
+                    tap(352, 420);  // Νέο θέμα
+                    pump(3);
+                    check_history(companion.memory().size() == 0 && companion.conversation_log().turns().size() == 1 &&
+                                      interaction_counts.ask == asks_before + 1, "new-topic-keeps");
+                    controller.dispatch({aura::EventType::Cancel});
+                    controller.dispatch({aura::EventType::Reset});
+                    apply();
+                    reset_to(aura::UiView::ConversationHistory);
+                    pump(2);
+                    tap(432, 48);
+                    pump(2);
+                    check_history(companion.conversation_log().turns().size() == 1 && find_text(ui.root(), copy.delete_again),
+                                  "first-tap-asks");
+                    tap(432, 48);
+                    pump(3);
+                    check_history(companion.conversation_log().turns().empty() &&
+                                      find_text(view_content(), copy.conversation_empty) != nullptr, "second-tap-deletes");
+                    record("conversation.history_kept", "open-new-topic-delete", history_ok, history_detail);
                 }
                 {
                     bool photos_ok = true;

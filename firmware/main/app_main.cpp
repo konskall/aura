@@ -632,6 +632,14 @@ extern "C" void app_main(void) {
         };
         companion.install(callbacks, &aoraton);
         callbacks.on_aoraton_pair_cancel = [] { aoraton.cancel_pairing(); };
+        // A new topic: the assistant forgets the last questions, the history stays.
+        callbacks.on_conversation_new = [] {
+            if (assistant.turn) assistant.turn->forget_conversation();
+        };
+        callbacks.on_conversation_clear = [] {
+            companion.clear_conversation();
+            if (assistant.turn) assistant.turn->forget_conversation();
+        };
         callbacks.on_aoraton_phone_sign_in = [] { aoraton_phone_wanted = true; };
         callbacks.on_aoraton_unpair = [] { aoraton.unpair(); };
         callbacks.on_aoraton_unlock = [](const std::string& passphrase) { return aoraton.unlock_keys(passphrase); };
@@ -779,6 +787,9 @@ extern "C" void app_main(void) {
             }
         });
         assistant.turn->set_listen_again([] { start_listening(true); });
+        assistant.turn->set_turn_recorded([](const std::string& question, const std::string& answer) {
+            companion.record_conversation(question, answer);
+        });
         companion.set_speech_service(assistant.speech.get());
         // "Βάλε Σφαίρα", "σταμάτα το ραδιόφωνο": the radio does it, decided as
         // in the simulator (radio_request); the assistant is not asked.
@@ -1122,6 +1133,17 @@ extern "C" void app_main(void) {
                                            local_time.tm_wday, aura::StatusOrigin::Live);
                     companion.set_clock(local_time, now_time);
                 }
+            }
+            // The fingers on the glass: two of them zoom an open photo.
+            {
+                std::int32_t finger_x[2]{};
+                std::int32_t finger_y[2]{};
+                const int fingers = aura_board_touch_points(finger_x, finger_y);
+                aura::TouchPoint points[2];
+                for (int finger = 0; finger < fingers; ++finger) {
+                    points[finger] = {static_cast<int>(finger_x[finger]), static_cast<int>(finger_y[finger])};
+                }
+                ui.set_touch_points(points, static_cast<std::size_t>(fingers));
             }
             ticked = xTaskGetTickCount();
             ui.tick(elapsed_ms);

@@ -37,7 +37,8 @@ All names, rooms, messages, photos and data in the screenshots are fictional `DE
 
 - **Voice and text.** Tap the orb or type. Answers stream in as they are written, and on a voice turn the first sentence is spoken while the rest is still arriving.
 - **Natural conversation.**
-  - A follow-up question ("and tomorrow?") keeps the context of the last few turns for five minutes; the history is never written to disk.
+  - A follow-up question ("and tomorrow?") keeps the context of the last few turns for five minutes. Only those few turns go to the model.
+  - The conversation app shows the history: the last 40 questions and answers, with their dates, kept on the microSD card (in the simulator, in its store folder). Νέο θέμα starts afresh and keeps the history; the bin deletes it, after a second tap.
   - Continuous conversation listens again after an answer.
   - Speaking over an answer interrupts it («Διακοπή με τη φωνή», barge-in). On the board the speaker's own signal is taken out of the microphone first, and the voice must stand clearly above the echo that is left.
 - **Greek and English.** The interface, speech recognition and voices follow the chosen language.
@@ -50,20 +51,21 @@ All names, rooms, messages, photos and data in the screenshots are fictional `DE
 
 ### Apps
 
-The apps grid can be rearranged: tap the pencil, then an app, then its new place. By default it reads Συνομιλία, Σημειώσεις, Μηνύματα, Σήμερα, Καιρός, Ειδοποιήσεις, Ρολόι, Ραδιόφωνο, Φωτογραφίες, Οργάνωση, Ρυθμίσεις.
+The apps grid can be rearranged: tap the pencil, then an app, then its new place. By default it reads Συνομιλία, Σημειώσεις, Μηνύματα, Σήμερα, Καιρός, Ειδοποιήσεις, Φωτογραφίες, Αρχεία, Ρολόι, Ραδιόφωνο, Οργάνωση, Ρυθμίσεις: Αρχεία sits to the right of Φωτογραφίες, and an order arranged before it existed keeps its places, with Αρχεία after Φωτογραφίες.
 
 | App | What it offers |
 |---|---|
-| Conversation | The assistant, with recent history, follow-up and new-topic actions |
+| Conversation | The talk so far, with a button to ask and one for a new topic; tapping the app never starts the microphone by itself |
 | Weather | Open-Meteo forecast for any city, hourly and daily views, animated conditions, offline cache |
 | Messages | Aoraton end-to-end-encrypted rooms: sign-in with Google (in the simulator through the PC browser; on the device by scanning its QR with your phone, or through the PC), read and send with confirmation, optional `@inco` AI answers. Photos show in the conversation and open full screen. Voice messages play (AAC, Opus or WAV), and are recorded and sent after a confirmation. On the device the encrypted files are kept on the microSD card, so they open again without a second download. New messages arrive at once over a realtime connection, with a periodic check (10 s to 5 min, or off) as a fallback. On the device realtime runs while the screen is lit or on USB power, and a five-minute check takes over on battery with the screen dark |
 | Clock | Timers, alarms (once or daily) and reminders, with a full-screen alert that rings even when muted |
 | Notes | Typed and voice notes; a voice note is dictated (up to 30 s, past short pauses) and transcribed |
 | Today | Greeting, namedays, next public holiday, weather, average Greek fuel prices, alarms, reminders, timers and unread messages |
 | Radio | Greek stations, a station directory search (worldwide when no Greek station matches), favourites with your own order, now-playing titles, automatic reconnection; "βάλε ραδιόφωνο" plays the last station again |
-| Photos | JPG and PNG photos from the microSD card: gallery, full screen, swipes, a slideshow, deletion with confirmation, and an optional dimmed photo behind the always-on clock |
+| Photos | JPG and PNG photos from the microSD card: gallery, full screen, swipes, zoom with two fingers (up to four times, a zoomed photo moves under one finger), a slideshow, deletion with confirmation, and an optional dimmed photo behind the always-on clock |
+| Files | What the microSD card holds, folder by folder: each file's kind, size, date and place, the card's free space, and deletion with confirmation of what you put there (a folder with what it holds). The device's own files show but stay. File transfer opens from here |
 | Notifications | AURA and phone notifications in one place |
-| Organizer | Agenda, tasks and shopping list |
+| Organizer | A month calendar (today, the days with appointments, holidays, name days, and a new appointment on the day you pick), tasks and shopping list |
 | Settings | Four groups: Συνδέσεις (Wi-Fi, phone, file transfer), Οθόνη και ήχος (display with 24-hour time and reduced motion, appearance, sound and voice), Βοηθός (AI provider, weather) and Συσκευή (language, device status, system) |
 
 ### Device
@@ -71,10 +73,10 @@ The apps grid can be rearranged: tap the pencil, then an app, then its new place
 - **Always-on clock and power saving.** The screen dims, then shows an always-on clock, optionally over a dimmed photo you choose. Dimming is always relative to your chosen brightness.
 - **Gestures and rotation.** Raise to wake, and flip face down to mute. Stood on any of its four edges, the screen turns to match; Οθόνη → Κλείδωμα θέσης holds it.
 - **Keys.** The left key turns the volume down and the right one up. The centre key wakes or sleeps the screen; held for 1.5 s it switches AURA off, and held for 1 s it switches it on again.
-- **Sound settings.** Volume, mute, message chime, spoken answers and continuous conversation. A second tap on a read-aloud button stops the reading.
+- **Sound settings.** Volume, mute, message chime (a new Aoraton message or phone notification, never over a voice, an alarm or an open microphone), spoken answers and continuous conversation. A second tap on a read-aloud button stops the reading.
 - **Settings in four groups.** Συνδέσεις (Wi-Fi, phone, File transfer), Οθόνη και ήχος (Οθόνη with Λιγότερη κίνηση, Εμφάνιση, Ήχος), Βοηθός (the assistant, weather) and Συσκευή (language, status, system). On the device the assistant's row names who answers and who speaks (Groq · φωνή Azure).
-- **Device status.** Settings → Κατάσταση συσκευής shows the battery: percentage, charging stage, battery, USB and system voltage, the power chip's temperature and the rated 1000 mAh. The chip measures no health or cycles. It also shows the microSD card's free space, with a format that asks twice, and a switch for the status bar's battery percentage. Settings → Οθόνη switches between 24-hour time and 12-hour time (2:05 μ.μ.).
-- **Local file transfer.** Settings → Μεταφορά αρχείων shows a QR code and a six-digit code. From a phone or PC on the same Wi-Fi you send photos (prepared for the 480 × 480 screen in the browser) or other files, and you can list, download or delete them. Access lasts ten minutes and ends when you stop it. See [docs/FILE_TRANSFER.md](docs/FILE_TRANSFER.md).
+- **Device status.** Settings → Κατάσταση συσκευής, or a tap on the battery at the top right, shows the battery: percentage, charging stage, battery, USB and system voltage, the power chip's temperature and the rated 1000 mAh. The chip measures no health or cycles. It also shows the microSD card's free space, with a format that asks twice, and a switch for the status bar's battery percentage. Settings → Οθόνη switches between 24-hour time and 12-hour time (2:05 μ.μ.).
+- **Local file transfer.** Αρχεία → Μεταφορά αρχείων (also in Settings → Συνδέσεις) shows a QR code and a six-digit code. From a phone or PC on the same Wi-Fi you send photos (prepared for the 480 × 480 screen in the browser) or other files, and you can list, download or delete them. Access lasts ten minutes and ends when you stop it. See [docs/FILE_TRANSFER.md](docs/FILE_TRANSFER.md).
 - **System.** The version (AURA 1.0.0), signed updates (OTA with rollback), diagnostics, credits, restart, power off, and a factory reset that erases settings and data but keeps your photos and files.
 - **Phone link.** Notifications and calls from a paired iPhone over Bluetooth LE (ANCS). In the simulator this uses the PC's Bluetooth adapter and is experimental.
 
@@ -269,7 +271,7 @@ See [docs/HARDWARE.md](docs/HARDWARE.md). The first flash, and what to check on 
 
 Until the public key is set, the device refuses every update.
 
-**Signing the device in to aoraton.com.** On the device: Messages → account → **Σύνδεση με Google**. File transfer opens with a QR. Scan it with your phone, on the same Wi-Fi, and sign in with Google. A page on aoraton.com then hands the sign-in back to the device over the Wi-Fi, because Supabase returns a phone to no local address. The firmware needs the project's public values built in, from `config/aoraton.local.json` ([ADR 0010](docs/ADR/0010-device-aoraton-account.md)).
+**Signing the device in to aoraton.com.** On the device: Messages → account → **Σύνδεση με Google**. The account's own sign-in screen opens with a QR (it runs on File transfer's server, which closes when you leave the screen or the sign-in ends). Scan it with your phone, on the same Wi-Fi, and sign in with Google. A page on aoraton.com then hands the sign-in back to the device over the Wi-Fi, because Supabase returns a phone to no local address. The firmware needs the project's public values built in, from `config/aoraton.local.json` ([ADR 0010](docs/ADR/0010-device-aoraton-account.md)).
 
 Or from a PC, with the address and the code File transfer shows:
 

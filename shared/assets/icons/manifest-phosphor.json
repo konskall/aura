@@ -111,7 +111,8 @@
     "Flip": "flip-vertical-light",
     "Ear": "ear-light",
     "Swap": "arrows-left-right-light",
-    "Palette": "palette-light"
+    "Palette": "palette-light",
+    "Folder": "folder-light"
   },
   "lucideFallbacks": []
 }

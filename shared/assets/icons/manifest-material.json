@@ -111,7 +111,8 @@
     "Flip": "flip-rounded",
     "Ear": "hearing-rounded",
     "Swap": "swap-horiz-rounded",
-    "Palette": "palette-rounded"
+    "Palette": "palette-rounded",
+    "Folder": "folder-rounded"
   },
   "lucideFallbacks": []
 }

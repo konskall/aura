@@ -9,6 +9,7 @@
 #include "aura/device_status.hpp"
 #include "aura/display_power.hpp"
 #include "aura/fuel_prices.hpp"
+#include "aura/file_browser.hpp"
 #include "aura/file_transfer.hpp"
 #include "aura/language.hpp"
 #include "aura/notes.hpp"
@@ -100,12 +101,24 @@ enum class UiView {
     PhotoDelete,
     AoratonAttachment,
     AoratonVoiceRecord,
+    // The sign-in from the owner's phone or PC (ADR 0010).
+    AoratonSignIn,
+    // Αρχεία: the memory card's folders, one item and its deletion.
+    Files,
+    FileDetails,
+    FileDelete,
 };
 
 // Power actions from Settings > System. PowerOn comes from a long press on the
 // switched-off screen.
 // FormatCard erases the microSD card (everything the device keeps there).
 enum class SystemAction { Restart, PowerOff, PowerOn, FactoryReset, FormatCard };
+
+// A finger on the glass, in the screen's coordinates.
+struct TouchPoint {
+    int x{0};
+    int y{0};
+};
 
 // What this platform can do right now; the UI never offers the rest.
 struct CompanionCapabilities {
@@ -123,7 +136,7 @@ struct CompanionCapabilities {
 struct AssistantExtras {
     std::optional<AssistantAction> pending_action;
     std::size_t memory_turns{0};
-    std::vector<ConversationTurn> conversation_history;  // bounded, RAM only
+    std::vector<ConversationTurn> conversation_history;  // the stored log (ConversationLog), oldest first
     std::string assistant_provider;
     std::string speech_recognition_provider;
     std::string speech_output_provider;
@@ -147,6 +160,11 @@ struct AuraUiCallbacks {
     std::function<bool(unsigned)> on_photo_interval;
     std::function<bool(bool)> on_photo_ambient;
     std::function<bool(const std::string&)> on_photo_delete;
+    // Αρχεία: read a folder of the card, read the open one again, delete one
+    // exact path after the owner's confirmation.
+    std::function<bool(const std::string& path)> on_files_open;
+    std::function<void()> on_files_refresh;
+    std::function<bool(const std::string& path)> on_files_delete;
     // Platform timezone conversion for the timestamp's date (including DST),
     // never the offset of today's clock applied to all historical messages.
     std::function<std::optional<LocalDateTime>(std::int64_t unix_seconds)> on_local_time;
@@ -169,7 +187,7 @@ struct AuraUiCallbacks {
     std::function<bool()> on_aoraton_confirm;
     std::function<void()> on_aoraton_cancel;
     std::function<bool()> on_aoraton_pair_start;
-    // The device: the owner tapped sign-in, so File transfer, once ready, also
+    // The device: the owner tapped sign-in, so the sign-in screen, once ready,
     // offers the phone's way (ADR 0010).
     std::function<void()> on_aoraton_phone_sign_in;
     std::function<bool()> on_aoraton_pair_confirm_sas;
@@ -208,7 +226,10 @@ struct AuraUiCallbacks {
     // tap; assistant proposals arrive as AssistantExtras::pending_action.
     std::function<void()> on_action_confirm;
     std::function<void()> on_action_decline;
+    // The saved conversation deleted for good (two taps on the history's trash).
     std::function<void()> on_conversation_clear;
+    // A new topic: the assistant forgets the last questions, the history stays.
+    std::function<void()> on_conversation_new;
     std::function<void(const std::string& text, const std::string& language)> on_speak;
     std::function<void()> on_speak_stop;
     std::function<bool(std::uint32_t seconds, const std::string& label)> on_timer_start;
@@ -336,10 +357,10 @@ public:
     void show(UiView view);
     // Screens fade in as they open; off, a new screen is simply there.
     void set_view_fade(bool fade);
-    // The device cannot open Google's page: its sign-in button opens File
-    // transfer for the PC helper instead (ADR 0010).
+    // The device cannot open Google's page: its sign-in button opens the sign-in
+    // screen for the owner's phone or the PC helper instead (ADR 0010).
     void set_aoraton_sign_in_relay(bool relay);
-    // The phone's QR on File transfer while a phone sign-in is on; empty: none.
+    // The phone's QR on the sign-in screen while a phone sign-in is on; empty: none.
     void set_aoraton_phone_sign_in(const std::string& url);
     // Opens `view` as if from Home: Back returns Home, never to a screen
     // that happened to be open before.
@@ -369,6 +390,14 @@ public:
     UiView view() const noexcept;
     void apply_photos(const PhotoSnapshot& snapshot);
     void apply_transfer(const TransferSnapshot& snapshot);
+    void apply_files(const FileBrowserSnapshot& snapshot);
+    // The fingers on the glass (zero to two), in the screen's coordinates, each
+    // time they are read: two of them zoom an open photo.
+    void set_touch_points(const TouchPoint* points, std::size_t count);
+    // How far the open photo is zoomed (1: whole) and the picture's point at the
+    // middle of the screen.
+    float photo_zoom() const noexcept;
+    float photo_zoom_center_x() const noexcept;
     lv_obj_t* root() const noexcept;
 
 private:

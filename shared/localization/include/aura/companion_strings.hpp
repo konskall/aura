@@ -60,6 +60,7 @@ struct CompanionStrings {
     const char* conversation_clear;
     const char* conversation_you;
     const char* conversation_aura;
+    const char* conversation_older;
     const char* device_ai_services;
     const char* assistant_service;
     const char* recognition_service;
@@ -176,6 +177,11 @@ struct CompanionStrings {
     const char* organizer_past_time;
     const char* organizer_saved;
     const char* organizer_tap_complete;
+    const char* calendar_no_events;
+    const char* calendar_upcoming;
+    const char* calendar_namedays_format;  // the names
+    const char* calendar_weekdays[7];      // Monday first
+    const char* calendar_months[12];       // a month on its own: "Νοέμβριος"
 
     // Deterministic offline assistant replies
     const char* offline_time_format;       // the time
@@ -360,6 +366,12 @@ struct CompanionStrings {
     const char* aoraton_sign_in;
     const char* aoraton_sign_in_help;
     const char* aoraton_sign_in_relay_help;  // the device: the owner's phone or PC signs it in
+    const char* aoraton_sign_in_title;
+    const char* aoraton_sign_in_scan;
+    const char* aoraton_sign_in_wifi;
+    const char* aoraton_sign_in_pc;
+    const char* aoraton_sign_in_preparing;
+    const char* aoraton_sign_in_retry;
     const char* aoraton_signed_in;
     const char* aoraton_photo;
     const char* aoraton_photo_loading;

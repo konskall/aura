@@ -56,6 +56,7 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.conversation_clear = "Καθαρισμός";
         s.conversation_you = "Εσύ";
         s.conversation_aura = "AURA";
+        s.conversation_older = "Παλαιότερες";
         s.device_ai_services = "Υπηρεσίες AI";
         s.assistant_service = "Βοηθός";
         s.recognition_service = "Αναγνώριση";
@@ -167,6 +168,28 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.organizer_past_time = "Αυτή η ώρα έχει περάσει";
         s.organizer_saved = "Αποθηκεύτηκε";
         s.organizer_tap_complete = "Πάτησε για ολοκλήρωση";
+        s.calendar_no_events = "Κανένα ραντεβού αυτή τη μέρα";
+        s.calendar_upcoming = "Επόμενα ραντεβού";
+        s.calendar_namedays_format = "Γιορτάζουν: %s";
+        s.calendar_weekdays[0] = "Δ";
+        s.calendar_weekdays[1] = "Τ";
+        s.calendar_weekdays[2] = "Τ";
+        s.calendar_weekdays[3] = "Π";
+        s.calendar_weekdays[4] = "Π";
+        s.calendar_weekdays[5] = "Σ";
+        s.calendar_weekdays[6] = "Κ";
+        s.calendar_months[0] = "Ιανουάριος";
+        s.calendar_months[1] = "Φεβρουάριος";
+        s.calendar_months[2] = "Μάρτιος";
+        s.calendar_months[3] = "Απρίλιος";
+        s.calendar_months[4] = "Μάιος";
+        s.calendar_months[5] = "Ιούνιος";
+        s.calendar_months[6] = "Ιούλιος";
+        s.calendar_months[7] = "Αύγουστος";
+        s.calendar_months[8] = "Σεπτέμβριος";
+        s.calendar_months[9] = "Οκτώβριος";
+        s.calendar_months[10] = "Νοέμβριος";
+        s.calendar_months[11] = "Δεκέμβριος";
 
         s.offline_time_format = "Η ώρα είναι %s.";
         s.offline_battery_format = "Η μπαταρία είναι στο %d%%";
@@ -338,6 +361,12 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.aoraton_sign_in_relay_help =
             "Το κουμπί δείχνει κωδικό QR: σκάναρέ τον με το κινητό στο ίδιο Wi-Fi. Ή από υπολογιστή, με το "
             "aoraton-device-sign-in.";
+        s.aoraton_sign_in_title = "Σύνδεση στο Aoraton";
+        s.aoraton_sign_in_scan = "Σκάναρε με το κινητό σου";
+        s.aoraton_sign_in_wifi = "Κινητό και συσκευή στο ίδιο Wi-Fi.";
+        s.aoraton_sign_in_pc = "Από υπολογιστή";
+        s.aoraton_sign_in_preparing = "Ετοιμάζεται η σύνδεση…";
+        s.aoraton_sign_in_retry = "Δοκίμασε ξανά";
         s.aoraton_signed_in = "Συνδέθηκε στο Aoraton";
         s.aoraton_photo = "Φωτογραφία";
         s.aoraton_photo_loading = "Φόρτωση φωτογραφίας…";
@@ -536,6 +565,7 @@ const CompanionStrings& companion_en_us() noexcept {
         s.conversation_clear = "Clear";
         s.conversation_you = "You";
         s.conversation_aura = "AURA";
+        s.conversation_older = "Older";
         s.device_ai_services = "AI services";
         s.assistant_service = "Assistant";
         s.recognition_service = "Recognition";
@@ -647,6 +677,28 @@ const CompanionStrings& companion_en_us() noexcept {
         s.organizer_past_time = "That time has already passed";
         s.organizer_saved = "Saved";
         s.organizer_tap_complete = "Tap to complete";
+        s.calendar_no_events = "Nothing planned this day";
+        s.calendar_upcoming = "Coming up";
+        s.calendar_namedays_format = "Namedays: %s";
+        s.calendar_weekdays[0] = "M";
+        s.calendar_weekdays[1] = "T";
+        s.calendar_weekdays[2] = "W";
+        s.calendar_weekdays[3] = "T";
+        s.calendar_weekdays[4] = "F";
+        s.calendar_weekdays[5] = "S";
+        s.calendar_weekdays[6] = "S";
+        s.calendar_months[0] = "January";
+        s.calendar_months[1] = "February";
+        s.calendar_months[2] = "March";
+        s.calendar_months[3] = "April";
+        s.calendar_months[4] = "May";
+        s.calendar_months[5] = "June";
+        s.calendar_months[6] = "July";
+        s.calendar_months[7] = "August";
+        s.calendar_months[8] = "September";
+        s.calendar_months[9] = "October";
+        s.calendar_months[10] = "November";
+        s.calendar_months[11] = "December";
 
         s.offline_time_format = "It is %s.";
         s.offline_battery_format = "The battery is at %d%%";
@@ -816,6 +868,12 @@ const CompanionStrings& companion_en_us() noexcept {
         s.aoraton_sign_in_relay_help =
             "The button shows a QR code: scan it with your phone on the same Wi-Fi. Or from a PC, with "
             "aoraton-device-sign-in.";
+        s.aoraton_sign_in_title = "Sign in to Aoraton";
+        s.aoraton_sign_in_scan = "Scan with your phone";
+        s.aoraton_sign_in_wifi = "Phone and device on the same Wi-Fi.";
+        s.aoraton_sign_in_pc = "From a computer";
+        s.aoraton_sign_in_preparing = "Preparing sign-in…";
+        s.aoraton_sign_in_retry = "Try again";
         s.aoraton_signed_in = "Signed in to Aoraton";
         s.aoraton_photo = "Photo";
         s.aoraton_photo_loading = "Loading the photo…";

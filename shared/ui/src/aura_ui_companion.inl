@@ -28,9 +28,19 @@
     OrganizerKind organizer_kind{OrganizerKind::Event};
     std::string organizer_draft;
     int organizer_step{0};
-    int organizer_day_offset{0};
+    int organizer_day_offset{0};  // the new appointment's day, counted from today
     int organizer_hour{9};
     int organizer_minute{0};
+    // The calendar: the month on screen and the day picked in it.
+    int calendar_year{0};
+    int calendar_shown_month{0};
+    int calendar_day{0};
+    std::array<lv_obj_t*, 31> calendar_cells{};
+    lv_obj_t* calendar_details{};
+    bool conversation_delete_armed{false};
+    std::uint32_t conversation_delete_armed_at{0};
+    std::size_t conversation_shown{kConversationPage};
+    static constexpr std::size_t kConversationPage = 12;
     std::string radio_query_draft;
     bool radio_typing{false};
     bool radio_reordering{false};
@@ -60,6 +70,7 @@
     lv_obj_t* update_bar{};
     lv_obj_t* update_label{};
     lv_obj_t* radio_search_area{};
+    lv_obj_t* radio_spinner{};
 
     const l10n::CompanionStrings& c() const {
         return interface_language == InterfaceLanguage::English ? l10n::companion_en_us() :
@@ -81,6 +92,9 @@
         update_bar = nullptr;
         update_label = nullptr;
         radio_search_area = nullptr;
+        radio_spinner = nullptr;
+        calendar_cells.fill(nullptr);
+        calendar_details = nullptr;
     }
 
     static std::string countdown_text(std::uint64_t remaining_ms) {
@@ -505,29 +519,41 @@
         if (self->accept_action() && self->callbacks.on_action_decline) self->callbacks.on_action_decline();
     }
 
-    static void conversation_clear_event(lv_event_t* event) {
+    // A new topic: the assistant forgets the last questions; the history stays.
+    static void conversation_new_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (!self->accept_action()) return;
-        if (self->callbacks.on_conversation_clear) self->callbacks.on_conversation_clear();
+        if (self->callbacks.on_conversation_new) self->callbacks.on_conversation_new();
         if (self->callbacks.on_ask) self->callbacks.on_ask();
     }
 
+    // The conversation app opens the talk so far, with the button to go on with
+    // it: a tap on the app must not start the microphone (the owner, 2026-11-18).
     static void conversation_history_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (!self->accept_action()) return;
+        self->conversation_shown = kConversationPage;
         self->navigate(UiView::ConversationHistory);
     }
 
-    static void conversation_open_event(lv_event_t* event) {
+    static void conversation_older_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (!self->accept_action()) return;
-        if (!self->extras.conversation_history.empty()) self->navigate(UiView::ConversationHistory);
-        else if (self->callbacks.on_ask) self->callbacks.on_ask();
+        self->conversation_shown += kConversationPage;
+        self->render(UiView::ConversationHistory);
     }
 
+    // Deleting the whole history takes a second tap within four seconds.
     static void conversation_history_clear_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (!self->accept_action()) return;
+        if (!self->conversation_delete_armed) {
+            self->conversation_delete_armed = true;
+            self->conversation_delete_armed_at = self->phase_ms;
+            self->show_toast(self->c().delete_again, ui::tokens::coral);
+            return;
+        }
+        self->conversation_delete_armed = false;
         if (self->callbacks.on_conversation_clear) self->callbacks.on_conversation_clear();
         self->render(UiView::ConversationHistory);
     }
@@ -851,7 +877,7 @@
             switch (launcher_layout.order[index]) {
                 case LauncherApp::Conversation:
                     cell = app_cell_in(grid, column, row, index, v().conversation, ui::IconRole::Sparkles,
-                                       ui::tokens::lilac, UiView::Assistant, conversation_open_event);
+                                       ui::tokens::lilac, UiView::Assistant, conversation_history_event);
                     // A count of saved talks; Μάρμαρο marks only what is unread.
                     if (!launcher_reordering && !extras.conversation_history.empty() &&
                         appearance != Appearance::Marble) {
@@ -909,6 +935,11 @@
                                        ui::tokens::mint, UiView::Photos, photos_open_event);
                     set_target(cell, UiView::Photos);
                     break;
+                case LauncherApp::Files:
+                    cell = app_cell_in(grid, column, row, index, fx().title, ui::IconRole::Folder,
+                                       ui::tokens::amber, UiView::Files, files_open_event);
+                    set_target(cell, UiView::Files);
+                    break;
                 case LauncherApp::Count: break;
             }
             (void)cell;
@@ -952,6 +983,16 @@
             self->organizer_day_offset = static_cast<int>(start / 1440 - now / 1440);
             self->organizer_hour = when.hour;
             self->organizer_minute = when.minute;
+            // The day picked on the calendar, from today on, at nine in the morning.
+            if (self->organizer_kind == OrganizerKind::Event && self->calendar_year != 0) {
+                const auto picked = days_from_civil(self->calendar_year, self->calendar_shown_month, self->calendar_day);
+                const auto offset = picked - now / 1440;
+                if (offset > self->organizer_day_offset) {
+                    self->organizer_day_offset = static_cast<int>(offset);
+                    self->organizer_hour = 9;
+                    self->organizer_minute = 0;
+                }
+            }
         }
         self->navigate(UiView::OrganizerNew);
     }
@@ -1000,11 +1041,22 @@
         }
     }
 
+    // The appointment's day, a day at a time from today on.
     static void organizer_day_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (!self->accept_action()) return;
-        self->organizer_day_offset = static_cast<int>(user_value(event));
+        self->organizer_day_offset = std::max(0, self->organizer_day_offset + (user_value(event) ? 1 : -1));
         self->render(UiView::OrganizerNew);
+    }
+
+    std::string organizer_day_text() const {
+        if (organizer_day_offset == 0) return c().today;
+        if (organizer_day_offset == 1) return c().tomorrow;
+        const auto when = from_minute_index((clock.now_minute / 1440 + organizer_day_offset) * 1440);
+        char text[72];
+        std::snprintf(text, sizeof(text), "%s %d %s", v().weekday_names[when.weekday], when.day,
+                      v().month_names[when.month - 1]);
+        return text;
     }
 
     static void organizer_toggle_event(lv_event_t* event) {
@@ -1120,8 +1172,9 @@
         make_header(c().radio_search, ui::IconRole::Search, radio_search_open_event, ui::tokens::blue,
                     static_cast<bool>(callbacks.on_radio_search));
         if (radio.searching) {
-            auto* spinner = spinner_arc(content, 96, ui::tokens::blue, 6);
-            lv_obj_align(spinner, LV_ALIGN_CENTER, 0, -16);
+            // Turned by tick(): a spinner that stands still reads as a stuck search.
+            radio_spinner = spinner_arc(content, 96, ui::tokens::blue, 6);
+            lv_obj_align(radio_spinner, LV_ALIGN_CENTER, 0, -16);
             state_text(300, c().radio_search, radio.query.c_str());
             return;
         }
@@ -1204,7 +1257,7 @@
             {"calendar", UiView::Calendar}, {"tasks", UiView::Calendar},    {"shopping", UiView::Calendar},
             {"radio", UiView::Radio},       {"today", UiView::Briefing},    {"messages", UiView::AoratonRooms},
             {"notifications", UiView::Notifications},                       {"photos", UiView::Photos},
-            {"files", UiView::FileTransfer},                                {"settings", UiView::Settings},
+            {"files", UiView::Files},                                       {"settings", UiView::Settings},
             {"sound", UiView::Audio},       {"display", UiView::DisplaySettings},
             {"wifi", UiView::Wifi},         {"battery", UiView::Battery},   {"home", UiView::Home},
             {"apps", UiView::Launcher},
@@ -1226,6 +1279,9 @@
         if (app == "messages") return v().apps_messages;
         if (app == "settings") return t().settings_title;
         if (app == "display") return c().display_title;
+        if (app == "photos") return p().title;
+        if (app == "files") return fx().title;
+        if (app == "notifications") return v().notifications;
         return std::string(app);
     }
 
@@ -1370,7 +1426,7 @@
             pill(content, c().confirm, ui::ButtonTone::Primary, kGutter, kActionY, kHalfWidth, action_confirm_event);
             pill(content, c().decline, ui::ButtonTone::Secondary, kGutter + kHalfWidth + 16, kActionY, kHalfWidth,
                  action_decline_event);
-        } else if (extras.memory_turns > 0 && callbacks.on_conversation_clear) {
+        } else if (!extras.conversation_history.empty()) {
             pill(content, t().ask_again, ui::ButtonTone::Primary, kGutter, kActionY, kHalfWidth, ask_event);
             pill(content, c().conversation_history, ui::ButtonTone::Secondary, kGutter + kHalfWidth + 16, kActionY,
                  kHalfWidth, conversation_history_event);
@@ -1735,33 +1791,240 @@
             pill(content, c().conversation_ask, ui::ButtonTone::Primary, kGutter, kActionY, kWidth, ask_event);
             return;
         }
-        auto* list = make_list();
+        auto* list = make_list(kHeader, kActionY - 8 - kHeader);
         int y = 8;
-        for (const auto& turn : extras.conversation_history) {
-            y = conversation_bubble(list, y, c().conversation_you, turn.question, ui::tokens::blue, true);
+        // The newest turns, and the rest a page at a time: each is three objects.
+        const auto total = extras.conversation_history.size();
+        const auto shown = std::min(conversation_shown, total);
+        if (shown < total) {
+            pill(list, c().conversation_older, ui::ButtonTone::Secondary, kGutter, y, kWidth, conversation_older_event);
+            y += kButtonHeight + 12;
+        }
+        for (std::size_t index = total - shown; index < total; ++index) {
+            const auto& turn = extras.conversation_history[index];
+            std::string speaker = c().conversation_you;
+            const auto stamp = note_stamp(turn.minute);
+            if (!stamp.empty()) speaker += " · " + stamp;
+            y = conversation_bubble(list, y, speaker.c_str(), turn.question, ui::tokens::blue, true);
             y = conversation_bubble(list, y, c().conversation_aura, turn.answer, ui::tokens::lilac, false);
         }
-        y += 4;
-        pill(list, c().conversation_ask, ui::ButtonTone::Primary, kGutter, y, kHalfWidth, ask_event);
-        pill(list, c().new_conversation, ui::ButtonTone::Secondary, kGutter + kHalfWidth + 16, y,
-             kHalfWidth, conversation_clear_event);
-        list_end(list, y + kButtonHeight, 20);
+        list_end(list, y, 8);
         lv_obj_update_layout(list);
         lv_obj_scroll_to_y(list, lv_obj_get_scroll_bottom(list), LV_ANIM_OFF);
+        // The talk goes on from here, whatever the list's scroll.
+        pill(content, c().conversation_ask, ui::ButtonTone::Primary, kGutter, kActionY, kHalfWidth, ask_event);
+        pill(content, c().new_conversation, ui::ButtonTone::Secondary, kGutter + kHalfWidth + 16, kActionY,
+             kHalfWidth, conversation_new_event);
+    }
+
+    // ---- The calendar: a month, its days and what they hold --------------------
+
+    // Today's date, from the clock or the status bar; false while the time is unknown.
+    bool today_date(int& year, int& month, int& day) const {
+        if (clock.clock_valid) {
+            const auto now = from_minute_index(clock.now_minute);
+            year = now.year;
+            month = now.month;
+            day = now.day;
+            return true;
+        }
+        if (!status.date_valid) return false;
+        year = status.year;
+        month = status.month;
+        day = status.day;
+        return true;
+    }
+
+    // The month on screen, today's until the owner turns the page.
+    void calendar_settle(int today_year, int today_month, int today_day) {
+        if (calendar_year != 0) return;
+        calendar_year = today_year;
+        calendar_shown_month = today_month;
+        calendar_day = today_day;
+    }
+
+    static void calendar_month_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        const auto shown = calendar_month(self->calendar_year,
+                                          self->calendar_shown_month + (user_value(event) ? 1 : -1));
+        self->calendar_year = shown.year;
+        self->calendar_shown_month = shown.month;
+        // Today when it is this month, otherwise the 1st.
+        int year = 0;
+        int month = 0;
+        int day = 0;
+        self->calendar_day = self->today_date(year, month, day) && year == shown.year && month == shown.month ? day : 1;
+        self->render(UiView::Calendar);
+    }
+
+    static void calendar_day_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        const int previous = self->calendar_day;
+        self->calendar_day = static_cast<int>(user_value(event));
+        if (previous >= 1 && previous <= 31) self->style_calendar_cell(previous);
+        self->style_calendar_cell(self->calendar_day);
+        self->render_calendar_details();
+    }
+
+    bool calendar_is_today(int day) const {
+        int year = 0;
+        int month = 0;
+        int today = 0;
+        return today_date(year, month, today) && year == calendar_year && month == calendar_shown_month && today == day;
+    }
+
+    void style_calendar_cell(int day) {
+        auto* cell = day >= 1 && day <= 31 ? calendar_cells[static_cast<std::size_t>(day - 1)] : nullptr;
+        if (!cell) return;
+        const bool today = calendar_is_today(day);
+        const bool picked = day == calendar_day;
+        lv_obj_set_style_bg_color(cell, ui::color(ui::tokens::blue), 0);
+        lv_obj_set_style_bg_opa(cell, today ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(cell, picked ? 2 : 0, 0);
+        lv_obj_set_style_border_color(cell, ui::color(today ? ui::tokens::text : ui::tokens::blue), 0);
+    }
+
+    void render_calendar(lv_obj_t* list) {
+        int today_year = 0;
+        int today_month = 0;
+        int today = 0;
+        if (!today_date(today_year, today_month, today)) {
+            label(list, c().organizer_no_time, kGutter + 8, 96, kWidth - 16, ui::font_body(), ui::tokens::text_secondary,
+                  LV_TEXT_ALIGN_CENTER);
+            list_end(list, 200);
+            return;
+        }
+        calendar_settle(today_year, today_month, today);
+        const auto month = calendar_month(calendar_year, calendar_shown_month);
+        // The month and the way to the ones around it.
+        auto* before = round_button(list, kGutter, 0, 56, ui::IconRole::ChevronLeft, ui::tokens::blue, calendar_month_event);
+        set_value(before, 0);
+        char heading[48];
+        std::snprintf(heading, sizeof(heading), "%s %d", c().calendar_months[month.month - 1], month.year);
+        line(list, heading, 96, 12, 288, ui::font_headline(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);
+        auto* after = round_button(list, 400, 0, 56, ui::IconRole::Chevron, ui::tokens::blue, calendar_month_event);
+        set_value(after, 1);
+        // Seven columns, Monday first.
+        constexpr int kColumn = 61;
+        constexpr int kLeft = kGutter + 2;
+        constexpr int kRow = 46;
+        for (int column = 0; column < 7; ++column) {
+            line(list, c().calendar_weekdays[column], kLeft + column * kColumn, 64, kColumn, ui::font_caption(),
+                 ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
+        }
+        const auto busy = organizer_event_days(organizer, month.year, month.month);
+        constexpr int kGridTop = 96;
+        for (int day = 1; day <= month.days; ++day) {
+            const int place = month.first_column + day - 1;
+            auto* cell = lv_obj_create(list);
+            ui::reset(cell);
+            lv_obj_set_size(cell, kColumn - 5, kRow - 4);
+            lv_obj_set_pos(cell, kLeft + (place % 7) * kColumn + 2, kGridTop + (place / 7) * kRow);
+            lv_obj_set_style_radius(cell, 14, 0);
+            lv_obj_set_style_bg_color(cell, ui::color(ui::tokens::surface_high), LV_STATE_PRESSED);
+            lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
+            calendar_cells[static_cast<std::size_t>(day - 1)] = cell;
+            style_calendar_cell(day);
+            const bool today_cell = calendar_is_today(day);
+            const bool holiday = greek_calendar_day(month.year, month.month, day).holiday != GreekHolidayKind::None;
+            char number[12];
+            std::snprintf(number, sizeof(number), "%d", day);
+            auto* digits = ui::make_label(cell, number, today_cell ? ui::tokens::text : holiday ? ui::tokens::coral :
+                                          ui::tokens::text, ui::font_caption());
+            lv_obj_center(digits);
+            if (busy & (1U << static_cast<unsigned>(day))) {
+                auto* dot = make_dot(cell, 7, today_cell ? ui::tokens::text : ui::tokens::mint);
+                lv_obj_align(dot, LV_ALIGN_BOTTOM_MID, 0, -3);
+            }
+            tappable(cell, calendar_day_event, static_cast<std::uintptr_t>(day));
+        }
+        const int rows = (month.first_column + month.days + 6) / 7;
+        calendar_details = lv_obj_create(list);
+        ui::reset(calendar_details);
+        lv_obj_set_pos(calendar_details, 0, kGridTop + rows * kRow + 8);
+        lv_obj_set_size(calendar_details, ui::tokens::display_width, LV_SIZE_CONTENT);
+        render_calendar_details();
+    }
+
+    // Under the month: the picked day, its name days and what it holds.
+    void render_calendar_details() {
+        if (!calendar_details) return;
+        lv_obj_clean(calendar_details);
+        const auto month = calendar_month(calendar_year, calendar_shown_month);
+        const int day = std::clamp(calendar_day, 1, month.days);
+        const int weekday = static_cast<int>(((days_from_civil(month.year, month.month, day) % 7) + 11) % 7);
+        char heading[72];
+        std::snprintf(heading, sizeof(heading), "%s %d %s", v().weekday_names[weekday], day,
+                      v().month_names[month.month - 1]);
+        line(calendar_details, heading, kGutter + 4, 0, kWidth - 8, ui::font_headline(), ui::tokens::text);
+        int y = 40;
+        const auto about = greek_calendar_day(month.year, month.month, day);
+        if (about.holiday != GreekHolidayKind::None) {
+            label(calendar_details, interface_language == InterfaceLanguage::English ?
+                  greek_holiday_name_en(about.holiday) : greek_holiday_name_el(about.holiday),
+                  kGutter + 4, y, kWidth - 8, ui::font_caption(), ui::tokens::coral);
+            y += 34;
+        }
+        if (!about.namedays.empty()) {
+            char names[192];
+            std::snprintf(names, sizeof(names), c().calendar_namedays_format, join_namedays(about.namedays).c_str());
+            auto* line_names = label(calendar_details, names, kGutter + 4, y, kWidth - 8, ui::font_caption(),
+                                     ui::tokens::text_secondary);
+            lv_obj_update_layout(line_names);
+            y += lv_obj_get_height(line_names) + 8;
+        }
+        const auto events = organizer_events_on(organizer, month.year, month.month, day);
+        if (events.empty()) {
+            line(calendar_details, c().calendar_no_events, kGutter + 4, y, kWidth - 8, ui::font_caption(),
+                 ui::tokens::text_tertiary);
+            y += 40;
+        }
+        for (const auto& event : events) {
+            const auto when = from_minute_index(event.start_minute);
+            auto* row = list_row(calendar_details, y, event.title.c_str(), time_text(when.hour, when.minute).c_str(),
+                                 ui::IconRole::Calendar, ui::tokens::indigo, kRowHeight, 248);
+            organizer_delete_button(row, OrganizerKind::Event, event.id);
+            y += kRowPitch;
+        }
+        // What comes next, whichever day is picked.
+        std::size_t upcoming = 0;
+        for (const auto& event : organizer.events) {
+            if (upcoming == 3U) break;
+            if (clock.clock_valid && event.start_minute + event.duration_minutes < clock.now_minute) continue;
+            if (std::any_of(events.begin(), events.end(), [&](const auto& shown) { return shown.id == event.id; })) continue;
+            if (upcoming == 0U) {
+                line(calendar_details, c().calendar_upcoming, kGutter + 4, y + 8, kWidth - 8, ui::font_caption(),
+                     ui::tokens::text_secondary);
+                y += 44;
+            }
+            auto* row = list_row(calendar_details, y, event.title.c_str(), when_text(event.start_minute).c_str(),
+                                 ui::IconRole::Calendar, ui::tokens::indigo, kRowHeight, 248);
+            organizer_delete_button(row, OrganizerKind::Event, event.id);
+            y += kRowPitch;
+            ++upcoming;
+        }
+        list_end(calendar_details, y);
     }
 
     void render_organizer() {
         make_header(c().app_organizer, ui::IconRole::Plus, organizer_new_event, ui::tokens::blue);
         struct Tab { OrganizerKind kind; const char* title; };
-        const Tab tabs[]{{OrganizerKind::Event, c().organizer_events},
+        const Tab tabs[]{{OrganizerKind::Event, v().calendar},
                          {OrganizerKind::Task, c().organizer_tasks},
                          {OrganizerKind::Shopping, c().organizer_shopping}};
+        // «Ημερολόγιο» is the long one: the tabs share the row by what they say.
+        static constexpr int kTabWidths[3]{164, 132, 120};
+        int tab_x = kGutter;
         for (int index = 0; index < 3; ++index) {
             // Keep the tabs below the header's 64 px controls (y 16..79).
             auto* tab = pill(content, tabs[index].title,
                              organizer_kind == tabs[index].kind ? ui::ButtonTone::Primary : ui::ButtonTone::Secondary,
-                             kGutter + index * 144, 92, 136, organizer_tab_event);
+                             tab_x, 92, kTabWidths[index], organizer_tab_event);
+            tab_x += kTabWidths[index] + 8;
             lv_obj_set_height(tab, 56);
+            lv_obj_set_style_pad_hor(tab, 8, 0);
             if (auto* tab_label = lv_obj_get_child(tab, 0)) {
                 lv_obj_set_style_text_font(tab_label, ui::font_caption(), 0);
             }
@@ -1769,28 +2032,12 @@
         }
 
         auto* list = make_list(156, ui::tokens::display_height - 156);
-        int y = 0;
         if (organizer_kind == OrganizerKind::Event) {
-            for (const auto& event : organizer.events) {
-                if (clock.clock_valid && event.start_minute + event.duration_minutes < clock.now_minute) continue;
-                const auto when = when_text(event.start_minute);
-                // "45 λεπτά", "1 h": short enough beside the delete button.
-                const auto minutes = static_cast<unsigned>(event.duration_minutes);
-                char duration[32];
-                if (minutes >= 60U && minutes % 60U == 0U) {
-                    std::snprintf(duration, sizeof(duration), "%u %s", minutes / 60U,
-                                  minutes == 60U ? c().unit_hour_short : c().unit_hours_short);
-                } else {
-                    std::snprintf(duration, sizeof(duration), "%u %s", minutes, c().unit_minutes_short);
-                }
-                char detail[128];
-                std::snprintf(detail, sizeof(detail), "%s · %s", when.c_str(), duration);
-                auto* row = list_row(list, y, event.title.c_str(), detail, ui::IconRole::Calendar,
-                                     ui::tokens::indigo, kRowHeight, 248);
-                organizer_delete_button(row, OrganizerKind::Event, event.id);
-                y += kRowPitch;
-            }
-        } else if (organizer_kind == OrganizerKind::Task) {
+            render_calendar(list);
+            return;
+        }
+        int y = 0;
+        if (organizer_kind == OrganizerKind::Task) {
             for (const auto& item : organizer.tasks) {
                 auto* row = list_row(list, y, item.text.c_str(),
                                      item.completed ? c().done : c().organizer_tap_complete,
@@ -1814,9 +2061,8 @@
             }
         }
         if (y == 0) {
-            const char* empty = organizer_kind == OrganizerKind::Event ? c().organizer_events_empty :
-                                (organizer_kind == OrganizerKind::Task ? c().organizer_tasks_empty :
-                                                                        c().organizer_shopping_empty);
+            const char* empty = organizer_kind == OrganizerKind::Task ? c().organizer_tasks_empty :
+                                                                        c().organizer_shopping_empty;
             label(list, empty, kGutter, 116, kWidth, ui::font_body(), ui::tokens::text_secondary,
                  LV_TEXT_ALIGN_CENTER);
             y = 260;
@@ -1845,14 +2091,14 @@
         make_roller(24, organizer_hour, 72, 2);
         make_roller(60, organizer_minute, 256, 3);
         label(content, ":", 224, 150, 32, ui::font_title(), ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
-        auto* today = pill(content, c().today,
-                           organizer_day_offset == 0 ? ui::ButtonTone::Primary : ui::ButtonTone::Secondary,
-                           kGutter, 300, kHalfWidth, organizer_day_event);
-        set_value(today, 0);
-        auto* tomorrow = pill(content, c().tomorrow,
-                              organizer_day_offset == 1 ? ui::ButtonTone::Primary : ui::ButtonTone::Secondary,
-                              kGutter + kHalfWidth + 16, 300, kHalfWidth, organizer_day_event);
-        set_value(tomorrow, 1);
+        auto* earlier = round_button(content, kGutter, 300, 64, ui::IconRole::ChevronLeft, ui::tokens::blue,
+                                     organizer_day_event);
+        set_value(earlier, 0);
+        ui::set_button_disabled(earlier, organizer_day_offset == 0);
+        line(content, organizer_day_text().c_str(), 96, 318, 288, ui::font_caption(), ui::tokens::text,
+             LV_TEXT_ALIGN_CENTER);
+        auto* later = round_button(content, 392, 300, 64, ui::IconRole::Chevron, ui::tokens::blue, organizer_day_event);
+        set_value(later, 1);
         pill(content, c().save, ui::ButtonTone::Primary, kGutter, kActionY, kWidth, organizer_save_event);
     }
 
@@ -2638,6 +2884,7 @@
             return true;
         }
         if (current_view == UiView::NoteRecord && callbacks.on_note_record_cancel) callbacks.on_note_record_cancel();
+        if (files_go_up()) return true;
         if (current_view == UiView::OrganizerNew && organizer_kind == OrganizerKind::Event && organizer_step == 1) {
             organizer_step = 0;
             render(UiView::OrganizerNew);
@@ -2664,6 +2911,9 @@
             lv_obj_set_style_arc_opa(alert_ring, static_cast<lv_opa_t>(90 + pulse * 150 / 600), LV_PART_INDICATOR);
         }
         if (note_delete_armed && phase_ms - note_delete_armed_at > kForgetArmMs) note_delete_armed = false;
+        if (conversation_delete_armed && phase_ms - conversation_delete_armed_at > kForgetArmMs) {
+            conversation_delete_armed = false;
+        }
     }
 
     // Dimmed screens: a translucent black veil where nothing else dims them.

@@ -268,6 +268,7 @@ bool AuraUi::open_app(std::string_view app) {
     }
     const UiView view = Impl::app_view(app);
     show_from_home(view);
+    if (view == UiView::Files && impl_->callbacks.on_files_open) impl_->callbacks.on_files_open(std::string{});
     // What opening them from the launcher asks for: a fresh forecast, today's prices.
     if (view == UiView::Weather && impl_->callbacks.on_weather_open) impl_->callbacks.on_weather_open();
     if (view == UiView::Briefing && impl_->callbacks.on_briefing_open) impl_->callbacks.on_briefing_open();

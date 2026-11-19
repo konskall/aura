@@ -3,6 +3,7 @@ idf_component_register(
         "src/esp32_cloud_keys.cpp"
         "src/esp32_companion.cpp"
         "src/esp32_photo_storage.cpp"
+        "src/esp32_file_storage.cpp"
         "src/esp32_file_transfer.cpp"
         "src/esp32_microphone.cpp"
         "src/esp32_motion.cpp"

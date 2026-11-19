@@ -3,6 +3,7 @@
     lv_image_dsc_t transfer_qr_descriptor{};
     lv_obj_t* transfer_timer{};
     lv_obj_t* transfer_bar{};
+    lv_obj_t* aoraton_sign_in_spinner{};
     const l10n::TransferStrings& f() const { return l10n::transfer_strings(interface_language); }
     static void transfer_start_event(lv_event_t* event) {
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
@@ -51,6 +52,76 @@
         lv_image_set_src(image, &transfer_qr_descriptor);
         lv_obj_set_pos(image, 24, 140);
         return true;
+    }
+    static void aoraton_sign_in_cancel_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (self->accept_action()) self->go_back();
+    }
+    // Signing in to aoraton.com from the owner's phone or PC (ADR 0010). It runs
+    // on File transfer's server, but this is the account's screen: Aoraton's
+    // name and mark, the phone's QR, and the code for the PC beside it.
+    void render_aoraton_sign_in() {
+        transfer_timer = nullptr;
+        transfer_bar = nullptr;
+        aoraton_header();
+        const bool ready = transfer.state == TransferState::Ready || transfer.state == TransferState::Receiving;
+        const bool ended = transfer.state == TransferState::Failed || transfer.state == TransferState::Expired ||
+                           transfer.state == TransferState::Locked;
+        if (ended) {
+            state_symbol(112, 96, ui::IconRole::Warning, ui::tokens::coral);
+            const char* title = transfer.state == TransferState::Expired  ? f().expired
+                                : transfer.state == TransferState::Locked ? f().locked
+                                                                          : c().aoraton_sign_in_failed;
+            label(content, title, kGutter, 232, kWidth, ui::font_headline(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);
+            if (transfer.state == TransferState::Failed)
+                label(content, transfer_problem(), kGutter + 8, 284, kWidth - 16, ui::font_caption(),
+                      ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
+            pill(content, c().aoraton_sign_in_retry, ui::ButtonTone::Primary, kGutter, kActionY, kWidth, pairing_start_event);
+            return;
+        }
+        if (ready && aoraton_phone_url.empty()) {
+            // No phone's way (yet, or at all: a server only this PC reaches, no
+            // project values): the code for the PC helper, which signs in as well.
+            std::string where = transfer.loopback ? f().local_only : c().aoraton_sign_in_pc;
+            if (transfer.demo) where = std::string(t().demo) + " · " + where;
+            line(content, where.c_str(), kGutter, 100, kWidth, ui::font_caption(), ui::tokens::mint, LV_TEXT_ALIGN_CENTER);
+            auto pin = transfer.pin;
+            if (pin.size() == 6) pin.insert(3, " ");
+            line(content, pin.c_str(), kGutter, 168, kWidth, ui::font_title(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);
+            line(content, transfer.address.c_str(), kGutter, 228, kWidth, ui::font_caption(), ui::tokens::text_secondary,
+                 LV_TEXT_ALIGN_CENTER);
+            transfer_timer = line(content, "", kGutter, 268, kWidth, ui::font_caption(), ui::tokens::text_secondary,
+                                  LV_TEXT_ALIGN_CENTER);
+            pill(content, t().cancel, ui::ButtonTone::Secondary, kGutter, kActionY, kWidth, aoraton_sign_in_cancel_event);
+            update_transfer_progress();
+            return;
+        }
+        if (!ready) {
+            // The session is starting.
+            aoraton_sign_in_spinner = spinner_arc(content, 96, ui::tokens::blue, 6);
+            lv_obj_set_pos(aoraton_sign_in_spinner, (ui::tokens::display_width - 96) / 2, 148);
+            label(content, c().aoraton_sign_in_preparing, kGutter, 268, kWidth, ui::font_body(),
+                  ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
+            pill(content, t().cancel, ui::ButtonTone::Secondary, kGutter, kActionY, kWidth, aoraton_sign_in_cancel_event);
+            return;
+        }
+        std::string status = c().aoraton_sign_in_scan;
+        if (transfer.demo) status = std::string(t().demo) + " · " + status;
+        line(content, status.c_str(), kGutter, 100, kWidth, ui::font_caption(), ui::tokens::mint);
+        transfer_qr(aoraton_phone_url);
+        line(content, c().aoraton_sign_in_pc, 264, 140, 192, ui::font_caption(), ui::tokens::text_secondary);
+        auto pin = transfer.pin;
+        if (pin.size() == 6) pin.insert(3, " ");
+        line(content, pin.c_str(), 264, 174, 192, ui::font_title(), ui::tokens::text);
+        auto* address =
+            label(content, transfer.address.c_str(), 264, 232, 192, ui::font_caption(), ui::tokens::text_secondary);
+        lv_obj_set_height(address, 90);
+        transfer_timer = line(content, "", 264, 328, 192, ui::font_caption(), ui::tokens::text_secondary);
+        line(content, c().aoraton_sign_in_wifi, kGutter + 4, 368, kWidth - 8, ui::font_caption(),
+             ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
+        auto* cancel = pill(content, t().cancel, ui::ButtonTone::Secondary, kGutter, 416, kWidth, aoraton_sign_in_cancel_event);
+        lv_obj_set_height(cancel, 56);
+        update_transfer_progress();
     }
     const char* transfer_problem() const {
         switch (transfer.error) {
@@ -101,16 +172,12 @@
                  kGutter, 384, kWidth, starting ? transfer_stop_event : transfer_start_event);
             return;
         }
-        // A phone sign-in on: the QR takes the phone to Google (ADR 0010); the
-        // PIN and the address stay for the PC helper.
-        const bool phone = !aoraton_phone_url.empty();
         std::string status = transfer.loopback ? f().local_only : f().ready;
-        if (phone) status = f().phone_scan;
         if (receiving) status = f().receiving;
         if (transfer.demo) status = std::string(t().demo) + " · " + status;
         line(content, status.c_str(), kGutter, 100, kWidth, ui::font_caption(), ui::tokens::mint);
-        transfer_qr(phone ? aoraton_phone_url : transfer.address);
-        line(content, phone ? f().phone_pc : f().pin, 264, 140, 192, ui::font_caption(), ui::tokens::text_secondary);
+        transfer_qr(transfer.address);
+        line(content, f().pin, 264, 140, 192, ui::font_caption(), ui::tokens::text_secondary);
         auto pin = transfer.pin;
         if (pin.size() == 6) pin.insert(3, " ");
         line(content, pin.c_str(), 264, 174, 192, ui::font_title(), ui::tokens::text);
@@ -123,7 +190,6 @@
         std::string detail =
             transfer.error != TransferError::None ? transfer_problem()
             : receiving                           ? transfer.last_name
-            : phone                               ? f().phone_wifi
                         : std::string(completed) + (transfer.last_name.empty() ? "" : " · " + transfer.last_name);
         line(content, detail.c_str(), 24, 366, 432, ui::font_caption(), ui::tokens::text_secondary);
         transfer_bar = lv_bar_create(content);

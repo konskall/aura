@@ -46,7 +46,7 @@ const families = {
       Check: ['check'], Plus: ['plus'], Languages: ['translate'], Notebook: ['notebook'], Sunrise: ['sun-horizon'],
       Smartphone: ['device-mobile'], Phone: ['phone'], PhoneOff: ['phone-slash', 'phone-x'], Download: ['download-simple'],
       BellRing: ['bell-ringing'], Moon: ['moon'], Hand: ['hand'], Flip: ['flip-vertical'], Ear: ['ear'],
-      Swap: ['arrows-left-right'], Palette: ['palette'],
+      Swap: ['arrows-left-right'], Palette: ['palette'], Folder: ['folder'],
     },
   },
   solar: {
@@ -84,7 +84,7 @@ const families = {
       Plus: ['add-circle', 'add-square'], Languages: ['dialog-2'], Notebook: ['notebook'], Sunrise: ['sunrise'],
       Smartphone: ['smartphone'], Phone: ['phone'], PhoneOff: ['end-call'], Download: ['download-minimalistic'],
       BellRing: ['bell-bing'], Moon: ['moon'], Hand: ['hand-shake', 'hand-stars'], Flip: ['flip-vertical'],
-      Ear: ['headphones-round', 'ear'], Swap: ['transfer-horizontal'], Palette: ['palette'],
+      Ear: ['headphones-round', 'ear'], Swap: ['transfer-horizontal'], Palette: ['palette'], Folder: ['folder'],
     },
   },
   material: {
@@ -116,7 +116,7 @@ const families = {
       Languages: ['translate'], Notebook: ['sticky-note-2', 'edit-note'], Sunrise: ['wb-twilight'],
       Smartphone: ['smartphone'], Phone: ['call'], PhoneOff: ['call-end'], Download: ['download'],
       BellRing: ['notifications-active'], Moon: ['dark-mode', 'bedtime'], Hand: ['back-hand', 'pan-tool'],
-      Flip: ['flip'], Ear: ['hearing'], Swap: ['swap-horiz'], Palette: ['palette'],
+      Flip: ['flip'], Ear: ['hearing'], Swap: ['swap-horiz'], Palette: ['palette'], Folder: ['folder'],
     },
   },
 };

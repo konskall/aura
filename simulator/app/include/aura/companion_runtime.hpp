@@ -7,6 +7,7 @@
 #include "aura/aura_ui.hpp"
 #include "aura/bridge_speech_service.hpp"
 #include "aura/clock_services.hpp"
+#include "aura/conversation_log.hpp"
 #include "aura/device_status.hpp"
 #include "aura/display_power.hpp"
 #include "aura/fuel_prices.hpp"
@@ -16,6 +17,7 @@
 #include "aura/ota_update.hpp"
 #include "aura/phone_link.hpp"
 #include "aura/photo_runtime.hpp"
+#include "aura/file_browser_runtime.hpp"
 #include "aura/file_transfer_runtime.hpp"
 #include "aura/provider.hpp"
 #include "aura/sounds.hpp"
@@ -118,6 +120,8 @@ public:
     NotesModel& notes() noexcept { return notes_; }
     PhotoModel& photos() noexcept { return photos_->model(); }
     FileTransferRuntime& transfer() noexcept { return *transfer_; }
+    FileBrowserModel& files() noexcept { return files_->model(); }
+    ConversationLog& conversation_log() noexcept { return conversation_log_; }
     OrganizerModel& organizer() noexcept { return organizer_; }
     PhoneNotificationModel& phone() noexcept { return phone_; }
     OtaUpdateModel& ota() noexcept { return ota_; }
@@ -150,6 +154,8 @@ public:
 private:
     std::unique_ptr<PhotoRuntime> photos_;
     std::unique_ptr<FileTransferRuntime> transfer_;
+    std::unique_ptr<FileBrowserRuntime> files_;
+    std::uint64_t files_erased_{0};
     std::uint64_t transfer_photo_revision_{0};
     std::uint64_t transfer_removal_revision_{0};
     bool transfer_removals_pending_{false};
@@ -176,6 +182,8 @@ private:
     void finish_spoken_reply_chain();
     bool execute(const AssistantAction& action);
     void finish_local_reply(const std::string& text, std::optional<AssistantAction> action = std::nullopt);
+    // Keeps a finished exchange and shows it in the history.
+    void remember_turn(const std::string& question, const std::string& answer);
     bool route_message(const AssistantAction& action);
     void chime_for_new_messages(std::uint64_t now, AudioState audio_state);
     void simulate_imu(const std::string& kind);
@@ -195,6 +203,9 @@ private:
     DisplayPowerModel display_;
     ImuGestureDetector imu_;
     ConversationMemory memory_;
+    // What was said, to read again (Ιστορικό); stored in conversations.txt.
+    ConversationLog conversation_log_;
+    std::uint64_t saved_conversation_sequence_{0};
     VoiceRecorder recorder_;
     BargeInGate barge_gate_;
     AcousticEchoCanceller barge_aec_;

@@ -1,4 +1,5 @@
 #include "aura/organizer.hpp"
+#include "aura/text_util.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -79,5 +80,37 @@ int main() {
     expect(aura::organizer_default_start(day + 14 * 60 + 40) == day + 15 * 60 + 30, "14:40 suggests 15:30");
     expect(aura::organizer_default_start(day + 23 * 60 + 10) == day + 1440, "23:10 suggests midnight");
     expect(aura::organizer_default_start(day + 23 * 60 + 50) == day + 1440 + 30, "23:50 suggests 00:30");
+
+    // The calendar's month: 1 November 2026 is a Sunday, the last column.
+    const auto november = aura::calendar_month(2026, 11);
+    expect(november.year == 2026 && november.month == 11 && november.days == 30 && november.first_column == 6,
+           "November 2026 starts on Sunday");
+    const auto leap = aura::calendar_month(2028, 2);
+    expect(leap.days == 29 && leap.first_column == 1, "February 2028 has 29 days and starts on Tuesday");
+    expect(aura::calendar_month(2027, 2).days == 28, "February 2027 has 28 days");
+    const auto next_year = aura::calendar_month(2026, 13);
+    expect(next_year.year == 2027 && next_year.month == 1 && next_year.days == 31 && next_year.first_column == 4,
+           "the month after December is next January, a Friday");
+    const auto last_year = aura::calendar_month(2027, 0);
+    expect(last_year.year == 2026 && last_year.month == 12 && last_year.days == 31,
+           "the month before January is last December");
+
+    aura::OrganizerModel calendar;
+    const auto at = [](int y, int m, int d, int hour, int minute) {
+        return aura::days_from_civil(y, m, d) * 1440 + hour * 60 + minute;
+    };
+    expect(calendar.add_event("Οδοντίατρος", at(2026, 11, 18, 10, 0), 60) == aura::OrganizerResult::Ok, "an appointment");
+    expect(calendar.add_event("Ταξίδι", at(2026, 11, 30, 23, 0), 180) == aura::OrganizerResult::Ok, "past midnight");
+    expect(calendar.add_event("Μεσάνυχτα", at(2026, 11, 20, 23, 0), 60) == aura::OrganizerResult::Ok, "up to midnight");
+    expect(aura::organizer_event_days(calendar.snapshot(), 2026, 11) ==
+               ((1U << 18U) | (1U << 20U) | (1U << 30U)),
+           "the month's days that hold something");
+    expect(aura::organizer_event_days(calendar.snapshot(), 2026, 12) == (1U << 1U),
+           "an appointment past midnight reaches the next month");
+    expect(aura::organizer_event_days(calendar.snapshot(), 2026, 10) == 0U, "an empty month");
+    const auto on_18 = aura::organizer_events_on(calendar.snapshot(), 2026, 11, 18);
+    expect(on_18.size() == 1 && on_18.front().title == "Οδοντίατρος", "the day's appointments");
+    expect(aura::organizer_events_on(calendar.snapshot(), 2026, 12, 1).size() == 1, "the second day of a long one");
+    expect(aura::organizer_events_on(calendar.snapshot(), 2026, 11, 21).empty(), "ending at midnight is not the next day");
     std::cout << "organizer tests passed\n";
 }

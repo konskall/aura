@@ -55,7 +55,11 @@ What triggers it:
 
 The log line carries message ids and codes only, never the question, the history or the answer.
 
-Telemetry is off. Runtime logs may contain request IDs, timing, status codes and error classes, but not private prompts or messages. Fictional fixtures are labeled `DEMO` and must never be presented as live facts.
+Telemetry is off. Runtime logs may contain request IDs, timing, status codes and error classes, but not private prompts or messages.
+
+**2026-11-18, the owner's request: the conversation's history.** The conversation app shows what was asked and answered, so the last 40 exchanges (questions up to 600 bytes, answers up to 2,400) are kept in `conversations.txt`: on the device in `/sdcard/aura`, beside the notes, as plain text like them; in the simulator in its ignored store folder. The model never receives this history: a request still carries only the four recent turns of the in-memory conversation, which a new topic clears. The bin on the history deletes it after a second tap, and a factory reset deletes the file. Help with an Aoraton message stays out of it. Anyone holding the card can read the file, as they can the notes.
+
+**2026-11-18, the owner's request: Αρχεία.** The app lists the card's folders and deletes what the owner put there, after a confirmation that names the file or folder. Paths stay below the card's root and are checked name by name; the device's own folder is refused by the model and again by the worker; a folder's deletion is bounded (4,096 entries, 12 levels). Names are display text only. The simulator's Windows adapter refuses junctions and other reparse points. Fictional fixtures are labeled `DEMO` and must never be presented as live facts.
 
 ## Account realtime updates (2026-10-31)
 

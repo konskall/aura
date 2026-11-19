@@ -224,7 +224,8 @@ int main() {
         layout.restore(
             "AURA_APP_LAYOUT_V1\nweather\nconversation\nmessages\nclock\nnotes\ntoday\nradio\nnotifications\nsettings\norganizer\n") &&
             layout.snapshot().order.front() == LauncherApp::Weather &&
-            layout.snapshot().order.back() == LauncherApp::Photos,
-        "existing owner launcher order migrates with Photos appended");
+            layout.snapshot().order[kLauncherAppCount - 2] == LauncherApp::Photos &&
+            layout.snapshot().order.back() == LauncherApp::Files,
+        "existing owner launcher order migrates with Photos appended, then Files");
     std::cout << "Photo decoder, model, preference and migration checks passed\n";
 }

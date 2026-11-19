@@ -173,6 +173,63 @@ std::int64_t organizer_default_start(std::int64_t now_minute) noexcept {
     return ((now_minute + 30 + 29) / 30) * 30;
 }
 
+CalendarMonth calendar_month(int year, int month) noexcept {
+    // Months since year 0, so a month outside 1-12 carries into the year.
+    const int index = year * 12 + (month - 1);
+    const int shown_year = index >= 0 ? index / 12 : (index - 11) / 12;
+    const int shown_month = index - shown_year * 12 + 1;
+    const int next = index + 1;
+    const int next_year = next >= 0 ? next / 12 : (next - 11) / 12;
+    const std::int64_t first = days_from_civil(shown_year, shown_month, 1);
+    CalendarMonth result;
+    result.year = shown_year;
+    result.month = shown_month;
+    result.days = static_cast<int>(days_from_civil(next_year, next - next_year * 12 + 1, 1) - first);
+    // 1 January 1970 was a Thursday: the fourth column, counted from Monday.
+    result.first_column = static_cast<int>(((first % 7) + 7 + 3) % 7);
+    return result;
+}
+
+namespace {
+
+// The days [first, last] an appointment touches, as day numbers.
+void event_days(const OrganizerEvent& event, std::int64_t& first, std::int64_t& last) noexcept {
+    const std::int64_t duration = std::max<std::int64_t>(event.duration_minutes, 1);
+    first = event.start_minute / 1440;
+    last = (event.start_minute + duration - 1) / 1440;
+}
+
+}  // namespace
+
+std::uint32_t organizer_event_days(const OrganizerSnapshot& snapshot, int year, int month) noexcept {
+    const auto shown = calendar_month(year, month);
+    const std::int64_t month_first = days_from_civil(shown.year, shown.month, 1);
+    const std::int64_t month_last = month_first + shown.days - 1;
+    std::uint32_t days = 0;
+    for (const auto& event : snapshot.events) {
+        std::int64_t first = 0;
+        std::int64_t last = 0;
+        event_days(event, first, last);
+        for (auto day = std::max(first, month_first); day <= std::min(last, month_last); ++day) {
+            days |= 1U << static_cast<unsigned>(day - month_first + 1);
+        }
+    }
+    return days;
+}
+
+std::vector<OrganizerEvent> organizer_events_on(const OrganizerSnapshot& snapshot, int year, int month, int day) {
+    const auto shown = calendar_month(year, month);
+    const std::int64_t wanted = days_from_civil(shown.year, shown.month, day);
+    std::vector<OrganizerEvent> events;
+    for (const auto& event : snapshot.events) {
+        std::int64_t first = 0;
+        std::int64_t last = 0;
+        event_days(event, first, last);
+        if (wanted >= first && wanted <= last) events.push_back(event);
+    }
+    return events;
+}
+
 OrganizerResult OrganizerModel::set_checked(OrganizerKind kind, std::uint32_t id, bool checked) {
     if (kind == OrganizerKind::Task) {
         for (auto& item : snapshot_.tasks) {

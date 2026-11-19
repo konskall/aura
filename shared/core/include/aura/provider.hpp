@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <future>
 #include <memory>
 #include <string>
@@ -21,6 +22,7 @@ struct AssistantReply {
 struct ConversationTurn {
     std::string question;
     std::string answer;
+    std::int64_t minute{0};  // the local minute index it was said; 0 unknown (ConversationLog)
 };
 
 struct TurnRequest {

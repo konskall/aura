@@ -109,7 +109,7 @@
     // as a round glass button beside it; the conversation, when there is one,
     // is the header's action.
     void render_answer_aurora() {
-        const bool conversation = extras.memory_turns > 0 && callbacks.on_conversation_clear;
+        const bool conversation = !extras.conversation_history.empty();
         if (conversation) make_header("", ui::IconRole::List, conversation_history_event, ui::tokens::lilac);
         else make_header("");
         aurora_orb(content, 118, 48, 36);

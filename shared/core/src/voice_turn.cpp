@@ -338,6 +338,7 @@ void VoiceAssistantTurn::deliver(const std::string& raw) {
     if (text.empty()) text = empty_answer_;
     controller_.dispatch({EventType::FinalResult, text, 0});
     memory_.record(question_, text, clock_());
+    if (turn_recorded_) turn_recorded_(question_, text);
     if (message) {
         message_handler_(*message);
     } else if (parsed.action) {

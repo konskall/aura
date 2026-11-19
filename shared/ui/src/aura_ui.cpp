@@ -1,5 +1,7 @@
 #include "aura/aura_ui.hpp"
+#include "aura/file_strings.hpp"
 #include "aura/photo_strings.hpp"
+#include "aura/photo_zoom.hpp"
 #include "aura/transfer_strings.hpp"
 #include "../../third_party/qrcodegen/qrcodegen.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
@@ -7,6 +9,7 @@
 
 #include "aura/aura_theme.hpp"
 #include "aura/briefing.hpp"
+#include "aura/greek_calendar.hpp"
 #include "aura/companion_strings.hpp"
 #include "aura/text_util.hpp"
 #include "aura/aura_icons.hpp"
@@ -213,7 +216,7 @@ struct AuraUi::Impl {
     bool thread_follow_tail{true};
     // The city picker shows presets first; the keyboard opens on request.
     bool weather_typing{false};
-    bool aoraton_sign_in_relay{false};  // the device: File transfer and the PC helper
+    bool aoraton_sign_in_relay{false};  // the device: the sign-in screen and the PC helper
     std::string aoraton_phone_url;       // the phone sign-in's QR, while one is on
     // The conversation's photo thumbnails and the open photo: LVGL reads the
     // pixels through these descriptors, so they live as long as the screen.
@@ -558,11 +561,11 @@ struct AuraUi::Impl {
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
         if (!self->accept_action()) return;
         if (self->aoraton_sign_in_relay) {
-            // The owner's phone (File transfer shows its QR once ready) or the PC
-            // helper drives the sign-in over File transfer's server.
+            // The owner's phone (the sign-in screen shows its QR once ready) or the
+            // PC helper drives the sign-in over File transfer's server.
             if (self->callbacks.on_transfer_start && self->callbacks.on_transfer_start()) {
                 if (self->callbacks.on_aoraton_phone_sign_in) self->callbacks.on_aoraton_phone_sign_in();
-                self->navigate(UiView::FileTransfer);
+                self->navigate(UiView::AoratonSignIn);
             } else {
                 self->show_toast(self->f().failed, ui::tokens::coral);
             }
@@ -908,6 +911,12 @@ struct AuraUi::Impl {
         self->render_back(self->navigation.back());
     }
 
+    static void battery_open_event(lv_event_t* event) {
+        auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
+        if (!self->accept_action()) return;
+        if (self->current_view != UiView::Battery) self->navigate(UiView::Battery);
+    }
+
     static void network_settings_event(lv_event_t* event) {
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
         if (!self->accept_action()) return;
@@ -956,6 +965,8 @@ struct AuraUi::Impl {
         auto* self = static_cast<Impl*>(lv_event_get_user_data(event));
         const lv_dir_t direction = lv_indev_get_gesture_dir(lv_indev_active());
         if (self->current_view == UiView::PhotoViewer && (direction == LV_DIR_LEFT || direction == LV_DIR_RIGHT)) {
+            // A zoomed picture moves under the finger instead of changing.
+            if (self->photo_zoom.zoomed() || self->photo_zoom.pinching() || self->photo_touch_points > 1U) return;
             lv_indev_wait_release(lv_indev_active());
             if (self->callbacks.on_photo_advance) self->callbacks.on_photo_advance(direction == LV_DIR_LEFT ? 1 : -1);
             return;
@@ -972,6 +983,12 @@ struct AuraUi::Impl {
             return;
         }
         if (direction != LV_DIR_RIGHT) return;
+        // Αρχεία: a swipe goes up one folder, then back out of the app.
+        if (self->current_view == UiView::Files) {
+            lv_indev_wait_release(lv_indev_active());
+            self->go_back();
+            return;
+        }
         // While a radio search is typed, the keyboard keeps the swipe.
         if (self->current_view == UiView::RadioSearch && self->radio_typing) return;
         // Swipe right is "back" wherever the view has no horizontal control
@@ -982,6 +999,9 @@ struct AuraUi::Impl {
             case UiView::PhotoSettings:
             case UiView::PhotoDelete:
             case UiView::FileTransfer:
+            case UiView::AoratonSignIn:
+            case UiView::FileDetails:
+            case UiView::FileDelete:
             case UiView::Radio:
             case UiView::RadioSearch:
             case UiView::ConversationHistory:
@@ -1635,6 +1655,13 @@ struct AuraUi::Impl {
         status_right = lv_obj_create(status_bar);
         ui::reset(status_right);
         lv_obj_set_size(status_right, LV_SIZE_CONTENT, 40);
+        // The battery is also the shortcut to Κατάσταση συσκευής (the owner,
+        // 2026-11-18); only where it shows (update_status).
+        lv_obj_set_style_radius(status_right, 20, 0);
+        lv_obj_set_style_bg_color(status_right, ui::color(ui::tokens::surface_high), LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(status_right, LV_OPA_COVER, LV_STATE_PRESSED);
+        lv_obj_set_ext_click_area(status_right, 12);
+        lv_obj_add_event_cb(status_right, battery_open_event, LV_EVENT_CLICKED, this);
         lv_obj_set_layout(status_right, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(status_right, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(status_right, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -4114,6 +4141,10 @@ struct AuraUi::Impl {
 
     void reset_view_pointers() {
         transfer_timer = nullptr; transfer_bar = nullptr;
+        aoraton_sign_in_spinner = nullptr;
+        photo_frame = nullptr;
+        photo_zoom_image = nullptr;
+        file_spinner = nullptr;
         presence->detach();
         header_back = nullptr;
         header_title = nullptr;
@@ -4204,11 +4235,21 @@ struct AuraUi::Impl {
             return;
         }
         refresh_pending = false;
-        if (current_view == UiView::PhotoViewer && view != UiView::PhotoViewer && photos.playing && callbacks.on_photo_play)
-            callbacks.on_photo_play(false);
+        if (current_view == UiView::PhotoViewer && view != UiView::PhotoViewer) {
+            if (photos.playing && callbacks.on_photo_play) callbacks.on_photo_play(false);
+            // Half a megabyte the viewer needed only while a picture was zoomed.
+            photo_zoom.reset();
+            photo_zoom_pixels.clear();
+            photo_zoom_shown = nullptr;
+        }
         if (current_view == UiView::AoratonVoiceRecord && view != UiView::AoratonVoiceRecord &&
             view != UiView::AoratonConfirm && callbacks.on_aoraton_voice_cancel)
             callbacks.on_aoraton_voice_cancel();
+        // Leaving the sign-in's screen ends it: the phone's way needs the session
+        // open. The screen going dark is not leaving: it comes back to the QR.
+        if (current_view == UiView::AoratonSignIn && view != UiView::AoratonSignIn && view != UiView::AlwaysOn &&
+            callbacks.on_transfer_stop)
+            callbacks.on_transfer_stop();
         if (current_view == UiView::AoratonAttachment && view != UiView::AoratonAttachment) {
             if (callbacks.on_aoraton_close_attachment) callbacks.on_aoraton_close_attachment();
             aoraton_photo_shown.reset();
@@ -4228,6 +4269,8 @@ struct AuraUi::Impl {
         // Leaving the city picker always reopens it on its presets.
         if (!refresh && view != UiView::WeatherLocation) weather_typing = false;
         if (!refresh) leave_edit_modes(view);
+        // The calendar opens on today, whatever month it was left on.
+        if (!refresh && view == UiView::Calendar && current_view != UiView::OrganizerNew) calendar_year = 0;
         current_view = view;
         motion.leave();
         reset_view_pointers();
@@ -4253,6 +4296,10 @@ struct AuraUi::Impl {
             case UiView::AoratonSyncSettings: render_aoraton_sync_settings(); break;
             case UiView::AoratonAttachment: render_aoraton_attachment(); break;
             case UiView::AoratonVoiceRecord: render_aoraton_voice_record(); break;
+            case UiView::AoratonSignIn: render_aoraton_sign_in(); break;
+            case UiView::Files: render_files(); break;
+            case UiView::FileDetails: render_file_details(); break;
+            case UiView::FileDelete: render_file_delete(); break;
             case UiView::Weather: render_weather(); break;
             case UiView::WeatherSettings: render_weather_settings(); break;
             case UiView::WeatherLocation: render_weather_location(); break;
@@ -4345,6 +4392,7 @@ struct AuraUi::Impl {
         // Without the percentage (Κατάσταση συσκευής) the icon stays alone.
         lv_obj_set_hidden(status_battery, !show_battery || !display_power.settings.battery_percent);
         lv_obj_set_hidden(status_battery_glyph, !show_battery || !status.power_known);
+        lv_obj_set_clickable(status_right, show_battery);
         if (status.power_known) {
             lv_obj_set_width(status_battery_fill, std::max(4, status.battery_percent * 32 / 100));
             lv_obj_set_style_bg_color(status_battery_fill,
@@ -4392,6 +4440,7 @@ struct AuraUi::Impl {
 #include "aura_ui_companion.inl"
 #include "aura_ui_photos.inl"
 #include "aura_ui_transfer.inl"
+#include "aura_ui_files.inl"
 #include "aura_ui_system.inl"
 #include "aura_ui_appearance.inl"
 #include "aura_ui_marble.inl"
@@ -4595,9 +4644,9 @@ void AuraUi::apply_aoraton(const AoratonSnapshot& snapshot) {
     const bool signed_in = !snapshot.mock_mode && old.pairing != AoratonPairingState::Paired &&
                            snapshot.pairing == AoratonPairingState::Paired;
     impl_->aoraton = snapshot;
-    // Signed in from File transfer, by the owner's phone or the PC helper:
-    // back to where the sign-in began, and say so.
-    if (signed_in && impl_->aoraton_sign_in_relay && impl_->current_view == UiView::FileTransfer) {
+    // Signed in on its screen, by the owner's phone or the PC helper: back to
+    // where the sign-in began, and say so.
+    if (signed_in && impl_->aoraton_sign_in_relay && impl_->current_view == UiView::AoratonSignIn) {
         impl_->render(impl_->navigation.back());
         impl_->show_toast(impl_->c().aoraton_signed_in, ui::tokens::mint);
         return;
@@ -4731,8 +4780,12 @@ void AuraUi::tick(std::uint32_t elapsed_ms) {
         impl_->update_weather_motion(delta);
         impl_->companion_tick();
         impl_->system_tick(delta);
-        if (impl_->wifi_spinner && !impl_->capture_mode && !impl_->reduced_motion) {
-            lv_arc_set_rotation(impl_->wifi_spinner, static_cast<int32_t>((impl_->phase_ms / 4U) % 360U));
+        if (!impl_->capture_mode && !impl_->reduced_motion) {
+            const auto turn = static_cast<int32_t>((impl_->phase_ms / 4U) % 360U);
+            for (auto* spinner : {impl_->wifi_spinner, impl_->radio_spinner, impl_->aoraton_sign_in_spinner,
+                                  impl_->file_spinner}) {
+                if (spinner) lv_arc_set_rotation(spinner, turn);
+            }
         }
     } else {
         impl_->tick_presence_if_due();
@@ -4769,7 +4822,7 @@ void AuraUi::set_aoraton_sign_in_relay(bool relay) { impl_->aoraton_sign_in_rela
 void AuraUi::set_aoraton_phone_sign_in(const std::string& url) {
     if (url == impl_->aoraton_phone_url) return;
     impl_->aoraton_phone_url = url;
-    if (impl_->current_view == UiView::FileTransfer) impl_->render(UiView::FileTransfer);
+    if (impl_->current_view == UiView::AoratonSignIn) impl_->render(UiView::AoratonSignIn);
 }
 
 void AuraUi::show(UiView view) {
@@ -4874,9 +4927,33 @@ void AuraUi::apply_transfer(const TransferSnapshot& snapshot) {
         snapshot.address != self.transfer.address || snapshot.pin != self.transfer.pin ||
         snapshot.last_name != self.transfer.last_name || snapshot.completed != self.transfer.completed;
     self.transfer = snapshot;
-    if (self.current_view != UiView::FileTransfer) return;
-    if (structural) self.render(UiView::FileTransfer);
+    if (self.current_view != UiView::FileTransfer && self.current_view != UiView::AoratonSignIn) return;
+    if (structural) self.render(self.current_view);
     else self.update_transfer_progress();
+}
+
+void AuraUi::apply_files(const FileBrowserSnapshot& snapshot) {
+    auto& self = *impl_;
+    if (snapshot.sequence == self.files.sequence) return;
+    const bool path_changed = snapshot.path != self.files.path;
+    const auto erased_before = self.files.erased;
+    const bool was_deleting = self.files.deleting;
+    self.files = snapshot;
+    if (path_changed) self.file_page = 0;
+    // A deletion that finished, seen on the screen that asked for it.
+    if (was_deleting && !snapshot.deleting) {
+        const bool done = snapshot.erased != erased_before;
+        self.show_toast(done ? self.fx().deleted : self.fx().delete_failed, done ? ui::tokens::mint : ui::tokens::coral);
+    }
+    if (self.current_view == UiView::Files) self.render(UiView::Files);
+}
+
+float AuraUi::photo_zoom() const noexcept { return impl_->photo_zoom.zoom(); }
+float AuraUi::photo_zoom_center_x() const noexcept { return impl_->photo_zoom.center_x(); }
+
+void AuraUi::set_touch_points(const TouchPoint* points, std::size_t count) {
+    impl_->photo_touch_points = count;
+    impl_->photo_touch(points, count);
 }
 
 }  // namespace aura

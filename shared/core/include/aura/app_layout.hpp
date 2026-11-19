@@ -21,17 +21,19 @@ enum class LauncherApp : std::uint8_t {
     Settings,
     Organizer,
     Photos,
+    Files,
     Count,
 };
 
 constexpr std::size_t kLauncherAppCount = static_cast<std::size_t>(LauncherApp::Count);
 
-// The owner's order (2026-11-11), three to a row. A stored order is kept.
+// The owner's order (2026-11-11), three to a row, with Αρχεία to the right of
+// Φωτογραφίες (2026-11-18). A stored order is kept.
 constexpr std::array<LauncherApp, kLauncherAppCount> kDefaultLauncherOrder{
     LauncherApp::Conversation, LauncherApp::Notes, LauncherApp::Messages,
     LauncherApp::Today, LauncherApp::Weather, LauncherApp::Notifications,
-    LauncherApp::Clock, LauncherApp::Radio, LauncherApp::Photos,
-    LauncherApp::Organizer, LauncherApp::Settings,
+    LauncherApp::Photos, LauncherApp::Files, LauncherApp::Clock,
+    LauncherApp::Radio, LauncherApp::Organizer, LauncherApp::Settings,
 };
 
 struct LauncherLayoutSnapshot {

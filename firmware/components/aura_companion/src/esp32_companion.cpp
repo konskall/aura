@@ -60,6 +60,11 @@ void Esp32Companion::start() {
     if (const auto data = store_.read("clock.txt"); !data.empty()) clock_.restore(data);
     if (const auto data = store_.read("notes.txt"); !data.empty()) notes_.restore(data);
     if (const auto data = store_.read("organizer.txt"); !data.empty()) organizer_.restore(data);
+    if (const auto data = store_.read("conversations.txt"); !data.empty() && conversation_log_.restore(data)) {
+        extras_.conversation_history = conversation_log_.turns();
+        ++extras_.sequence;
+    }
+    saved_conversation_ = conversation_log_.sequence();
     if (const auto data = store_.read("sound.txt"); !data.empty()) sound_ = parse_sound_settings(data);
     if (const auto data = store_.read("display.txt"); !data.empty()) {
         display_.set_settings(parse_display_settings(data));
@@ -140,6 +145,18 @@ void Esp32Companion::install(AuraUiCallbacks& callbacks, IAoratonService* aorato
     callbacks.on_photo_interval = [this](unsigned seconds) { return storage_jobs_ && storage_accepting_ && photos_.set_interval(seconds); };
     callbacks.on_photo_ambient = [this](bool enabled) { return storage_jobs_ && storage_accepting_ && photos_.set_ambient(enabled); };
     callbacks.on_photo_delete = [this](const std::string& name) { return storage_jobs_ && storage_accepting_ && photos_.erase(name); };
+    callbacks.on_files_open = [this](const std::string& path) {
+        if (storage_jobs_ && storage_accepting_) return files_.open(path);
+        files_.unavailable(FileBrowserError::NoCard);
+        return false;
+    };
+    callbacks.on_files_refresh = [this] {
+        if (storage_jobs_ && storage_accepting_) files_.refresh();
+        else files_.unavailable(FileBrowserError::NoCard);
+    };
+    callbacks.on_files_delete = [this](const std::string& path) {
+        return storage_jobs_ && storage_accepting_ && files_.erase(path);
+    };
     aoraton_ = aoraton;
     if (aoraton_) aoraton_->set_sync_settings(aoraton_sync_);
     callbacks.on_aoraton_sync_changed = [this](const AoratonSyncSettings& settings) {
@@ -441,6 +458,20 @@ bool Esp32Companion::take_barge_in() noexcept {
     return heard;
 }
 
+void Esp32Companion::record_conversation(const std::string& question, const std::string& answer) {
+    conversation_log_.add(question, answer, now_minute());
+    extras_.conversation_history = conversation_log_.turns();
+    ++extras_.sequence;
+    extras_dirty_ = true;
+}
+
+void Esp32Companion::clear_conversation() {
+    conversation_log_.clear();
+    extras_.conversation_history.clear();
+    ++extras_.sequence;
+    extras_dirty_ = true;
+}
+
 void Esp32Companion::propose_action(const AssistantAction& action) {
     extras_.pending_action = action;
     ++extras_.sequence;
@@ -703,7 +734,8 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
                       audio_.diagnostics().state == AudioState::Playing ||
                       ota_.snapshot().state == UpdateState::Downloading || photos_.snapshot().playing ||
                       transfer_state.state == TransferState::Receiving ||
-                      (active_ui_ && active_ui_->view() == UiView::FileTransfer && (transfer_state.state == TransferState::Ready || transfer_state.state == TransferState::Starting));
+                      (active_ui_ && (active_ui_->view() == UiView::FileTransfer || active_ui_->view() == UiView::AoratonSignIn) &&
+                       (transfer_state.state == TransferState::Ready || transfer_state.state == TransferState::Starting));
     display_.hold_awake(busy, now);
     display_.tick(now);
     const int brightness = display_.snapshot().brightness_percent;
@@ -720,16 +752,29 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
         audio_.play_alert(*pass);
     }
     if (display_.snapshot().muted_by_flip && audio.state == AudioState::Playing) audio_.stop();
-    // A soft chime for a phone notification that was not there before.
-    if (phone_.snapshot().sequence != chime_phone_sequence_) {
+    // A soft chime for a notification that was not there before: a message on
+    // Aoraton or the phone's. Never over a voice, an alarm or an open microphone
+    // (the chime would be recorded).
+    const std::uint64_t aoraton_sequence = aoraton_ ? aoraton_->snapshot().sequence : 0U;
+    if (phone_.snapshot().sequence != chime_phone_sequence_ || aoraton_sequence != chime_aoraton_sequence_) {
         chime_phone_sequence_ = phone_.snapshot().sequence;
+        chime_aoraton_sequence_ = aoraton_sequence;
         std::vector<std::string> ids;
+        if (aoraton_) {
+            for (const auto& item : aoraton_->snapshot().notifications) ids.push_back("a" + item.message_id);
+        }
         for (const auto& item : phone_.snapshot().notifications) ids.push_back("p" + std::to_string(item.uid));
         const bool quiet = display_.snapshot().muted_by_flip || audio.muted || audio.state == AudioState::Playing ||
-                           clock_.snapshot().alert || recording_note_;
+                           clock_.snapshot().alert || voice_.state == VoiceCaptureState::Recording ||
+                           extras_.voice_on;
         if (message_chime_.observe(std::move(ids), now, quiet || !sound_.message_chime)) {
             audio_.play_pcm(make_message_chime());
         }
+    }
+    files_.poll();
+    if (files_.snapshot().erased != files_erased_) {
+        files_erased_ = files_.snapshot().erased;
+        if (storage_jobs_ && storage_accepting_) photos_.external_removal();
     }
     save();
 }
@@ -769,6 +814,7 @@ void Esp32Companion::storage_task() {
     for (;;) {
         storage_busy_ = true;
         photo_worker_.step();
+        file_worker_.step();
         storage_busy_ = false;
         StoreJob* job = nullptr;
         if (xQueueReceive(storage_jobs_, &job, pdMS_TO_TICKS(25)) != pdTRUE || !job) continue;
@@ -777,6 +823,7 @@ void Esp32Companion::storage_task() {
             case StoreJobKind::Clock:
             case StoreJobKind::Notes:
             case StoreJobKind::Organizer:
+            case StoreJobKind::Conversations:
             case StoreJobKind::Sound:
             case StoreJobKind::Display:
             case StoreJobKind::Language:
@@ -825,6 +872,10 @@ void Esp32Companion::poll_storage_results() {
                     saved_organizer_ = job->sequence;
                     saved_organizer_text_ = job->text;
                 }
+                break;
+            case StoreJobKind::Conversations:
+                conversation_save_pending_ = false;
+                if (job->success) saved_conversation_ = job->sequence;
                 break;
             // A failed write is tried again on the next poll.
             case StoreJobKind::Sound:
@@ -924,6 +975,10 @@ void Esp32Companion::save() {
         else queue_text(StoreJobKind::Organizer, "organizer.txt", std::move(data), sequence,
                         organizer_save_pending_);
     }
+    if (!conversation_save_pending_ && conversation_log_.sequence() != saved_conversation_) {
+        queue_text(StoreJobKind::Conversations, "conversations.txt", conversation_log_.serialize(),
+                   conversation_log_.sequence(), conversation_save_pending_);
+    }
     // The volume slider and the mute switch change only the audio service:
     // what is stored follows it. Values are compared every poll; text is
     // built only after a change, not for every frame.
@@ -976,6 +1031,7 @@ void Esp32Companion::apply(AuraUi& ui) {
     ui.apply_display(display_.snapshot());
     ui.apply_photos(photos_.snapshot());
     ui.apply_transfer(transfer_.session().snapshot());
+    ui.apply_files(files_.snapshot());
     ui.apply_clock(clock_.snapshot());
     ui.apply_notes(notes_.snapshot());
     ui.apply_organizer(organizer_.snapshot());

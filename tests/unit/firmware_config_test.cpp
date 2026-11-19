@@ -269,6 +269,44 @@ void check_view_fade(const std::string& root) {
            "screens open at once on the board, without a fade");
 }
 
+// The owner's requests of 2026-11-18 on the board: a sound for Aoraton's
+// messages too, two fingers from the touch controller, the Αρχεία app's worker,
+// the conversation kept on the card, and the sign-in screen kept awake.
+void check_owner_tools(const std::string& root) {
+    constexpr auto none = std::string::npos;
+    const std::string companion =
+        without_comments(read_file(root + "/firmware/components/aura_companion/src/esp32_companion.cpp"));
+    const auto chime = companion.find("message_chime_.observe(");
+    const auto aoraton_ids = companion.find("aoraton_->snapshot().notifications");
+    expect(aoraton_ids != none && chime != none && aoraton_ids < chime &&
+               companion.find("ids.push_back(\"a\" + item.message_id)") != none,
+           "a new Aoraton message chimes on the device, not only a phone notification");
+    expect(companion.find("chime_aoraton_sequence_") != none, "the chime looks again when Aoraton's messages change");
+    const std::string display =
+        without_comments(read_file(root + "/firmware/components/aura_board/src/aura_display.c"));
+    expect(display.find("touch_cfg.callbacks.custom_touch_read = read_two_fingers;") != none &&
+               display.find("kTouchBytes = 15") != none,
+           "the touch controller is read for two fingers");
+    const std::string main = without_comments(read_file(root + "/firmware/main/app_main.cpp"));
+    expect(main.find("aura_board_touch_points(finger_x, finger_y)") != none &&
+               main.find("ui.set_touch_points(points") != none,
+           "the fingers reach the UI");
+    const auto task = companion.find("void Esp32Companion::storage_task()");
+    const auto worker = companion.find("file_worker_.step();", task);
+    const auto queue = companion.find("xQueueReceive(storage_jobs_", task);
+    expect(task != none && worker != none && queue != none && worker < queue,
+           "the card's own worker reads and deletes for Αρχεία");
+    expect(companion.find("\"conversations.txt\", conversation_log_.serialize()") != none,
+           "the conversation is stored on the card");
+    const std::string store =
+        without_comments(read_file(root + "/firmware/components/aura_companion/src/esp32_microphone.cpp"));
+    const auto reset = store.find("void Esp32CompanionStore::factory_reset()");
+    expect(reset != none && store.find("\"conversations.txt\"", reset) != none,
+           "a factory reset deletes the stored conversation");
+    expect(main.find("assistant.turn->set_turn_recorded(") != none, "each answer reaches the history");
+    expect(companion.find("UiView::AoratonSignIn") != none, "the screen stays on while the sign-in waits for the phone");
+}
+
 // Σήμερα on the board (the owner, 2026-11-18): the read-aloud button needs a
 // handler to exist at all, and the fuel prices a source of the device's own.
 void check_today(const std::string& root) {
@@ -556,6 +594,7 @@ int main() {
     check_today(root);
     check_barge_words(root);
     check_view_fade(root);
+    check_owner_tools(root);
     check_power(defaults);
     check_security(defaults, read_file(root + "/firmware/sdkconfig.production.defaults"));
     check_partitions(defaults, read_file(root + "/firmware/partitions.csv"),

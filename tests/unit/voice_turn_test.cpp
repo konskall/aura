@@ -126,6 +126,10 @@ int main() {
         facts_for = question;
         return std::string("Μπαταρία: 80%");
     });
+    std::vector<std::pair<std::string, std::string>> recorded;
+    turn.set_turn_recorded([&recorded](const std::string& question, const std::string& answer) {
+        recorded.emplace_back(question, answer);
+    });
 
     turn.begin_listening();
     expect(controller.snapshot().state == AssistantState::Listening, "the talk target starts listening");
@@ -159,6 +163,17 @@ int main() {
                provider.requests[1].history[0].question == "Τι ώρα είναι;" &&
                provider.requests[1].history[0].answer == "Είναι 10:00.",
            "a follow-up question remembers the last answer");
+    expect(recorded.size() == 2 && recorded[0].first == "Τι ώρα είναι;" && recorded[0].second == "Είναι 10:00." &&
+               recorded[1].first == "Και αύριο;",
+           "each finished exchange goes to the host's history");
+
+    // A new topic: the next question comes without the earlier ones.
+    turn.forget_conversation();
+    controller.dispatch({aura::EventType::Reset});
+    turn.ask("Τι καιρό κάνει;");
+    settle(turn);
+    expect(provider.requests.size() == 3 && provider.requests[2].history.empty() && recorded.size() == 3,
+           "a new topic starts without the last questions, and is kept in the history too");
 
     // Without an action handler a proposed action is refused: the screen says nothing was done.
     controller.dispatch({aura::EventType::Reset});
@@ -198,7 +213,7 @@ int main() {
     turn.finish_listening(aura::make_wav(std::vector<std::int16_t>(8000, 0), 16000));
     settle(turn);
     expect(controller.snapshot().state != AssistantState::Transcribing &&
-               controller.snapshot().state != AssistantState::Thinking && provider.requests.size() == 3,
+               controller.snapshot().state != AssistantState::Thinking && provider.requests.size() == 4,
            "silence asks nothing");
     controller.dispatch({aura::EventType::Reset});
     provider.reply = {false, {}, "PROVIDER_UNAVAILABLE"};

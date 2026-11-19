@@ -1,5 +1,6 @@
 #pragma once
 #include "esp32_photo_storage.hpp"
+#include "esp32_file_storage.hpp"
 #include "esp32_file_transfer.hpp"
 
 #include "aura/app_layout.hpp"
@@ -7,6 +8,7 @@
 #include "aura/aura_ui.hpp"
 #include "aura/clock_services.hpp"
 #include "aura/cloud_keys.hpp"
+#include "aura/conversation_log.hpp"
 #include "aura/device_status.hpp"
 #include "aura/display_power.hpp"
 #include "aura/notes.hpp"
@@ -89,6 +91,9 @@ public:
         ++extras_.sequence;
         extras_dirty_ = true;
     }
+    // What the owner and the assistant said: kept on the card, to read again.
+    void record_conversation(const std::string& question, const std::string& answer);
+    void clear_conversation();
     // An action the assistant proposed, kept for the confirmation screen.
     void propose_action(const AssistantAction& action);
     // The owner confirmed it: true when it was done. Declined: dropped.
@@ -151,7 +156,8 @@ private:
     void begin_note();
     void finish_note();
     void save();
-    enum class StoreJobKind { Clock, Notes, Organizer, Sound, Display, Language, Layout, Voice, DeleteVoice, AoratonSync };
+    enum class StoreJobKind { Clock, Notes, Organizer, Conversations, Sound, Display, Language, Layout, Voice, DeleteVoice,
+                              AoratonSync };
     struct StoreJob {
         StoreJobKind kind{StoreJobKind::Clock};
         std::string name;
@@ -230,6 +236,14 @@ private:
     PhotoModel photos_{photo_mailbox_};
     Esp32PhotoStorage photo_storage_{store_};
     PhotoWorker photo_worker_{photo_mailbox_, photo_storage_};
+    FileMailbox file_mailbox_;
+    FileBrowserModel files_{file_mailbox_};
+    Esp32FileStorage file_storage_{store_};
+    FileWorker file_worker_{file_mailbox_, file_storage_};
+    std::uint64_t files_erased_{0};
+    ConversationLog conversation_log_;
+    std::uint64_t saved_conversation_{0};
+    bool conversation_save_pending_{false};
     Esp32FileTransfer transfer_;
     AuraUi* active_ui_{nullptr};
     std::uint64_t transfer_photo_revision_{0};
@@ -261,6 +275,7 @@ private:
     std::string saved_aoraton_sync_text_;
     bool aoraton_sync_save_pending_{false};
     std::uint64_t chime_phone_sequence_{0};
+    std::uint64_t chime_aoraton_sequence_{0};
     std::uint32_t note_counter_{0};
     std::uint64_t saved_clock_{0};
     std::uint64_t saved_notes_{0};

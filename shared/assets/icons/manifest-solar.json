@@ -111,7 +111,8 @@
     "Flip": "flip-vertical-bold-duotone",
     "Ear": "headphones-round-bold-duotone",
     "Swap": "transfer-horizontal-bold-duotone",
-    "Palette": "palette-bold-duotone"
+    "Palette": "palette-bold-duotone",
+    "Folder": "folder-bold-duotone"
   },
   "lucideFallbacks": []
 }

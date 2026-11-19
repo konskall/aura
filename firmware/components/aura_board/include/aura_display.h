@@ -50,6 +50,9 @@ void aura_board_display_set_rotation(int rotation);
 // A touch at (*x, *y) on the upright panel of side `size`, to the point of the
 // rotated content under it (aura::rotate_touch_point).
 void aura_board_rotate_touch(int rotation, int size, int32_t* x, int32_t* y);
+// The fingers on the glass at the last read (0 to 2), in the rotated content's
+// coordinates: x[i], y[i] for each. Under the display lock.
+int aura_board_touch_points(int32_t x[2], int32_t y[2]);
 
 #ifdef __cplusplus
 }
