@@ -20,6 +20,10 @@ MOTION_STATES = (
     "weather-clear", "weather-cloudy", "weather-rain",
     "weather-storm", "weather-snow", "weather-night",
 )
+# The simulator samples weather motion every 450 ms (simulator/app/src/main.cpp).
+# At 350 ms the heavy rain's 348 ms cycle made two frames identical now and then.
+MOTION_FRAME_MS = 450
+MOTION_SPAN_MS = 7 * MOTION_FRAME_MS
 WEATHER_SCENE_BOX = (264, 134, 458, 328)
 
 
@@ -46,7 +50,7 @@ def performance(path: Path) -> dict[str, float | int]:
         text = raw.decode("utf-8", errors="ignore")
     result: dict[str, float | int] = {}
     for key in (
-        "weather_updates", "weather_update_hz", "handler_avg_ms", "handler_max_ms",
+        "span_ms", "weather_updates", "weather_update_hz", "handler_avg_ms", "handler_max_ms",
         "lvgl_used_bytes", "lvgl_fragmentation",
     ):
         match = re.search(rf"{key}=([^,\s%]+)", text)
@@ -99,13 +103,16 @@ def main() -> int:
             motion_sheet.paste(frame.resize((160, 160), Image.Resampling.LANCZOS),
                                (index * 160, y + 24))
         frames[0].save(root / f"motion/{state}.gif", save_all=True,
-                       append_images=frames[1:], duration=350, loop=0, optimize=False)
+                       append_images=frames[1:], duration=MOTION_FRAME_MS, loop=0, optimize=False)
+        measured = performance(root / f"performance/{state}.log")
+        if measured.pop("span_ms") != MOTION_SPAN_MS:
+            raise ValueError(f"{state}: the simulator's frames do not span {MOTION_SPAN_MS} ms")
         motion_results[state] = {
             "frames": 8,
-            "span_ms": 2450,
+            "span_ms": MOTION_SPAN_MS,
             "changed_pixels_adjacent": deltas,
             "all_frames_distinct": True,
-            "performance": performance(root / f"performance/{state}.log"),
+            "performance": measured,
         }
     motion_sheet.save(root / "AURA_V10_3_1_WEATHER_MOTION.png", optimize=True)
 

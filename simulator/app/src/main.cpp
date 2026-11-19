@@ -7576,6 +7576,11 @@ int main(int argc, char** argv) {
     long long last_clock_second = -1;
     int motion_frame = 0;
     long long next_motion_frame_ms = 300;
+    // Weather scenes are sampled every 450 ms, not 350: the demo's heavy rain
+    // repeats every 58 px × 6 ms = 348 ms and the glow's half beat is about
+    // 4 × 350 ms, so at 350 ms two adjacent frames could come out identical
+    // (CI failed on it 2026-11-16, 11-18 and 11-19).
+    const long long motion_interval_ms = motion_scenario.rfind("weather-", 0) == 0 ? 450 : 350;
 
     while (running && lv_is_initialized()) {
         const auto now = std::chrono::steady_clock::now();
@@ -7933,7 +7938,7 @@ int main(int argc, char** argv) {
                 return 11;
             }
             ++motion_frame;
-            next_motion_frame_ms += 350;
+            next_motion_frame_ms += motion_interval_ms;
             if (motion_frame == 8) running = false;
         }
         const auto metrics_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -7977,7 +7982,7 @@ int main(int argc, char** argv) {
             static_cast<float>(total_handler_microseconds) /
             static_cast<float>(total_handler_iterations) / 1000.0F;
         const auto mercury_frames = ui.mercury_frame_count();
-        const auto evidence_span_ms = motion_frame > 1 ? (motion_frame - 1) * 350 : 0;
+        const auto evidence_span_ms = motion_frame > 1 ? (motion_frame - 1) * motion_interval_ms : 0LL;
         const float mercury_hz = evidence_span_ms == 0 || mercury_frames <= 1 ? 0.0F :
             static_cast<float>(mercury_frames - 1) * 1000.0F / static_cast<float>(evidence_span_ms);
         std::cout << "AURA motion evidence: scenario=" << motion_scenario
