@@ -50,7 +50,7 @@ namespace aura::firmware {
 // spoken questions are recorded here (the microphone is shared with notes) and
 // handed to app_main's VoiceAssistantTurn; speech recognition and spoken
 // replies are on once the device has its cloud keys.
-// Compiles with ESP-IDF 5.5.5; NOT VERIFIED ON HARDWARE.
+// Runs on the board since the first flash (2026-11-14).
 class Esp32Companion {
 public:
     explicit Esp32Companion(IAudioService& audio, DeviceStatusModel& status);
@@ -195,11 +195,11 @@ private:
         std::uint32_t samples{0};
         std::uint32_t zeros{0};
         std::int32_t peak{0};
-        double energy{0.0};
+        std::int64_t energy{0};  // exact: no double arithmetic per sample (Esp32Microphone::Levels)
         // The first two seconds in tenths: where the voice begins, and
         // whether the ES7210's settling or the speaker's tail shows.
         std::array<std::uint16_t, 20> tenths{};
-        double tenth_energy{0.0};
+        std::int64_t tenth_energy{0};
     };
     InputLevel question_level_{};
     bool recording_question_{false};

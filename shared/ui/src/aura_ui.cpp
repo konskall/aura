@@ -1171,6 +1171,16 @@ struct AuraUi::Impl {
         return value;
     }
 
+    // A line() at `y` whose text would be cut takes the caption size instead,
+    // centred on the line it had (ui::fit_label).
+    void fit_line(lv_obj_t* value, int y, int width) {
+        const lv_font_t* before = lv_obj_get_style_text_font(value, LV_PART_MAIN);
+        const lv_font_t* after = ui::fit_label(value, width);
+        if (after == before) return;
+        lv_obj_set_height(value, lv_font_get_line_height(after));
+        lv_obj_set_y(value, y + (lv_font_get_line_height(before) - lv_font_get_line_height(after)) / 2);
+    }
+
     // Icons are 64 px A8 sources drawn at `size`, centred in a size x size box.
     lv_obj_t* icon_view(lv_obj_t* parent, ui::IconRole role, int size = 28,
                         std::uint32_t color = ui::tokens::text) {
@@ -1303,8 +1313,11 @@ struct AuraUi::Impl {
 
     // A 432 x 88 platter: tinted icon well, 28 px title, optional 22 px
     // subtitle. `text_width` narrows both when the row carries its own control.
+    // `fit_title`: a setting's own name, never cut while a smaller size holds it
+    // (ui::fit_label); data rows keep one size and end in an ellipsis.
     lv_obj_t* list_row(lv_obj_t* parent, int y, const char* title, const char* subtitle,
-                       ui::IconRole role, std::uint32_t accent, int height = kRowHeight, int text_width = 0) {
+                       ui::IconRole role, std::uint32_t accent, int height = kRowHeight, int text_width = 0,
+                       bool fit_title = false) {
         auto* row = lv_obj_create(parent);
         ui::reset(row);
         ui::style_row(row, accent, false);
@@ -1327,6 +1340,9 @@ struct AuraUi::Impl {
         lv_obj_set_size(heading, width, title_height);
         lv_label_set_long_mode(heading, LV_LABEL_LONG_DOT);
         lv_obj_align(heading, LV_ALIGN_LEFT_MID, text_x, -detail_height / 2);
+        if (fit_title && ui::fit_label(heading, width) != ui::font_headline()) {
+            lv_obj_set_height(heading, lv_font_get_line_height(ui::font_caption()));
+        }
         if (subtitle) {
             auto* detail = ui::make_label(row, subtitle, ui::tokens::text_secondary, ui::font_caption());
             lv_obj_set_size(detail, width, detail_height);

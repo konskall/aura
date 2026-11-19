@@ -81,11 +81,14 @@
         lv_obj_set_pos(well, 12, 20 - inset);
         constexpr int kTextX = 66;
         const int text_width = width - kTextX - 6;
+        // «Φωτογραφίες» was cut to «Φωτογραφ…» in the two columns (2026-11-19).
         if (live.status.empty()) {
-            line(cell, title, kTextX, 24 - inset, text_width, ui::font_body(), ui::tokens::text);
+            fit_line(line(cell, title, kTextX, 24 - inset, text_width, ui::font_body(), ui::tokens::text), 24 - inset,
+                     text_width);
             return;
         }
-        line(cell, title, kTextX, 10 - inset, text_width, ui::font_body(), ui::tokens::text);
+        fit_line(line(cell, title, kTextX, 10 - inset, text_width, ui::font_body(), ui::tokens::text), 10 - inset,
+                 text_width);
         line(cell, live.status.c_str(), kTextX, 46 - inset, text_width, ui::font_caption(), ui::tokens::text_secondary);
     }
 

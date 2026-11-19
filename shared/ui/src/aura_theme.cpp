@@ -3,6 +3,9 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+
+#include "src/misc/lv_text_private.h"  // lv_text_get_width()
 
 #include "aura/aura_appearance.hpp"
 
@@ -246,7 +249,42 @@ lv_obj_t* make_button(lv_obj_t* parent, const char* text, ButtonTone tone, const
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
     lv_obj_set_style_max_width(title, lv_pct(100), 0);
     lv_obj_center(title);
+    // Sized after it is made: its label fits once its width is known.
+    lv_obj_add_event_cb(
+        value,
+        [](lv_event_t* event) {
+            auto* button = lv_event_get_current_target_obj(event);
+            auto* label = lv_obj_get_child(button, 0);
+            if (label && lv_obj_check_type(label, &lv_label_class)) fit_label(label, lv_obj_get_content_width(button));
+        },
+        LV_EVENT_SIZE_CHANGED, nullptr);
     return value;
+}
+
+bool text_fits(const char* text, const lv_font_t* font, std::int32_t letter_space, std::int32_t width) {
+    if (!text || !font) return true;
+    lv_text_attributes_t attributes{};
+    attributes.letter_space = letter_space;
+    attributes.max_width = LV_COORD_MAX;
+    attributes.text_flags = LV_TEXT_FLAG_NONE;
+    return lv_text_get_width(text, static_cast<std::uint32_t>(std::strlen(text)), font, &attributes) <= width;
+}
+
+const lv_font_t* fit_label(lv_obj_t* label, std::int32_t width) {
+    const lv_font_t* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+    const std::int32_t letter_space = lv_obj_get_style_text_letter_space(label, LV_PART_MAIN);
+    const char* text = lv_label_get_text(label);
+    if (width <= 0 || text_fits(text, font, letter_space, width)) return font;
+    if (font != font_caption() && text_fits(text, font_caption(), letter_space, width)) {
+        lv_obj_set_style_text_font(label, font_caption(), 0);
+        return font_caption();
+    }
+    if (letter_space > -1 && text_fits(text, font_caption(), -1, width)) {
+        lv_obj_set_style_text_font(label, font_caption(), 0);
+        lv_obj_set_style_text_letter_space(label, -1, 0);
+        return font_caption();
+    }
+    return font;
 }
 
 lv_obj_t* make_tag(lv_obj_t* parent, const char* text, std::uint32_t accent) {

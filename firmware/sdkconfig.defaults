@@ -41,6 +41,12 @@ CONFIG_FREERTOS_HZ=1000
 # 3.5 KiB is far too little for that; the metrics line reports what is left
 # (2026-11-14, before the first flash).
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
+# The event task runs the Wi-Fi handlers: the saved network read at start, and
+# a new one written to NVS once it connects, then SNTP started. Its default
+# 2304 bytes kept 604 free at the least on the board (2026-11-19) before that
+# write ever ran. The inter-core tasks kept 384 and 472 of their 1280.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+CONFIG_ESP_IPC_TASK_STACK_SIZE=1536
 # A crash on the board leaves its backtrace in the coredump partition, read
 # later with `idf.py coredump-info` even without a monitor attached.
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y

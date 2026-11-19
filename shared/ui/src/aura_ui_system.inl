@@ -114,25 +114,25 @@
         y += 40;
 
         auto* mute_row = list_row(list, y, c().sound_mute, c().sound_mute_detail, ui::IconRole::Muted,
-                                  ui::tokens::coral, kRowHeight, 252);
+                                  ui::tokens::coral, kRowHeight, 252, true);
         add_switch(mute_row, audio.muted);
         lv_obj_set_clickable(mute_row, true);
         lv_obj_add_event_cb(mute_row, audio_mute_event, LV_EVENT_CLICKED, this);
         y += kRowPitch;
         auto* chime_row = list_row(list, y, c().sound_chime, c().sound_chime_detail, ui::IconRole::BellRing,
-                                   ui::tokens::pink, kRowHeight, 252);
+                                   ui::tokens::pink, kRowHeight, 252, true);
         add_switch(chime_row, sound.message_chime);
         tappable(chime_row, sound_setting_event, 0);
         y += kRowPitch;
         auto* spoken_row = list_row(list, y, c().sound_spoken, c().sound_spoken_detail, ui::IconRole::Speaker,
-                                    ui::tokens::lilac, kRowHeight, 252);
+                                    ui::tokens::lilac, kRowHeight, 252, true);
         add_switch(spoken_row, sound.spoken_replies);
         const bool speech_ready = capabilities.speech_output;
         if (speech_ready) tappable(spoken_row, sound_setting_event, 1);
         else ui::set_button_disabled(spoken_row, true);
         y += kRowPitch;
         auto* continuous_row = list_row(list, y, c().sound_continuous, c().sound_continuous_detail,
-                                        ui::IconRole::Voice, ui::tokens::ice, kRowHeight, 252);
+                                        ui::IconRole::Voice, ui::tokens::ice, kRowHeight, 252, true);
         add_switch(continuous_row, sound.continuous_conversation);
         const bool conversation_ready = capabilities.microphone && capabilities.speech_recognition &&
                                         capabilities.speech_output;
@@ -140,7 +140,7 @@
         else ui::set_button_disabled(continuous_row, true);
         y += kRowPitch;
         auto* barge_row = list_row(list, y, c().sound_barge_in, c().sound_barge_in_detail,
-                                   ui::IconRole::Microphone, ui::tokens::mint, kRowHeight, 252);
+                                   ui::IconRole::Microphone, ui::tokens::mint, kRowHeight, 252, true);
         add_switch(barge_row, sound.barge_in);
         if (conversation_ready) tappable(barge_row, sound_setting_event, 3);
         else ui::set_button_disabled(barge_row, true);
@@ -255,7 +255,7 @@
 
         auto* well = icon_well(card, 48, role, accent, 28);
         lv_obj_set_pos(well, 18, 18);
-        line(card, title, 82, 26, kWidth - 102, ui::font_headline());
+        fit_line(line(card, title, 82, 26, kWidth - 102, ui::font_headline()), 26, kWidth - 102);
         auto* detail = label(card, body, 20, 78, kWidth - 40, ui::font_caption(),
                              ui::tokens::text_secondary);
         lv_obj_set_height(detail, LV_SIZE_CONTENT);
@@ -495,8 +495,9 @@
         system_orb(190, role, accent);
         boot_spinner = system_ring_outer;
         line(content, title, kGutter, 302, kWidth, ui::font_title(), ui::tokens::text, LV_TEXT_ALIGN_CENTER);
-        line(content, detail, kGutter, 348, kWidth, ui::font_caption(), ui::tokens::text_secondary,
-             LV_TEXT_ALIGN_CENTER);
+        // Two lines at most above the bar: Σέλας's wider type cut «...με ασφάλεια.» on one (2026-11-19).
+        label(content, detail, kGutter, 348, kWidth, ui::font_caption(), ui::tokens::text_secondary,
+              LV_TEXT_ALIGN_CENTER);
 
         system_progress = lv_bar_create(content);
         lv_obj_set_size(system_progress, 240, 5);

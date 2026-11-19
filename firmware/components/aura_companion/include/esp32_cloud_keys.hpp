@@ -9,7 +9,8 @@ namespace aura::firmware {
 
 // The assistant's keys in NVS (namespace "aura_cloud"), which is encrypted on
 // every build (CONFIG_NVS_ENCRYPTION). They arrive from the owner's PC over the
-// code-protected transfer session and are never logged. NOT VERIFIED ON HARDWARE.
+// code-protected transfer session and are never logged. Used on the board since
+// 2026-11-16 (the assistant answers and speaks there).
 class Esp32CloudKeyStore final : public ICloudKeySink {
 public:
     // The keys kept, or empty ones.

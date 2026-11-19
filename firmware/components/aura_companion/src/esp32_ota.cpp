@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
@@ -22,6 +23,9 @@ namespace {
 constexpr const char* kTag = "aura-ota";
 constexpr std::size_t kManifestLimit = 2048;
 constexpr std::size_t kMaximumEvents = 24;
+// No piece of the image for this long ends the download (2026-11-19): a read
+// gives 0 both for "nothing yet" and for a connection closed before the end.
+constexpr std::int64_t kDownloadStallUs = 30LL * 1000 * 1000;
 
 // GitHub Releases answers with redirects (the newest release, then its tag,
 // then the file store), so a redirect is followed, at most five times, until
@@ -155,14 +159,22 @@ const char* Esp32Ota::install(const UpdateManifest& manifest) {
     std::uint32_t total = 0;
     int last_percent = -1;
     bool ok = true;
+    std::int64_t last_data_us = esp_timer_get_time();
     for (;;) {
         const int read = esp_http_client_read(client, reinterpret_cast<char*>(buffer), sizeof(buffer));
         if (read < 0) { ok = false; break; }
         if (read == 0) {
             if (esp_http_client_is_complete_data_received(client)) break;
+            if (esp_timer_get_time() - last_data_us > kDownloadStallUs) {
+                ESP_LOGW(kTag, "update: nothing received for %lld s at %u bytes",
+                         static_cast<long long>(kDownloadStallUs / 1000000), static_cast<unsigned>(total));
+                ok = false;
+                break;
+            }
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
+        last_data_us = esp_timer_get_time();
         total += static_cast<std::uint32_t>(read);
         if (total > manifest.size_bytes || esp_ota_write(ota, buffer, static_cast<std::size_t>(read)) != ESP_OK) {
             ok = false;

@@ -8,9 +8,9 @@ Verified from the current official Waveshare documentation on 2026-10-17:
 
 - ESP32-S3R8, dual-core Xtensa LX7 up to 240 MHz, 512 KiB on-chip SRAM, 8 MiB PSRAM, 16 MiB flash.
 - 480 × 480 2.16-inch AMOLED, CO5300 QSPI controller.
-- CST9220 touch over shared I2C; the current BSP registry dependency names a compatible `cst9217` driver and must be validated on hardware.
+- CST9220 touch over shared I2C, through the BSP's compatible `cst9217` driver: it works on the board since the first flash (2026-11-14). Since 2026-11-18 AURA reads the second finger itself (`aura_display.c`), for zooming a photo.
 - AXP2101 PMIC, QMI8658 IMU, PCF85063 RTC.
-  - Drivers since 2026-11-05 (`firmware/components/aura_board/src/aura_board_chips.cpp`, register formats in `shared/core/src/board_chips.cpp`, both NOT VERIFIED ON HARDWARE):
+  - Drivers since 2026-11-05 (`firmware/components/aura_board/src/aura_board_chips.cpp`, register formats in `shared/core/src/board_chips.cpp`). On the board both answer: the boot log reads «Time from the board clock» and «Board clock ready, power manager ready» (2026-11-19), and the battery's readings fill Κατάσταση συσκευής:
     - **PCF85063 at 0x51.** It keeps UTC and sets the system clock at boot. Each SNTP sync writes it again.
     - **AXP2101 at 0x34.** It is read every 5 s: battery percent (0xA4), USB and charging (0x00, 0x01), and the ADC block 0x34–0x3D.
       - The block gives battery, USB and system voltage, and the die temperature: 22 + (7274 − raw) / 20 °C, as XPowersLib computes it. Bits 2–0 of 0x01 give the charger's stage.

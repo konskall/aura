@@ -322,7 +322,6 @@ bool built_in_aoraton_config(aura::AoratonLinkConfig& config) {
 extern "C" void app_main(void) {
     ESP_LOGI(kTag, "AURA boot: Waveshare ESP32-S3-Touch-AMOLED-2.16 profile %s",
              aura_board::profile_name);
-    ESP_LOGW(kTag, "Hardware behavior is unverified until physical board bring-up");
 
     // NVS holds Wi-Fi credentials, the weather city, and an optional enhanced
     // tlesdetector endpoint. Core weather uses Open-Meteo directly when absent.

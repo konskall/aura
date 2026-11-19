@@ -116,14 +116,16 @@ private:
     std::array<float, kTaps> weights_{};
     std::array<float, kTaps> kept_weights_{};  // the last frame's, restored after a glitch
     std::size_t position_{0};
-    double power_{0.0};  // of the window, kept as samples enter and leave it
+    // Sums of whole samples squared, exact in 64-bit integers: the ESP32-S3 has
+    // no unit for doubles, and these ran for every sample while the device spoke.
+    std::int64_t power_{0};  // of the window, kept as samples enter and leave it
     std::uint32_t update_turn_{0};
     bool adapt_{false};
     bool owner_{false};  // the last frame sounded like the owner
     bool glitch_{false};
     std::uint32_t frame_samples_{0};
-    double frame_microphone_{0.0};
-    double frame_reference_{0.0};
+    std::int64_t frame_microphone_{0};
+    std::int64_t frame_reference_{0};
     double frame_residual_{0.0};
     std::uint32_t settle_ms_{kSettleMs};
     std::uint32_t learned_ms_{0};

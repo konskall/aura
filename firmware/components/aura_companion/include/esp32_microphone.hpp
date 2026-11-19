@@ -47,10 +47,12 @@ public:
 private:
     static void task(void* argument);
     // The levels of a session, for the log on stop (numbers only).
+    // Sums of samples squared, exact in 64-bit integers: the ESP32-S3 has no
+    // unit for doubles, and these ran for every frame the microphone heard.
     struct Levels {
-        double voice{0.0};
-        double second{0.0};
-        double reference{0.0};
+        std::int64_t voice{0};
+        std::int64_t second{0};
+        std::int64_t reference{0};
         int voice_peak{0};
         int reference_peak{0};
         std::uint32_t frames{0};

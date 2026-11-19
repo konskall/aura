@@ -9,7 +9,8 @@ namespace aura::firmware {
 
 // The PCF85063 real-time clock on the board's shared I2C bus (0x51). It keeps
 // UTC and runs from the board's backup supply while the ESP32-S3 is off, so a
-// restart without Wi-Fi still knows the time. NOT VERIFIED ON HARDWARE.
+// restart without Wi-Fi still knows the time (read at boot on the board,
+// 2026-11-19: "Time from the board clock").
 class Pcf85063Clock {
 public:
     // Joins the bus and makes sure the clock runs, in 24-hour mode.
@@ -23,9 +24,10 @@ private:
 };
 
 // The AXP2101 power manager (0x34). It switches on the measurements AURA reads,
-// as the board maker's example does, and otherwise only reads: it never
-// changes a power rail, the charger's settings or the power key.
-// NOT VERIFIED ON HARDWARE.
+// as the board maker's example does, sets the PWR key's timing and its press
+// interrupts, and switches the board off when asked; it never changes a power
+// rail or the charger's settings. Read on the board since the first flash
+// (2026-11-14): the battery's details in Κατάσταση συσκευής.
 class Axp2101Power {
 public:
     bool start();

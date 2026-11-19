@@ -2683,6 +2683,42 @@ void check_synapse_finds_shared_worker() {
 }
 
 // A header floats on a glass capsule, and what scrolls under it shows through, blurred.
+// The full check of 2026-11-19: Σέλας's wider type cut «Επιβεβαίωση» on a
+// half-width button (the action's confirmation). A label that would be cut
+// takes the caption size; one that fits keeps the button's own size.
+void check_button_labels_fit() {
+    namespace ui = aura::ui;
+    ensure_lvgl();
+    ui::set_active_appearance(aura::Appearance::Aurora);
+    auto* screen = lv_obj_create(nullptr);
+    ui::reset(screen);
+    lv_obj_set_size(screen, 480, 480);
+    const auto made = [screen](const char* text) {
+        auto* button = ui::make_button(screen, text, ui::ButtonTone::Primary);
+        lv_obj_set_size(button, 208, ui::tokens::BUTTON_HEIGHT);
+        lv_obj_update_layout(screen);
+        return button;
+    };
+    auto* confirm = made("Επιβεβαίωση");
+    auto* label = lv_obj_get_child(confirm, 0);
+    const auto room = lv_obj_get_content_width(confirm);
+    expect(!ui::text_fits("Επιβεβαίωση", ui::font_headline(), 0, room),
+           "Σέλας's button type is wider than a half-width button");
+    expect(lv_obj_get_style_text_font(label, LV_PART_MAIN) == ui::font_caption() &&
+               ui::text_fits(lv_label_get_text(label), ui::font_caption(),
+                             lv_obj_get_style_text_letter_space(label, LV_PART_MAIN), room),
+           "a button's label that would be cut takes the caption size, whole");
+    auto* plain = lv_obj_get_child(made("Όχι"), 0);
+    expect(lv_obj_get_style_text_font(plain, LV_PART_MAIN) == ui::font_headline(),
+           "a label that fits keeps the button's size");
+    // Too long for any size: kept as it was, ending in an ellipsis.
+    auto* long_text = lv_obj_get_child(made("Πολύ μεγάλη ετικέτα που δεν χωράει πουθενά"), 0);
+    expect(lv_obj_get_style_text_font(long_text, LV_PART_MAIN) == ui::font_headline(),
+           "a label that fits no size is left to its ellipsis");
+    lv_obj_delete(screen);
+    ui::set_active_appearance(aura::Appearance::Halo);
+}
+
 void check_header_glass() {
     namespace ui = aura::ui;
     ensure_lvgl();
@@ -3161,6 +3197,7 @@ int main() {
     check_synapse_direct_output();
     check_synapse_helper_shares_strips();
     check_synapse_direct_on_home();
+    check_button_labels_fit();
     check_header_glass();
     check_header_glass_bands();
     check_startup_screen();

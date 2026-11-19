@@ -341,13 +341,14 @@ void EchoReferenceGate::reset() noexcept {
     weights_.fill(0.0F);
     kept_weights_.fill(0.0F);
     position_ = 0;
-    power_ = 0.0;
+    power_ = 0;
     update_turn_ = 0;
     adapt_ = false;
     owner_ = false;
     glitch_ = false;
     frame_samples_ = 0;
-    frame_microphone_ = frame_reference_ = frame_residual_ = 0.0;
+    frame_microphone_ = frame_reference_ = 0;
+    frame_residual_ = 0.0;
     settle_ms_ = kSettleMs;
     learned_ms_ = 0;
     reference_hold_ = 0.0F;
@@ -377,8 +378,10 @@ bool EchoReferenceGate::observe(const std::int16_t* microphone, const std::int16
             weights_ = kept_weights_;
         }
         position_ = position_ == 0 ? kTaps - 1 : position_ - 1;
-        const double leaving = history_[position_];
-        power_ = std::max(0.0, power_ + static_cast<double>(input) * input - leaving * leaving);
+        // Whole samples: the window's power stays exact, never below zero.
+        const std::int64_t entering = reference[index];
+        const auto leaving = static_cast<std::int64_t>(history_[position_]);
+        power_ += entering * entering - leaving * leaving;
         history_[position_] = input;
         history_[position_ + kTaps] = input;
         const float* window = history_.data() + position_;
@@ -397,8 +400,8 @@ bool EchoReferenceGate::observe(const std::int16_t* microphone, const std::int16
             for (std::size_t tap = 0; tap < kTaps; ++tap) weights_[tap] += step * window[tap];
         }
         residual_[index] = static_cast<std::int16_t>(std::clamp(left, -32768.0F, 32767.0F));
-        frame_microphone_ += static_cast<double>(heard) * heard;
-        frame_reference_ += static_cast<double>(input) * input;
+        frame_microphone_ += static_cast<std::int64_t>(microphone[index]) * microphone[index];
+        frame_reference_ += entering * entering;
         frame_residual_ += static_cast<double>(left) * left;
         if (++frame_samples_ == kGateFrameSamples) {
             end_frame();
@@ -415,11 +418,12 @@ void EchoReferenceGate::end_frame() noexcept {
     const auto rms = [](double energy) {
         return static_cast<float>(std::sqrt(energy / static_cast<double>(kGateFrameSamples)));
     };
-    const float heard = rms(frame_microphone_);
-    const float reference = rms(frame_reference_);
+    const float heard = rms(static_cast<double>(frame_microphone_));
+    const float reference = rms(static_cast<double>(frame_reference_));
     const float left = rms(frame_residual_);
     frame_samples_ = 0;
-    frame_microphone_ = frame_reference_ = frame_residual_ = 0.0;
+    frame_microphone_ = frame_reference_ = 0;
+    frame_residual_ = 0.0;
     if (glitch_) {
         glitch_ = false;
         settle_ms_ = kSettleMs;

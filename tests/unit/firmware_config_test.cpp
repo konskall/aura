@@ -307,6 +307,49 @@ void check_owner_tools(const std::string& root) {
     expect(companion.find("UiView::AoratonSignIn") != none, "the screen stays on while the sign-in waits for the phone");
 }
 
+// The full check of 2026-11-19. An update whose connection drops reads nothing
+// for ever: esp_http_client_read() gives 0 both for "nothing yet" and for a
+// connection the server closed early, so without a deadline the install task
+// waited for good and the screen stayed at its last percent.
+void check_update_stall(const std::string& root) {
+    constexpr auto none = std::string::npos;
+    const std::string ota = without_comments(read_file(root + "/firmware/components/aura_companion/src/esp32_ota.cpp"));
+    const auto loop = ota.find("const char* Esp32Ota::install(");
+    const auto zero = ota.find("if (read == 0)", loop);
+    const auto deadline = ota.find("> kDownloadStallUs", zero);
+    const auto next = ota.find("continue;", zero);
+    expect(loop != none && zero != none && deadline != none && deadline < next,
+           "an update that receives nothing for a while ends instead of waiting for ever");
+    expect(ota.find("last_data_us = esp_timer_get_time();", zero) != none,
+           "the deadline starts again with every piece of the image");
+}
+
+// System task stacks measured on the board (2026-11-19, the least ever free):
+// the event task, which runs the Wi-Fi handlers (the saved network read at
+// start; a new one written to NVS once it connects, then SNTP started), kept
+// 604 of its 2304 bytes before the write ever ran; the inter-core tasks 384 and
+// 472 of 1280.
+void check_task_stacks(const std::string& defaults) {
+    expect(has_line(defaults, "CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096"),
+           "the event task has room for the Wi-Fi handlers' NVS writes");
+    expect(has_line(defaults, "CONFIG_ESP_IPC_TASK_STACK_SIZE=1536"), "the inter-core tasks have some room left");
+}
+
+// Per-sample sums on the board stay in integers: the ESP32-S3 computes doubles
+// in software, and the microphone and the echo check ran them for every sample.
+void check_integer_sums(const std::string& root) {
+    const std::string microphone =
+        read_file(root + "/firmware/components/aura_companion/include/esp32_microphone.hpp") +
+        without_comments(read_file(root + "/firmware/components/aura_companion/src/esp32_microphone.cpp"));
+    expect(microphone.find("std::int64_t voice{0};") != std::string::npos &&
+               microphone.find("static_cast<double>(voice) * voice") == std::string::npos,
+           "the microphone's levels add whole samples, without doubles");
+    const std::string companion =
+        without_comments(read_file(root + "/firmware/components/aura_companion/src/esp32_companion.cpp"));
+    expect(companion.find("level.energy += static_cast<std::int64_t>(sample) * sample;") != std::string::npos,
+           "a question's level adds whole samples, without doubles");
+}
+
 // Σήμερα on the board (the owner, 2026-11-18): the read-aloud button needs a
 // handler to exist at all, and the fuel prices a source of the device's own.
 void check_today(const std::string& root) {
@@ -595,6 +638,9 @@ int main() {
     check_barge_words(root);
     check_view_fade(root);
     check_owner_tools(root);
+    check_update_stall(root);
+    check_integer_sums(root);
+    check_task_stacks(defaults);
     check_power(defaults);
     check_security(defaults, read_file(root + "/firmware/sdkconfig.production.defaults"));
     check_partitions(defaults, read_file(root + "/firmware/partitions.csv"),

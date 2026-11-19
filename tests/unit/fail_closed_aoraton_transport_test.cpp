@@ -53,6 +53,32 @@ int main() {
                event.error == "AORATON_KEY_BACKEND_NOT_CONFIGURED",
            "invite import fails closed with an explicit error");
 
+    // The full check of 2026-11-19: four commands had no answer of their own and
+    // went out as a Failure with no error, so a voice message stayed "sending".
+    aura::AoratonCommand voice;
+    voice.type = aura::AoratonCommandType::SendVoice;
+    voice.client_message_id = "synthetic-voice-id";
+    expect(mailbox.push_command(std::move(voice)), "voice command queued");
+    aura::AoratonCommand attachment;
+    attachment.type = aura::AoratonCommandType::OpenAttachment;
+    attachment.message_id = "synthetic-message-id";
+    expect(mailbox.push_command(std::move(attachment)), "attachment command queued");
+    aura::AoratonCommand saving;
+    saving.type = aura::AoratonCommandType::PowerSaving;
+    saving.power_saving = true;
+    expect(mailbox.push_command(std::move(saving)), "power saving queued");
+    aura::AoratonCommand sync;
+    sync.type = aura::AoratonCommandType::ConfigureSync;
+    expect(mailbox.push_command(std::move(sync)), "sync settings queued");
+    expect(transport.poll() == 4, "the four commands consumed");
+    expect(mailbox.pop_event(event) && event.type == aura::AoratonEventType::SendFailed &&
+               event.client_message_id == "synthetic-voice-id" && event.error == "AORATON_TEST_BACKEND_NOT_CONFIGURED",
+           "a voice message fails as a sent text does");
+    expect(mailbox.pop_event(event) && event.type == aura::AoratonEventType::AttachmentFailed &&
+               event.message_id == "synthetic-message-id" && event.error == "AORATON_TEST_BACKEND_NOT_CONFIGURED",
+           "an attachment fails for the message it belongs to");
+    expect(!mailbox.pop_event(event), "power saving and sync settings need no answer");
+
     std::cout << "fail_closed_aoraton_transport_test: PASS\n";
     return 0;
 }

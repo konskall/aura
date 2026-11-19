@@ -146,5 +146,13 @@ lv_obj_t* make_button(lv_obj_t* parent, const char* text, ButtonTone tone,
                       const lv_font_t* font = nullptr);
 lv_obj_t* make_tag(lv_obj_t* parent, const char* text, std::uint32_t accent);
 void set_button_disabled(lv_obj_t* button, bool disabled);
+// Whether `text` fits `width` on one line in `font` with `letter_space`.
+bool text_fits(const char* text, const lv_font_t* font, std::int32_t letter_space, std::int32_t width);
+// A one-line label whose text would be cut at its font takes the caption
+// size instead, then the caption a pixel tighter (as Σέλας's tiles are), if
+// the text fits so; otherwise it stays as it was and is cut. Returns the font
+// it keeps. Σέλας's wider type cut «Επιβεβαίωση» on its buttons and Γραφίτης
+// «Φωτογραφίες» in its two columns (the full check of 2026-11-19).
+const lv_font_t* fit_label(lv_obj_t* label, std::int32_t width);
 
 }  // namespace aura::ui

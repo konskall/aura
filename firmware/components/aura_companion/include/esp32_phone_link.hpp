@@ -23,7 +23,7 @@ struct PhoneEvent {
 // Bluetooth settings, and AURA subscribes to ANCS as a GATT client. Bytes are
 // interpreted by the shared aura::ancs helpers; events reach the UI loop
 // through poll(). Android needs the companion app (docs/phone/ANDROID_COMPANION.md).
-// NOT COMPILED, NOT VERIFIED ON HARDWARE.
+// Compiled into the firmware; NOT VERIFIED ON HARDWARE.
 class Esp32PhoneLink {
 public:
     bool start();

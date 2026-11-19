@@ -784,6 +784,8 @@
                               LV_TEXT_ALIGN_CENTER);
             // Manrope runs wider: «Ειδοποιήσεις» stays whole in a Σέλας tile.
             if (appearance == Appearance::Aurora) lv_obj_set_style_text_letter_space(name, -1, 0);
+            // The narrower cells of the order editor cut «Φωτογραφίες» (2026-11-19).
+            fit_line(name, grid.title_y - inset, width);
         }
         if (launcher_reordering) {
             const bool selected = launcher_selected_app && *launcher_selected_app == app_index;
@@ -793,7 +795,13 @@
             char position[8];
             std::snprintf(position, sizeof(position), "%u", static_cast<unsigned>(app_index + 1));
             auto* badge = ui::make_tag(cell, position, selected ? accent : ui::tokens::text_tertiary);
-            lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -8, 4);
+            // Γραφίτης's names run to the cell's edge: its number sits on the
+            // icon's corner, as its unread mark does (launcher_unread_mark).
+            if (appearance == Appearance::Graphite && lv_obj_get_child_count(cell) > 0) {
+                lv_obj_align_to(badge, lv_obj_get_child(cell, 0), LV_ALIGN_TOP_RIGHT, 6, -10);
+            } else {
+                lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -8, 4);
+            }
             set_value(cell, app_index);
             lv_obj_add_event_cb(cell, launcher_app_reorder_event, LV_EVENT_CLICKED, this);
         } else if (special) {
@@ -841,6 +849,13 @@
         auto* badge = ui::make_tag(cell, text, accent);
         lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
         lv_obj_set_style_text_color(badge, ui::color(ui::tokens::text), 0);
+        // Γραφίτης: on the corner of the icon's well (the cell's first child,
+        // graphite_app_cell), growing to the left: at the cell's corner it sat
+        // on the end of «Ειδοποιήσεις» (2026-11-19).
+        if (appearance == Appearance::Graphite && lv_obj_get_child_count(cell) > 0) {
+            lv_obj_align_to(badge, lv_obj_get_child(cell, 0), LV_ALIGN_TOP_RIGHT, 6, -10);
+            return;
+        }
         lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -12, 4);
     }
 
@@ -2692,7 +2707,8 @@
 
     lv_obj_t* setting_switch_row(lv_obj_t* list, int y, const char* title, const char* detail, ui::IconRole role,
                                  std::uint32_t accent, bool checked, bool available, std::uintptr_t value) {
-        auto* row = list_row(list, y, title, available ? detail : c().needs_motion_sensor, role, accent, kRowHeight, 252);
+        auto* row = list_row(list, y, title, available ? detail : c().needs_motion_sensor, role, accent, kRowHeight, 252,
+                             true);
         add_switch(row, checked && available);
         if (available) tappable(row, display_setting_event, value);
         else lv_obj_set_style_opa(row, LV_OPA_60, 0);

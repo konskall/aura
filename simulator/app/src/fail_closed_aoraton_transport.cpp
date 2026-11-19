@@ -19,9 +19,20 @@ std::size_t FailClosedAoratonTransport::poll(std::size_t maximum_commands) {
                 event.error = "PAIRING_TEST_BACKEND_NOT_CONFIGURED";
                 break;
             case AoratonCommandType::SendText:
+            case AoratonCommandType::SendVoice:
                 event.type = AoratonEventType::SendFailed;
                 event.client_message_id = command.client_message_id;
                 event.error = "AORATON_TEST_BACKEND_NOT_CONFIGURED";
+                break;
+            case AoratonCommandType::OpenAttachment:
+                event.type = AoratonEventType::AttachmentFailed;
+                event.message_id = command.message_id;
+                event.error = "AORATON_TEST_BACKEND_NOT_CONFIGURED";
+                break;
+            // Settings for a sync that never runs: nothing to answer.
+            case AoratonCommandType::ConfigureSync:
+            case AoratonCommandType::PowerSaving:
+                publish = false;
                 break;
             case AoratonCommandType::Connect:
             case AoratonCommandType::RefreshRooms:

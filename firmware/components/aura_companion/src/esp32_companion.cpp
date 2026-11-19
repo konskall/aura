@@ -337,7 +337,8 @@ void Esp32Companion::end_question() {
     const auto& level = question_level_;
     ESP_LOGI(kTag, "question: %u ms recorded, speech %s; input peak %d, rms %u, %u%% zero, %u samples",
              static_cast<unsigned>(recorded_ms), heard ? "heard" : "not heard", static_cast<int>(level.peak),
-             static_cast<unsigned>(level.samples == 0 ? 0.0 : std::sqrt(level.energy / level.samples)),
+             static_cast<unsigned>(level.samples == 0 ? 0.0
+                                                      : std::sqrt(static_cast<double>(level.energy) / level.samples)),
              static_cast<unsigned>(level.samples == 0 ? 0U : level.zeros * 100U / level.samples),
              static_cast<unsigned>(level.samples));
     char tenths[20 * 7 + 1]{};
@@ -676,15 +677,15 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
             for (const std::int16_t sample : samples_) {
                 const std::int32_t magnitude = sample < 0 ? -static_cast<std::int32_t>(sample) : sample;
                 level.peak = std::max(level.peak, magnitude);
-                level.energy += static_cast<double>(sample) * sample;
+                level.energy += static_cast<std::int64_t>(sample) * sample;
                 if (sample == 0) ++level.zeros;
                 const std::uint32_t tenth = level.samples / kTenth;
                 if (tenth < level.tenths.size()) {
-                    level.tenth_energy += static_cast<double>(sample) * sample;
+                    level.tenth_energy += static_cast<std::int64_t>(sample) * sample;
                     if (level.samples % kTenth == kTenth - 1U) {
                         level.tenths[tenth] = static_cast<std::uint16_t>(
-                            std::min(65535.0, std::sqrt(level.tenth_energy / kTenth)));
-                        level.tenth_energy = 0.0;
+                            std::min(65535.0, std::sqrt(static_cast<double>(level.tenth_energy) / kTenth)));
+                        level.tenth_energy = 0;
                     }
                 }
                 ++level.samples;

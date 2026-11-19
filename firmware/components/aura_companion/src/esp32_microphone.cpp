@@ -131,8 +131,9 @@ bool Esp32Microphone::stop() {
             std::lock_guard<std::mutex> lock(mutex_);
             levels = levels_;
         }
-        const auto rms = [&levels](double energy) {
-            return static_cast<unsigned>(levels.frames == 0 ? 0.0 : std::sqrt(energy / levels.frames));
+        const auto rms = [&levels](std::int64_t energy) {
+            return static_cast<unsigned>(levels.frames == 0 ? 0.0
+                                                            : std::sqrt(static_cast<double>(energy) / levels.frames));
         };
         ESP_LOGI(kTag, "microphone heard %u ms: voice rms %u peak %d, second microphone rms %u, speaker rms %u peak %d",
                  static_cast<unsigned>(levels.frames / 16U), rms(levels.voice), levels.voice_peak, rms(levels.second),
@@ -162,9 +163,9 @@ void Esp32Microphone::task(void* argument) {
             const int voice = slots[kVoiceSlot];
             const int reference = slots[kReferenceSlot];
             const int second = slots[kSecondSlot];
-            levels.voice += static_cast<double>(voice) * voice;
-            levels.second += static_cast<double>(second) * second;
-            levels.reference += static_cast<double>(reference) * reference;
+            levels.voice += static_cast<std::int64_t>(voice) * voice;
+            levels.second += static_cast<std::int64_t>(second) * second;
+            levels.reference += static_cast<std::int64_t>(reference) * reference;
             levels.voice_peak = std::max(levels.voice_peak, voice < 0 ? -voice : voice);
             levels.reference_peak = std::max(levels.reference_peak, reference < 0 ? -reference : reference);
             if (self->pending_.size() < kMaxPending) {
