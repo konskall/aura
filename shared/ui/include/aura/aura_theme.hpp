@@ -98,6 +98,11 @@ lv_color_t color(std::uint32_t value);
 // Type scale: IBM Plex Sans (Light subsets for numbers), Space Grotesk wordmark.
 const lv_font_t* font_caption();   // Regular 22: metadata, hints
 const lv_font_t* font_body();      // Regular 26: reading text
+// Answers, messages, notes and the like: the body face, or the look's 32 px
+// one with large text on (Οθόνη, 2026-11-19).
+const lv_font_t* font_reading();
+void set_large_text(bool large) noexcept;
+bool large_text() noexcept;
 const lv_font_t* font_headline();  // Medium 28: row titles, buttons, keys
 const lv_font_t* font_title();     // SemiBold 32: screen and state titles
 const lv_font_t* font_display();   // Light 72: numbers only (falls back to title)

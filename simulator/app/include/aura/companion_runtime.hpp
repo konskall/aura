@@ -117,10 +117,13 @@ public:
     bool capture(const std::string& scenario);
 
     ClockServicesModel& clock() noexcept { return clock_; }
+    // An alarm that wakes with a station: the melody waits while it plays.
+    void set_alarm_melody_allowed(bool allowed) noexcept { alarm_melody_allowed_ = allowed; }
     NotesModel& notes() noexcept { return notes_; }
     PhotoModel& photos() noexcept { return photos_->model(); }
     FileTransferRuntime& transfer() noexcept { return *transfer_; }
     FileBrowserModel& files() noexcept { return files_->model(); }
+    std::string file_url(const std::string& path) const { return files_ ? files_->file_url(path) : std::string{}; }
     ConversationLog& conversation_log() noexcept { return conversation_log_; }
     OrganizerModel& organizer() noexcept { return organizer_; }
     PhoneNotificationModel& phone() noexcept { return phone_; }
@@ -258,6 +261,7 @@ private:
     std::uint64_t update_started_ms_{0};
     std::uint64_t update_verify_ms_{0};
     AlarmRinger alarm_ringer_;
+    bool alarm_melody_allowed_{true};  // false while an alarm's station plays
     MessageChimeGate message_chime_;
     std::uint64_t chime_aoraton_sequence_{0};
     std::uint64_t chime_phone_sequence_{0};
@@ -274,6 +278,10 @@ private:
     bool hold_transcribing_{false};
     SoundSettings sound_{};
     std::string saved_sound_text_;
+    // The Bluetooth switch (2026-11-19), and the simulated radio it allows.
+    BluetoothSettings bluetooth_{};
+    std::string saved_bluetooth_text_;
+    void update_bluetooth();
     SettingSettle sound_settle_;
     // Settings are compared as values each poll; text is built only after a
     // change, not for every frame.

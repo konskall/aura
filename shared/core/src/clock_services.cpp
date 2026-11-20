@@ -136,6 +136,24 @@ ClockResult ClockServicesModel::set_alarm_enabled(std::uint32_t id, bool enabled
     return ClockResult::NotFound;
 }
 
+ClockResult ClockServicesModel::set_alarm_station(std::uint32_t id, std::optional<AlarmStation> station) {
+    for (auto& alarm : snapshot_.alarms) {
+        if (alarm.id != id) continue;
+        AlarmStation chosen;
+        if (station && !station->url.empty()) {
+            chosen.id = sanitize_text(station->id, kMaxStationIdBytes);
+            chosen.name = sanitize_text(station->name, kMaxLabelBytes);
+            chosen.url = sanitize_text(station->url, kMaxStationUrlBytes);
+        }
+        if (chosen.id != alarm.station.id || chosen.name != alarm.station.name || chosen.url != alarm.station.url) {
+            alarm.station = std::move(chosen);
+            changed();
+        }
+        return ClockResult::Ok;
+    }
+    return ClockResult::NotFound;
+}
+
 ClockResult ClockServicesModel::remove_alarm(std::uint32_t id) {
     auto& alarms = snapshot_.alarms;
     const auto found = std::find_if(alarms.begin(), alarms.end(), [id](const AlarmItem& item) { return item.id == id; });
@@ -292,6 +310,7 @@ void ClockServicesModel::evaluate_minute(std::int64_t previous, std::int64_t now
             alert.label = alarm.label;
             alert.hour = alarm.hour;
             alert.minute = alarm.minute;
+            alert.station = alarm.station;
             queue_alert(std::move(alert));
             if (!alarm.daily) alarm.enabled = false;
             break;
@@ -401,19 +420,27 @@ void ClockServicesModel::sort_lists() {
 std::string ClockServicesModel::serialize() const {
     std::ostringstream output;
     output << "aura-clock 1\n";
+    // A station rides as three more fields (id, name, url), only when set:
+    // an older store and an older firmware read the line as before.
+    const auto station_fields = [&output](const AlarmStation& station) {
+        if (!station.url.empty()) output << '\t' << station.id << '\t' << station.name << '\t' << station.url;
+    };
     output << "N\t" << next_id_ << '\n';
     for (const auto& alarm : snapshot_.alarms) {
         output << "A\t" << alarm.id << '\t' << alarm.hour << '\t' << alarm.minute << '\t'
-               << (alarm.daily ? 1 : 0) << '\t' << (alarm.enabled ? 1 : 0) << '\t' << alarm.label << '\n';
+               << (alarm.daily ? 1 : 0) << '\t' << (alarm.enabled ? 1 : 0) << '\t' << alarm.label;
+        station_fields(alarm.station);
+        output << '\n';
     }
     for (const auto& reminder : snapshot_.reminders) {
         output << "R\t" << reminder.id << '\t' << reminder.due_minute << '\t' << reminder.text << '\n';
     }
     // An alert nobody answered and a snoozed one ring again after a restart:
     // a reminder has already left its list when it rings.
-    const auto alert_fields = [&output](const ClockAlert& alert) {
+    const auto alert_fields = [&output, &station_fields](const ClockAlert& alert) {
         output << static_cast<int>(alert.kind) << '\t' << alert.id << '\t' << alert.hour << '\t' << alert.minute << '\t'
                << alert.duration_s << '\t' << alert.label;
+        station_fields(alert.station);
     };
     for (const auto& alert : queue_) {
         output << "Q\t";
@@ -437,8 +464,16 @@ bool ClockServicesModel::restore(const std::string& data) {
     std::vector<ClockAlert> queue;
     std::vector<Snooze> snoozes;
     std::uint32_t next_id = 1;
+    const auto parse_station = [](const std::vector<std::string>& fields, std::size_t first) {
+        AlarmStation station;
+        station.id = sanitize_text(fields[first], kMaxStationIdBytes);
+        station.name = sanitize_text(fields[first + 1], kMaxLabelBytes);
+        station.url = sanitize_text(fields[first + 2], kMaxStationUrlBytes);
+        return station;
+    };
     // kind, id, hour, minute, duration and label from `fields[first]` on.
-    const auto parse_alert = [](const std::vector<std::string>& fields, std::size_t first, ClockAlert& alert) {
+    const auto parse_alert = [&parse_station](const std::vector<std::string>& fields, std::size_t first,
+                                              ClockAlert& alert) {
         std::int64_t values[5]{};
         for (std::size_t index = 0; index < 5; ++index) {
             if (!parse_int(fields[first + index], values[index])) return false;
@@ -453,21 +488,23 @@ bool ClockServicesModel::restore(const std::string& data) {
         alert.minute = static_cast<int>(values[3]);
         alert.duration_s = static_cast<std::uint32_t>(values[4]);
         alert.label = sanitize_text(fields[first + 5], kMaxReminderBytes);
+        if (fields.size() >= first + 9) alert.station = parse_station(fields, first + 6);
         return true;
     };
     while (std::getline(input, line)) {
         const auto fields = split_tabs(line);
         std::int64_t values[5]{};
         ClockAlert alert;
-        if (fields.size() == 7 && fields[0] == "Q" && queue.size() < kMaxReminders && parse_alert(fields, 1, alert)) {
+        if ((fields.size() == 7 || fields.size() == 10) && fields[0] == "Q" && queue.size() < kMaxReminders &&
+            parse_alert(fields, 1, alert)) {
             queue.push_back(std::move(alert));
-        } else if (fields.size() == 8 && fields[0] == "Z" && snoozes.size() < kMaxReminders &&
+        } else if ((fields.size() == 8 || fields.size() == 11) && fields[0] == "Z" && snoozes.size() < kMaxReminders &&
                    parse_int(fields[1], values[0]) && parse_alert(fields, 2, alert)) {
             snoozes.push_back({std::move(alert), values[0]});
         } else if (fields.size() == 2 && fields[0] == "N" && parse_int(fields[1], values[0]) && values[0] > 0 &&
             values[0] < 0x7FFFFFFF) {
             next_id = std::max(next_id, static_cast<std::uint32_t>(values[0]));
-        } else if (fields.size() == 7 && fields[0] == "A" && alarms.size() < kMaxAlarms) {
+        } else if ((fields.size() == 7 || fields.size() == 10) && fields[0] == "A" && alarms.size() < kMaxAlarms) {
             bool ok = true;
             for (int index = 0; index < 5; ++index) ok = ok && parse_int(fields[static_cast<std::size_t>(index) + 1], values[index]);
             if (!ok || values[0] <= 0 || values[0] >= 0x7FFFFFFF || values[1] < 0 || values[1] > 23 ||
@@ -481,6 +518,7 @@ bool ClockServicesModel::restore(const std::string& data) {
             alarm.daily = values[3] != 0;
             alarm.enabled = values[4] != 0;
             alarm.label = sanitize_text(fields[6], kMaxLabelBytes);
+            if (fields.size() == 10) alarm.station = parse_station(fields, 7);
             alarms.push_back(alarm);
             next_id = std::max(next_id, alarm.id + 1);
         } else if (fields.size() == 4 && fields[0] == "R" && reminders.size() < kMaxReminders) {

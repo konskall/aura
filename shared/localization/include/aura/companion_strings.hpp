@@ -99,6 +99,19 @@ struct CompanionStrings {
     const char* stt_unavailable_detail;
     const char* mic_unavailable_detail;
     const char* tts_unavailable;
+    // The touch controller did not start: the notice above every screen, and
+    // the toast once it answers again.
+    const char* touch_unavailable;
+    const char* large_text_title;
+    // Xweather's rain, storm and alerts (2026-11-19).
+    const char* weather_rain_now;
+    const char* weather_rain_in_format;
+    const char* weather_rain_none;
+    const char* weather_storm_near_format;
+    const char* weather_alert_format;
+    const char* weather_powered_xweather;
+    const char* large_text_detail;
+    const char* touch_back;
 
     // Clock
     const char* clock_empty;
@@ -125,6 +138,12 @@ struct CompanionStrings {
     const char* unit_hour;
     const char* new_timer;
     const char* new_alarm;
+    // An alarm's sound (2026-11-19).
+    const char* alarm_sound;
+    const char* alarm_sound_title;
+    const char* alarm_sound_melody;
+    const char* alarm_sound_no_favorites;
+    const char* alarm_sound_failed;
     const char* new_reminder;
     const char* reminder_placeholder;
     const char* reminder_when;
@@ -229,6 +248,12 @@ struct CompanionStrings {
 
     // Phone
     const char* phone_title;
+    // The Bluetooth switch of Συνδέσεις (2026-11-19).
+    const char* bluetooth_title;
+    const char* bluetooth_off;
+    const char* bluetooth_running;
+    const char* bluetooth_auto;
+    const char* bluetooth_failed;
     const char* phone_not_paired;
     const char* phone_pairing;
     const char* phone_connected;
@@ -258,6 +283,11 @@ struct CompanionStrings {
     const char* system_voltage;
     const char* chip_temperature;
     const char* charge_stage_title;
+    // Battery life (2026-11-19): on USB, still measuring, and the estimate.
+    const char* battery_life_title;
+    const char* battery_life_on_power;
+    const char* battery_life_measuring_format;
+    const char* battery_life_format;
     const char* charge_trickle;
     const char* charge_precharge;
     const char* charge_fast;

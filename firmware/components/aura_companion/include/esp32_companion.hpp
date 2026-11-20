@@ -130,12 +130,25 @@ public:
     void set_cloud_key_sink(ICloudKeySink* sink) { transfer_.set_key_sink(sink); }
     // The PMU, for the PWR key and switching off; null without one.
     void set_power_key(Axp2101Power* power) { power_ = power; }
+    // Without touch (F-4 of 2026-11-19) a short press of the PWR key asks
+    // (`ask`, as the talk target does) and ends a question being heard; a dark
+    // screen still wakes first. With touch it wakes and sleeps the screen.
+    void set_key_ask(std::function<void()> ask) { key_ask_ = std::move(ask); }
+    void set_touch_available(bool available) { touch_available_ = available; }
+    // The battery's log for the card (battery-log.csv, BatteryHistory::csv()),
+    // written by the storage task at the next save.
+    void save_battery_log(std::string csv) { battery_log_ = std::move(csv); battery_log_changed_ = true; }
     // The PC-assisted aoraton.com sign-in over the same session (ADR 0010).
     void set_aoraton_link(IAoratonLinkEndpoint* link) { transfer_.set_aoraton_link(link); }
     // What the phone sign-in follows: File transfer's server (the UI thread).
     TransferSnapshot transfer_snapshot() { return transfer_.session().snapshot(); }
     // The models the assistant's device facts come from.
     const ClockServicesModel& clock() const noexcept { return clock_; }
+    // An alarm that wakes with a station (2026-11-19): the melody waits while it plays.
+    void set_alarm_melody_allowed(bool allowed) noexcept { alarm_melody_allowed_ = allowed; }
+    // A weather notice (rain soon, a storm near, an alert): the message sound,
+    // as the owner chose it for messages (Ήχος), never while muted.
+    void notice_chime();
     const NotesModel& notes() const noexcept { return notes_; }
     const OrganizerModel& organizer() const noexcept { return organizer_; }
     const PhoneNotificationModel& phone() const noexcept { return phone_; }
@@ -157,7 +170,7 @@ private:
     void finish_note();
     void save();
     enum class StoreJobKind { Clock, Notes, Organizer, Conversations, Sound, Display, Language, Layout, Voice, DeleteVoice,
-                              AoratonSync };
+                              AoratonSync, Bluetooth, BatteryLog };
     struct StoreJob {
         StoreJobKind kind{StoreJobKind::Clock};
         std::string name;
@@ -267,10 +280,25 @@ private:
     VolumeKey volume_up_key_;
     Axp2101Power* power_{nullptr};
     std::uint64_t power_key_polled_ms_{0};
+    std::function<void()> key_ask_;
+    bool alarm_melody_allowed_{true};
+    bool touch_available_{true};
     AlarmRinger alarm_ringer_;  // one melody pass per cycle, through mute
     MessageChimeGate message_chime_;
     SoundSettings sound_{};
     IAoratonService* aoraton_{nullptr};
+    // The owner's Bluetooth switch (bluetooth.txt), the phone's bond and the
+    // pairing window: the radio runs only while bluetooth_should_run().
+    BluetoothSettings bluetooth_;
+    std::string saved_bluetooth_text_;
+    bool bluetooth_save_pending_{false};
+    std::string battery_log_;
+    bool battery_log_changed_{false};
+    bool battery_log_save_pending_{false};
+    bool phone_bonded_{false};
+    std::uint64_t pairing_until_ms_{0};
+    std::uint64_t bluetooth_checked_ms_{0};
+    void update_bluetooth(std::uint64_t now);
     AoratonSyncSettings aoraton_sync_;
     std::string saved_aoraton_sync_text_;
     bool aoraton_sync_save_pending_{false};

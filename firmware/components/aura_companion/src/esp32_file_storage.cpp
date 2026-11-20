@@ -2,6 +2,7 @@
 
 #include "aura/text_util.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <ctime>
@@ -88,6 +89,35 @@ FileBrowserError Esp32FileStorage::erase(const std::string& path) {
     if (path.empty()) return FileBrowserError::Protected;
     std::size_t count = 0;
     return erase_tree(card_path(path), 0, count) ? FileBrowserError::None : FileBrowserError::Delete;
+}
+
+FileBrowserError Esp32FileStorage::rename(const std::string& path, const std::string& new_name) {
+    if (!store_.mounted()) return FileBrowserError::NoCard;
+    if (path.empty()) return FileBrowserError::Protected;
+    const std::string from = card_path(path);
+    const std::string to = card_path(file_path_join(file_path_parent(path), new_name));
+    struct stat existing {};
+    if (stat(from.c_str(), &existing) != 0) return FileBrowserError::NotFound;
+    if (stat(to.c_str(), &existing) == 0) return FileBrowserError::Rename;  // never over another
+    return std::rename(from.c_str(), to.c_str()) == 0 ? FileBrowserError::None : FileBrowserError::Rename;
+}
+
+FileBrowserError Esp32FileStorage::read(const std::string& path, std::size_t max_bytes,
+                                        std::vector<std::uint8_t>& bytes) {
+    if (!store_.mounted()) return FileBrowserError::NoCard;
+    std::FILE* file = std::fopen(card_path(path).c_str(), "rb");
+    if (!file) return errno == ENOENT ? FileBrowserError::NotFound : FileBrowserError::Read;
+    bytes.clear();
+    std::uint8_t chunk[2048];
+    while (bytes.size() < max_bytes) {
+        const std::size_t want = std::min(sizeof(chunk), max_bytes - bytes.size());
+        const std::size_t got = std::fread(chunk, 1, want, file);
+        bytes.insert(bytes.end(), chunk, chunk + got);
+        if (got < want) break;
+    }
+    const bool failed = std::ferror(file) != 0;
+    std::fclose(file);
+    return failed ? FileBrowserError::Read : FileBrowserError::None;
 }
 
 bool Esp32FileStorage::space(std::uint64_t& total_bytes, std::uint64_t& free_bytes) {

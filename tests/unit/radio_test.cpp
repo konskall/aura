@@ -507,6 +507,34 @@ void request_tests() {
            "with nothing to play, the app opens");
 }
 
+// Αρχεία plays a card MP3 through the radio's player (2026-11-19): only a
+// file:// address opens a file, never a directory's station, and the player
+// starts after an ID3v2 tag (a cover picture can be hundreds of KB).
+void file_tests() {
+    using namespace aura;
+    std::string path;
+    expect(radio_file_url("file:///sdcard/Μουσική/τραγούδι.mp3", path) && path == "/sdcard/Μουσική/τραγούδι.mp3",
+           "a card file's address");
+    expect(!radio_file_url("https://example.invalid/live.mp3", path) && !radio_file_url("file://", path) &&
+               !radio_file_url("FILE:///x.mp3", path),
+           "anything else is not a file");
+    std::vector<RadioStation> stations;
+    expect(parse_radio_browser_stations(
+               "[{\"stationuuid\":\"x\",\"name\":\"DEMO\",\"url_resolved\":\"file:///sdcard/aura/clock.txt\"}]",
+               stations, 10) && stations.empty(),
+           "a directory's station never points at a file");
+
+    const std::uint8_t tagged[] = {'I', 'D', '3', 4, 0, 0, 0, 0, 0x02, 0x01};
+    expect(id3v2_tag_size(tagged, sizeof(tagged)) == 10 + 257, "an ID3v2 tag's size: syncsafe, plus its header");
+    const std::uint8_t footer[] = {'I', 'D', '3', 4, 0, 0x10, 0, 0, 0, 0x10};
+    expect(id3v2_tag_size(footer, sizeof(footer)) == 10 + 16 + 10, "and its footer when it has one");
+    const std::uint8_t plain[] = {0xFF, 0xFB, 0x90, 0x64, 0, 0, 0, 0, 0, 0};
+    expect(id3v2_tag_size(plain, sizeof(plain)) == 0, "no tag: the audio starts at once");
+    const std::uint8_t broken[] = {'I', 'D', '3', 4, 0, 0, 0x80, 0, 0, 0};
+    expect(id3v2_tag_size(broken, sizeof(broken)) == 0 && id3v2_tag_size(tagged, 5) == 0,
+           "a malformed or short head is no tag");
+}
+
 int main() {
     station_tests();
     model_tests();
@@ -515,6 +543,7 @@ int main() {
     mp3_tests();
     pump_tests();
     url_tests();
+    file_tests();
     if (failures == 0) std::cout << "aura_radio_tests passed\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

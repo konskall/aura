@@ -9,7 +9,9 @@
 
 namespace aura {
 
-constexpr std::size_t kWeatherHourlyCapacity = 4;
+// The next twelve hours, one by one (the owner, 2026-11-19; four, three hours
+// apart, before).
+constexpr std::size_t kWeatherHourlyCapacity = 12;
 constexpr std::size_t kWeatherDailyCapacity = 4;
 constexpr std::size_t kWeatherSuggestionCapacity = 5;
 
@@ -114,6 +116,13 @@ struct WeatherHazards {
     bool xweather_available{false};
     int positive_cg_count{0};
     int max_positive_ka{0};
+    // Xweather's rain in the next hour (the owner, 2026-11-19): in how many
+    // minutes (0 now, -1 none), for how long, how hard; and the worst alert's name.
+    bool nowcast_available{false};
+    int rain_in_minutes{-1};
+    int rain_minutes{0};
+    float rain_peak_mm_h{0.0F};
+    std::string alert_name;
 };
 
 struct WeatherLocation {
@@ -197,6 +206,9 @@ public:
     void clear_location();
     bool begin_fetch(const WeatherLocation& location, bool save_as_default);
     bool fetch_succeeded(const WeatherData& data);
+    // Xweather's rain, alerts and lightning into the data shown (xweather.hpp);
+    // false without data, or for a result that would not be valid.
+    bool apply_xweather(const struct XweatherNowcast& now);
     void fetch_failed(std::string error_code, bool offline);
     bool begin_search(std::string query);
     void search_succeeded(const std::vector<WeatherLocation>& locations);

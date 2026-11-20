@@ -34,6 +34,8 @@ constexpr std::uint64_t kVolumeRepeatDelayMs = 500;
 constexpr std::uint64_t kVolumeRepeatMs = 200;
 // The PMU is asked for the PWR key's presses this often.
 constexpr std::uint64_t kPowerKeyPollMs = 100;
+// How long the radio stays on for a new phone to pair (the iPhone's settings).
+constexpr std::uint64_t kPairingWindowMs = 180000;
 
 }  // namespace
 
@@ -46,6 +48,28 @@ std::uint64_t Esp32Companion::now_ms() const {
 
 std::int64_t Esp32Companion::now_minute() const {
     return clock_.snapshot().clock_valid ? clock_.snapshot().now_minute : 0;
+}
+
+void Esp32Companion::notice_chime() {
+    if (sound_.message_chime && !sound_.muted && audio_.diagnostics().state != AudioState::Playing) {
+        audio_.play_pcm(make_message_chime());
+    }
+}
+
+void Esp32Companion::update_bluetooth(std::uint64_t now) {
+    const bool pairing = now < pairing_until_ms_;
+    const bool run = bluetooth_should_run(bluetooth_, phone_bonded_, pairing);
+    if (run && !phone_link_.available()) {
+        if (!phone_link_.start(pairing)) {
+            capabilities_.phone_link = false;
+            phone_.set_link(PhoneLinkState::Unavailable, PhonePlatform::Unknown, {});
+        }
+    } else if (!run && phone_link_.available()) {
+        phone_link_.stop();
+        phone_.set_link(phone_bonded_ ? PhoneLinkState::Disconnected : PhoneLinkState::NotPaired,
+                        PhonePlatform::Unknown, {});
+    }
+    phone_.set_bluetooth(bluetooth_.enabled, phone_link_.available());
 }
 
 void Esp32Companion::start() {
@@ -66,6 +90,8 @@ void Esp32Companion::start() {
     }
     saved_conversation_ = conversation_log_.sequence();
     if (const auto data = store_.read("sound.txt"); !data.empty()) sound_ = parse_sound_settings(data);
+    bluetooth_ = parse_bluetooth_settings(store_.read("bluetooth.txt"));
+    saved_bluetooth_text_ = serialize_bluetooth_settings(bluetooth_);
     if (const auto data = store_.read("display.txt"); !data.empty()) {
         display_.set_settings(parse_display_settings(data));
     }
@@ -110,9 +136,15 @@ void Esp32Companion::start() {
 
     capabilities_.imu = motion_.start();
     display_.set_imu_available(capabilities_.imu);
-    capabilities_.phone_link = phone_link_.start();
-    phone_.set_link(capabilities_.phone_link ? PhoneLinkState::NotPaired : PhoneLinkState::Unavailable,
+    // Bluetooth keeps the processor from sleeping: it runs only while the
+    // owner allows it and a phone is bonded or being paired (2026-11-19).
+    phone_bonded_ = Esp32PhoneLink::has_bond();
+    capabilities_.phone_link = true;
+    phone_.set_link(phone_bonded_ ? PhoneLinkState::Disconnected : PhoneLinkState::NotPaired,
                     PhonePlatform::Unknown, {});
+    update_bluetooth(0);
+    ESP_LOGI(kTag, "Bluetooth %s (%s phone bonded)", phone_link_.available() ? "on" : "off",
+             phone_bonded_ ? "a" : "no");
     // Questions and voice messages are recorded in memory, so the assistant
     // listens without a card; only voice notes need the card (begin_note).
     capabilities_.microphone = microphone_.initialize();
@@ -157,6 +189,12 @@ void Esp32Companion::install(AuraUiCallbacks& callbacks, IAoratonService* aorato
     callbacks.on_files_delete = [this](const std::string& path) {
         return storage_jobs_ && storage_accepting_ && files_.erase(path);
     };
+    callbacks.on_files_rename = [this](const std::string& path, const std::string& name) {
+        return storage_jobs_ && storage_accepting_ && files_.rename(path, name);
+    };
+    callbacks.on_files_preview = [this](const std::string& path) {
+        return storage_jobs_ && storage_accepting_ && files_.preview(path);
+    };
     aoraton_ = aoraton;
     if (aoraton_) aoraton_->set_sync_settings(aoraton_sync_);
     callbacks.on_aoraton_sync_changed = [this](const AoratonSyncSettings& settings) {
@@ -180,6 +218,9 @@ void Esp32Companion::install(AuraUiCallbacks& callbacks, IAoratonService* aorato
     };
     callbacks.on_alarm_enable = [this](std::uint32_t id, bool enabled) { clock_.set_alarm_enabled(id, enabled); };
     callbacks.on_alarm_remove = [this](std::uint32_t id) { clock_.remove_alarm(id); };
+    callbacks.on_alarm_station = [this](std::uint32_t id, std::optional<AlarmStation> station) {
+        return clock_.set_alarm_station(id, std::move(station)) == ClockResult::Ok;
+    };
     callbacks.on_reminder_add = [this](std::int64_t due, const std::string& text) {
         return clock_.add_reminder_at(due, text) == ClockResult::Ok;
     };
@@ -258,8 +299,27 @@ void Esp32Companion::install(AuraUiCallbacks& callbacks, IAoratonService* aorato
         phone_link_.perform_action(uid, false);
         phone_.remove(uid);
     };
-    callbacks.on_phone_pair = [this] { phone_link_.set_pairable(true); };
-    callbacks.on_phone_forget = [this] { phone_link_.forget(); };
+    callbacks.on_phone_pair = [this] {
+        // Pairing needs the radio: it turns the switch on, and the radio runs
+        // for the pairing window even without a bond yet.
+        bluetooth_.enabled = true;
+        const std::uint64_t now = static_cast<std::uint64_t>(esp_timer_get_time() / 1000);
+        pairing_until_ms_ = now + kPairingWindowMs;
+        update_bluetooth(now);
+        phone_link_.set_pairable(true);
+    };
+    callbacks.on_phone_forget = [this] {
+        phone_link_.forget();
+        phone_bonded_ = false;
+        pairing_until_ms_ = 0;
+        update_bluetooth(static_cast<std::uint64_t>(esp_timer_get_time() / 1000));
+    };
+    callbacks.on_bluetooth_changed = [this](bool enabled) {
+        bluetooth_.enabled = enabled;
+        if (!enabled) pairing_until_ms_ = 0;
+        update_bluetooth(static_cast<std::uint64_t>(esp_timer_get_time() / 1000));
+        return true;
+    };
     callbacks.on_update_check = [this] {
         if (ota_.begin_check() && !updater_.request_check()) ota_.check_failed("OTA_BUSY");
     };
@@ -644,10 +704,20 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
         applied_rotation_ = rotation;
     }
 
+    if (now - bluetooth_checked_ms_ >= 1000) {
+        bluetooth_checked_ms_ = now;
+        update_bluetooth(now);
+    }
     PhoneEvent phone_event;
     while (phone_link_.poll(phone_event)) {
         switch (phone_event.kind) {
-            case PhoneEvent::Kind::Link: phone_.set_link(phone_event.link, phone_event.platform, {}); break;
+            case PhoneEvent::Kind::Link:
+                phone_.set_link(phone_event.link, phone_event.platform, {});
+                if (phone_event.link == PhoneLinkState::Connected) {
+                    phone_bonded_ = true;
+                    pairing_until_ms_ = 0;
+                }
+                break;
             case PhoneEvent::Kind::Upsert:
                 phone_event.notification.minute = now_minute();
                 phone_.upsert(std::move(phone_event.notification));
@@ -718,8 +788,17 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
             if (active_ui_) active_ui_->power_off();
             pending_system_action_.store(static_cast<int>(SystemAction::PowerOff));
         } else if (presses.short_press) {
-            if (display_.snapshot().mode == DisplayMode::Active) display_.sleep_now(now);
-            else display_.user_activity(now);
+            const bool active = display_.snapshot().mode == DisplayMode::Active;
+            if (!touch_available_ && active && key_ask_) {
+                // No touch (F-4 of 2026-11-19): the key asks, and ends a question being heard.
+                if (recording_question_) end_question();
+                else key_ask_();
+                display_.user_activity(now);
+            } else if (active) {
+                display_.sleep_now(now);
+            } else {
+                display_.user_activity(now);
+            }
         }
     }
 
@@ -747,7 +826,7 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
     // The alert rings until it is handled, a little louder each pass and
     // through mute; face down silences it.
     const auto audio = audio_.diagnostics();
-    if (const auto* pass = alarm_ringer_.next(clock_.snapshot().alert.has_value(),
+    if (const auto* pass = alarm_ringer_.next(clock_.snapshot().alert.has_value() && alarm_melody_allowed_,
                                               display_.snapshot().muted_by_flip,
                                               audio.state == AudioState::Playing, now)) {
         audio_.play_alert(*pass);
@@ -830,6 +909,8 @@ void Esp32Companion::storage_task() {
             case StoreJobKind::Language:
             case StoreJobKind::Layout:
             case StoreJobKind::AoratonSync:
+            case StoreJobKind::Bluetooth:
+            case StoreJobKind::BatteryLog:
                 job->success = store_.write(job->name.c_str(), job->text);
                 break;
             case StoreJobKind::Voice:
@@ -902,6 +983,13 @@ void Esp32Companion::poll_storage_results() {
                 aoraton_sync_save_pending_ = false;
                 if (job->success) saved_aoraton_sync_text_ = job->text;
                 break;
+            case StoreJobKind::Bluetooth:
+                bluetooth_save_pending_ = false;
+                if (job->success) saved_bluetooth_text_ = job->text;
+                break;
+            case StoreJobKind::BatteryLog:
+                battery_log_save_pending_ = false;
+                break;
             case StoreJobKind::Voice: {
                 std::uint32_t id = 0;
                 if (job->success && notes_.add_voice(job->name, job->duration_ms, job->minute, &id) == NoteResult::Ok) {
@@ -952,6 +1040,15 @@ void Esp32Companion::save() {
         if (enqueue(job)) pending = true;
     };
 
+    if (battery_log_changed_ && !battery_log_save_pending_) {
+        battery_log_changed_ = false;
+        queue_text(StoreJobKind::BatteryLog, "battery-log.csv", battery_log_, 0, battery_log_save_pending_);
+    }
+    if (!bluetooth_save_pending_) {
+        auto data = serialize_bluetooth_settings(bluetooth_);
+        if (data != saved_bluetooth_text_)
+            queue_text(StoreJobKind::Bluetooth, "bluetooth.txt", std::move(data), 0, bluetooth_save_pending_);
+    }
     if (!aoraton_sync_save_pending_) {
         auto data = serialize_aoraton_sync_settings(aoraton_sync_);
         if (data != saved_aoraton_sync_text_)

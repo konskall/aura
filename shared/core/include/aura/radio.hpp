@@ -181,7 +181,16 @@ bool parse_stream_redirect(std::string_view head, std::string& location);
 
 // What a radio worker tells the UI thread, on every platform. Reconnecting:
 // the stream dropped and is being joined again (text: why).
-enum class RadioWorkerEventType { Playing, Title, Reconnecting, Failed };
+// Ended: a card file played to its end (Αρχεία, 2026-11-19).
+enum class RadioWorkerEventType { Playing, Title, Reconnecting, Failed, Ended };
+
+// A card file's address (Αρχεία, 2026-11-19): "file://" and a path; true with
+// the path for one. Only the platforms' own Play builds it: a directory's or a
+// favourite's station is http(s) only.
+bool radio_file_url(std::string_view url, std::string& path);
+// The bytes an ID3v2 tag takes at the start of an MP3 file (0 without one), so
+// the player starts at the audio: a cover picture can be hundreds of KB.
+std::size_t id3v2_tag_size(const std::uint8_t* head, std::size_t size) noexcept;
 
 struct RadioWorkerEvent {
     RadioWorkerEventType type{RadioWorkerEventType::Failed};

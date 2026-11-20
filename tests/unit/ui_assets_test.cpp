@@ -3059,6 +3059,62 @@ void check_display_settings_follow() {
     aura::ui::set_active_appearance(aura::Appearance::Halo);
 }
 
+// The touch controller did not start (F-4 of 2026-11-19): AURA used to stop
+// with no screen. Now it starts, a notice above every screen says the centre
+// key asks, and it goes once the touch answers again.
+// Large reading text (the owner, 2026-11-19): answers, messages, notes and the
+// like take the look's 32 px face; everything else keeps its size.
+void check_reading_font() {
+    for (const auto look : {aura::Appearance::Halo, aura::Appearance::Marble, aura::Appearance::Aurora,
+                            aura::Appearance::Graphite}) {
+        aura::ui::set_active_appearance(look);
+        aura::ui::set_large_text(false);
+        expect(aura::ui::font_reading() == aura::ui::font_body(), "normal: reading text is the body face");
+        aura::ui::set_large_text(true);
+        expect(lv_font_get_line_height(aura::ui::font_reading()) > lv_font_get_line_height(aura::ui::font_body()) &&
+                   aura::ui::font_caption() != aura::ui::font_reading(),
+               "large: reading text is taller, and the rest keeps its size");
+        aura::ui::set_large_text(false);
+    }
+    aura::ui::set_active_appearance(aura::Appearance::Halo);
+}
+
+void check_touch_notice() {
+    ensure_lvgl();
+    auto* previous = lv_display_get_default();
+    static std::uint8_t buffer[480 * 48 * 2];
+    auto* display = lv_display_create(480, 480);
+    lv_display_set_buffers(display, buffer, nullptr, sizeof(buffer), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, [](lv_display_t* target, const lv_area_t*, std::uint8_t*) {
+        lv_display_flush_ready(target);
+    });
+    lv_display_set_default(display);
+    auto owner = std::make_unique<aura::AuraUi>();
+    auto& face = *owner;
+    face.create(display, aura::AuraUiCallbacks{});
+    face.show(aura::UiView::Home);
+    const char* notice = aura::l10n::companion_el_gr().touch_unavailable;
+    lv_obj_t* top = lv_display_get_layer_top(display);
+    expect(notice != nullptr && std::strlen(notice) > 0, "the notice has its words");
+    expect(!shows_text(top, notice), "no notice while the touch works");
+    face.set_touch_available(false);
+    expect(shows_text(top, notice), "without touch: a notice that the centre key asks");
+    face.show(aura::UiView::Settings);
+    expect(shows_text(top, notice), "it stays above every screen");
+    face.set_language(aura::InterfaceLanguage::English);
+    expect(shows_text(top, aura::l10n::companion_en_us().touch_unavailable) && !shows_text(top, notice),
+           "and follows the language");
+    face.set_touch_available(true);
+    expect(!shows_text(top, aura::l10n::companion_en_us().touch_unavailable), "gone once the touch answers");
+    face.set_language(aura::InterfaceLanguage::Greek);
+
+    lv_screen_load(lv_obj_create(nullptr));
+    lv_obj_delete(face.root());
+    owner.reset();
+    lv_display_set_default(previous);
+    lv_display_delete(display);
+}
+
 int main() {
     check_aura_logo_asset(aura_brand_aura_compact, 144, 53);
     check_aura_logo_asset(aura_brand_aura_hero, 176, 65);
@@ -3198,6 +3254,8 @@ int main() {
     check_synapse_helper_shares_strips();
     check_synapse_direct_on_home();
     check_button_labels_fit();
+    check_touch_notice();
+    check_reading_font();
     check_header_glass();
     check_header_glass_bands();
     check_startup_screen();

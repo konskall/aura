@@ -239,13 +239,26 @@ void cloud_key_tests() {
     expect(send("/api/keys", "{\"groq_api_key\":\"" + groq + "\",\"azure_speech_key\":\"\",\"azure_speech_region\":\"\"}",
                 protocol).status == 200 && keys.stored.size() == 2,
            "Azure may be left out");
+    // Xweather's two keys ride along (the owner, 2026-11-19), both or none.
+    const std::string xweather_id(21, 'X');
+    const std::string xweather_secret(40, 's');
+    const std::string with_xweather = "{\"groq_api_key\":\"" + groq + "\",\"azure_speech_key\":\"" + azure +
+                                      "\",\"azure_speech_region\":\"westeurope\",\"xweather_client_id\":\"" +
+                                      xweather_id + "\",\"xweather_client_secret\":\"" + xweather_secret + "\"}";
+    expect(send("/api/keys", with_xweather, protocol).status == 200 && keys.stored.size() == 3 &&
+               keys.stored[2].xweather_client_id == xweather_id &&
+               keys.stored[2].xweather_client_secret == xweather_secret,
+           "Xweather's keys are kept beside the others");
+    expect(send("/api/keys", "{\"groq_api_key\":\"" + groq + "\",\"azure_speech_key\":\"\",\"azure_speech_region\":\"\","
+                "\"xweather_client_id\":\"" + xweather_id + "\",\"xweather_client_secret\":\"\"}", protocol).status == 400,
+           "one of Xweather's keys without the other is refused");
     request.content_type = "text/plain";
     expect(send("/api/keys", body, protocol).status == 400, "keys arrive as JSON only");
     request.content_type = "application/json";
     expect(send("/api/keys", std::string(1100, ' '), protocol).status == 400, "a long body is refused");
     TransferProtocol without_keys(session, files, [&] { return now; });
     expect(send("/api/keys", body, without_keys).status == 404, "a platform that keeps no keys has no such endpoint");
-    expect(keys.stored.size() == 2, "refused requests store nothing");
+    expect(keys.stored.size() == 3, "refused requests store nothing (the three kept: two before, one with Xweather)");
 }
 
 void aoraton_link_tests() {

@@ -28,6 +28,13 @@ struct TimerItem {
     bool paused{false};
 };
 
+// The station an alarm wakes with (a radio favourite); empty url: the melody.
+struct AlarmStation {
+    std::string id;
+    std::string name;
+    std::string url;
+};
+
 struct AlarmItem {
     std::uint32_t id{0};
     int hour{0};
@@ -35,6 +42,7 @@ struct AlarmItem {
     bool daily{false};
     bool enabled{true};
     std::string label;
+    AlarmStation station;
 };
 
 struct ReminderItem {
@@ -50,6 +58,7 @@ struct ClockAlert {
     int hour{0};        // alarm time / reminder due time
     int minute{0};
     std::uint32_t duration_s{0};  // timer length
+    AlarmStation station;         // an alarm's station, if it has one
 };
 
 struct ClockSnapshot {
@@ -75,6 +84,8 @@ public:
     static constexpr std::size_t kMaxReminders = 16;
     static constexpr std::uint32_t kMaxTimerSeconds = 24U * 60U * 60U;
     static constexpr std::size_t kMaxLabelBytes = 48;
+    static constexpr std::size_t kMaxStationIdBytes = 64;
+    static constexpr std::size_t kMaxStationUrlBytes = 512;
     static constexpr std::size_t kMaxReminderBytes = 160;
 
     ClockResult start_timer(std::uint32_t seconds, const std::string& label, std::uint32_t* id = nullptr);
@@ -83,6 +94,8 @@ public:
 
     ClockResult add_alarm(int hour, int minute, bool daily, const std::string& label, std::uint32_t* id = nullptr);
     ClockResult set_alarm_enabled(std::uint32_t id, bool enabled);
+    // The station the alarm wakes with; none: the melody.
+    ClockResult set_alarm_station(std::uint32_t id, std::optional<AlarmStation> station);
     ClockResult remove_alarm(std::uint32_t id);
 
     ClockResult add_reminder_at(std::int64_t due_minute, const std::string& text, std::uint32_t* id = nullptr);

@@ -74,6 +74,9 @@ add_library(aura_core STATIC
     shared/core/src/offline_commands.cpp
     shared/core/src/ota_update.cpp
     shared/core/src/phone_link.cpp
+    shared/core/src/battery_history.cpp
+    shared/core/src/alarm_station.cpp
+    shared/core/src/xweather.cpp
     shared/core/src/text_util.cpp
     shared/core/src/voice.cpp
     shared/core/src/aoraton_crypto.cpp
@@ -236,6 +239,7 @@ if(BUILD_TESTING)
     endif()
     add_executable(aura_device_tools_tests tests/unit/device_tools_test.cpp)
     target_link_libraries(aura_device_tools_tests PRIVATE aura_core)
+    target_compile_definitions(aura_device_tools_tests PRIVATE AURA_PHOTO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/photos")
     add_test(NAME aura_device_tools_tests COMMAND aura_device_tools_tests)
     add_executable(aura_photos_tests tests/unit/photos_test.cpp)
     target_compile_definitions(aura_photos_tests PRIVATE AURA_PHOTO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/photos")

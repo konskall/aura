@@ -4,5 +4,5 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES esp32_s3_touch_amoled_2_16 esp_driver_i2c aura_shared
     # aura_display.c starts the panel itself (the BSP's sequence, kept dark).
-    PRIV_REQUIRES esp_lcd esp_lcd_co5300 esp_driver_spi
+    PRIV_REQUIRES esp_lcd esp_lcd_co5300 esp_driver_spi esp_lcd_touch_cst9217
 )

@@ -72,7 +72,11 @@ int main() {
         return nullptr;
     };
 
-    bool signed_in = service.begin_pairing() &&
+    // The fake server has no realtime socket, and the periodic check is off by
+    // default since 2026-11-19 (realtime brings messages; without it, a check a
+    // minute): the smoke turns the ten-second check on, as an owner can.
+    const bool polling = service.set_sync_settings({true, 10});
+    bool signed_in = polling && service.begin_pairing() &&
                      wait_for([&] { return snap.pairing == AoratonPairingState::Paired; }, 15000);
     const bool rooms = signed_in && wait_for([&] { return snap.rooms.size() == 2; }, 10000);
     const std::size_t room_count = snap.rooms.size();

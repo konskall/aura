@@ -41,6 +41,9 @@ class IAoratonHttp {
 public:
     virtual ~IAoratonHttp() = default;
     virtual AoratonHttpResponse send(const AoratonHttpRequest& request) = 0;
+    // False while the platform knows it has no network address yet (the
+    // device before Wi-Fi is up): the worker then sends nothing and waits.
+    virtual bool network_available() const { return true; }
 };
 
 enum class AoratonCallbackStatus { Pending, Received, Failed };
@@ -100,6 +103,11 @@ public:
     // While saving power (screen dark on battery) realtime is off and the
     // overview is checked at least this often, whatever the polling setting.
     static constexpr std::int64_t kPowerSavingPollMs = 300000;
+    // With the periodic check off (the default), realtime brings the messages;
+    // while it is down, the overview is checked this often instead.
+    static constexpr std::int64_t kRealtimeFallbackPollMs = 60000;
+    // How often a stored session looks again for the network before restoring.
+    static constexpr std::int64_t kNetworkWaitMs = 1000;
 
     AoratonAccountWorker(AoratonMailbox& mailbox,
                          AoratonAccountConfig config,

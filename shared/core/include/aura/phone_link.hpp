@@ -36,8 +36,24 @@ struct PhoneSnapshot {
     std::string device_name;
     std::vector<PhoneNotification> notifications;  // newest first, no calls
     std::optional<PhoneNotification> incoming_call;
+    // The owner's Bluetooth switch, and whether the radio runs now.
+    bool bluetooth_enabled{true};
+    bool bluetooth_on{false};
     std::uint64_t sequence{0};
 };
+
+// The owner's Bluetooth switch (2026-11-19). On, the radio runs only while a
+// phone is paired or being paired: off when it is not needed, since it keeps
+// the processor from sleeping. Off, never. The device keeps it in bluetooth.txt.
+struct BluetoothSettings {
+    bool enabled{true};
+    bool operator==(const BluetoothSettings& other) const noexcept { return enabled == other.enabled; }
+    bool operator!=(const BluetoothSettings& other) const noexcept { return !(*this == other); }
+};
+std::string serialize_bluetooth_settings(const BluetoothSettings& settings);
+// A missing or malformed store keeps the default.
+BluetoothSettings parse_bluetooth_settings(const std::string& data);
+bool bluetooth_should_run(const BluetoothSettings& settings, bool phone_paired, bool pairing) noexcept;
 
 // Notifications mirrored from the owner's phone (iPhone: ANCS over BLE;
 // Android: the companion app described in docs/phone/ANDROID_COMPANION.md).
@@ -49,6 +65,7 @@ public:
     static constexpr std::size_t kContextBytes = 1400;
 
     void set_link(PhoneLinkState link, PhonePlatform platform, const std::string& device_name);
+    void set_bluetooth(bool enabled, bool on);
     void upsert(PhoneNotification notification);
     bool remove(std::uint32_t uid);
     void clear();

@@ -936,6 +936,34 @@ struct AuraUi::Impl {
         return t().wifi_error_generic;
     }
 
+    // The touch controller did not start (F-4 of 2026-11-19): a notice on the
+    // top layer, above every screen and below Synapse's band, until it answers.
+    bool touch_available{true};
+    lv_obj_t* touch_notice{};
+    void update_touch_notice() {
+        if (touch_notice) {
+            lv_obj_delete(touch_notice);
+            touch_notice = nullptr;
+        }
+        if (touch_available || !display) return;
+        touch_notice = lv_obj_create(lv_display_get_layer_top(display));
+        ui::reset(touch_notice);
+        lv_obj_set_size(touch_notice, kWidth - 40, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_color(touch_notice, ui::color(ui::tokens::surface_glass), 0);
+        lv_obj_set_style_bg_opa(touch_notice, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(touch_notice, ui::tokens::radius_large, 0);
+        lv_obj_set_style_border_width(touch_notice, 2, 0);
+        lv_obj_set_style_border_color(touch_notice, ui::color(ui::tokens::amber), 0);
+        lv_obj_set_style_pad_hor(touch_notice, 18, 0);
+        lv_obj_set_style_pad_ver(touch_notice, 10, 0);
+        auto* text = ui::make_label(touch_notice, c().touch_unavailable, ui::tokens::text, ui::font_caption());
+        lv_obj_set_width(text, lv_pct(100));
+        lv_label_set_long_mode(text, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_align(text, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(touch_notice, LV_ALIGN_BOTTOM_MID, 0, -14);
+        lv_obj_set_clickable(touch_notice, false);
+    }
+
     void show_toast(const char* text, std::uint32_t accent) {
         if (powered_off || boot_remaining_ms > 0) return;
         if (!toast) {
@@ -1002,6 +1030,7 @@ struct AuraUi::Impl {
             case UiView::AoratonSignIn:
             case UiView::FileDetails:
             case UiView::FileDelete:
+            case UiView::FilePreview:
             case UiView::Radio:
             case UiView::RadioSearch:
             case UiView::ConversationHistory:
@@ -2561,7 +2590,7 @@ struct AuraUi::Impl {
                 attachment_preview(bubble, message);
                 if (!message.local_display_text.empty() || message.attachment == AoratonAttachmentKind::None) {
                     auto* text = ui::make_label(bubble, message.local_display_text.c_str(), ui::tokens::text,
-                                                ui::font_body());
+                                                ui::font_reading());
                     lv_obj_set_width(text, lv_pct(100));
                 }
                 std::uint32_t status_color = ui::tokens::text_tertiary;
@@ -2736,7 +2765,7 @@ struct AuraUi::Impl {
         lv_obj_set_scrollable(reader, true);
         lv_obj_set_scroll_dir(reader, LV_DIR_VER);
         ui::style_scrollbar(reader);
-        label(reader, text.c_str(), 0, 0, width - 10, ui::font_body(), ui::tokens::text);
+        label(reader, text.c_str(), 0, 0, width - 10, ui::font_reading(), ui::tokens::text);
         return reader;
     }
 
@@ -2939,7 +2968,37 @@ struct AuraUi::Impl {
         return count;
     }
 
-    // TlesDetector's alerts and lightning: a title at `y`, the card below it.
+    // An hour's column in the looks with one panel for the hours: the width
+    // shared by up to six, then 76 px each and the panel scrolls sideways.
+    static int weather_hour_column(std::size_t count) {
+        if (count == 0) return kWidth;
+        return count <= 6 ? kWidth / static_cast<int>(count) : 76;
+    }
+    static void weather_hours_scroll(lv_obj_t* panel, std::size_t count) {
+        if (count <= 6) return;
+        lv_obj_set_scrollable(panel, true);
+        lv_obj_set_scroll_dir(panel, LV_DIR_HOR);
+        lv_obj_set_scrollbar_mode(panel, LV_SCROLLBAR_MODE_OFF);
+    }
+
+    // The hazards show for TlesDetector and for Xweather (the owner's keys).
+    bool weather_hazards_shown() const {
+        return weather.data.provider == WeatherProvider::TlesDetector || weather.data.hazards.xweather_available;
+    }
+    // Its room on the page: Xweather's card adds the rain and its attribution.
+    int weather_hazard_space() const { return weather.data.hazards.xweather_available ? 260 : 188; }
+    // The next hour's rain in words, or nothing without a nowcast.
+    std::string weather_rain_text() const {
+        const auto& hazards = weather.data.hazards;
+        if (!hazards.nowcast_available) return {};
+        if (hazards.rain_in_minutes == 0) return c().weather_rain_now;
+        if (hazards.rain_in_minutes < 0) return c().weather_rain_none;
+        char text[64];
+        std::snprintf(text, sizeof(text), c().weather_rain_in_format, hazards.rain_in_minutes);
+        return text;
+    }
+
+    // TlesDetector's or Xweather's alerts and lightning: a title at `y`, the card below it.
     void weather_hazard_block(int y) {
         const auto& data = weather.data;
         line(weather_scroll, v().weather_hazards, kGutter, y, kWidth, ui::font_headline(), ui::tokens::text);
@@ -2948,12 +3007,14 @@ struct AuraUi::Impl {
         auto* hazard_card = lv_obj_create(weather_scroll);
         ui::reset(hazard_card);
         ui::style_platter(hazard_card, hazard_accent, ui::tokens::radius_medium, urgent);
-        lv_obj_set_size(hazard_card, kWidth, 132);
+        lv_obj_set_size(hazard_card, kWidth, data.hazards.xweather_available ? 168 : 132);
         lv_obj_set_pos(hazard_card, kGutter, y + 40);
         auto* warning_icon = icon_view(hazard_card, ui::IconRole::Warning, 28, hazard_accent);
         lv_obj_set_pos(warning_icon, 0, 6);
         char alert_line[96];
-        if (!data.hazards.alerts_available) {
+        if (data.hazards.alerts_available && data.hazards.active_alert_count > 0 && !data.hazards.alert_name.empty()) {
+            std::snprintf(alert_line, sizeof(alert_line), "%s", data.hazards.alert_name.c_str());
+        } else if (!data.hazards.alerts_available) {
             std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_alerts_unavailable);
         } else if (data.hazards.nearby_alert_count == 1) {
             std::snprintf(alert_line, sizeof(alert_line), "%s", v().weather_nearby_alert_one);
@@ -2988,6 +3049,17 @@ struct AuraUi::Impl {
                           data.hazards.nearest_lightning_km, data.hazards.lightning_age_minutes);
         }
         label(hazard_card, lightning_line, 40, 54, kWidth - 72, ui::font_caption(), ui::tokens::text);
+        if (data.hazards.xweather_available) {
+            const auto rain = weather_rain_text();
+            if (!rain.empty()) {
+                auto* drop = icon_view(hazard_card, ui::IconRole::CloudRain, 28,
+                                       data.hazards.rain_in_minutes >= 0 ? ui::tokens::blue : ui::tokens::ice);
+                lv_obj_set_pos(drop, 0, 112);
+                line(hazard_card, rain.c_str(), 40, 112, kWidth - 72, ui::font_caption(), ui::tokens::text);
+            }
+            line(weather_scroll, c().weather_powered_xweather, kGutter, y + 40 + 168 + 6, kWidth,
+                 ui::font_caption(), ui::tokens::text_tertiary, LV_TEXT_ALIGN_RIGHT);
+        }
     }
 
     void render_weather_ready(bool refreshing) {
@@ -3145,8 +3217,8 @@ struct AuraUi::Impl {
         }
         strip_end(metrics, kGutter + static_cast<int>(metric_count) * kMetricPitch);
 
-        const bool show_hazards = data.provider == WeatherProvider::TlesDetector;
-        const int offset = show_hazards ? 188 : 0;
+        const bool show_hazards = weather_hazards_shown();
+        const int offset = show_hazards ? weather_hazard_space() : 0;
         if (show_hazards) weather_hazard_block(408);
 
         line(weather_scroll, v().weather_hourly, kGutter, 408 + offset, kWidth, ui::font_headline(), ui::tokens::text);
@@ -3849,6 +3921,18 @@ struct AuraUi::Impl {
             case ChargeStage::Unknown: stage = v().status_unknown; break;
         }
         row(c().charge_stage_title, stage, ui::IconRole::Charging, ui::tokens::mint);
+        // How long it lasts (the owner, 2026-11-19): measured on battery only.
+        char life[96];
+        if (battery.minutes_on_battery < 0) {
+            std::snprintf(life, sizeof(life), "%s", c().battery_life_on_power);
+        } else if (battery.minutes_left < 0) {
+            std::snprintf(life, sizeof(life), c().battery_life_measuring_format, battery.minutes_on_battery);
+        } else {
+            std::snprintf(life, sizeof(life), c().battery_life_format, battery.minutes_left / 60,
+                          battery.minutes_left % 60, battery.drain_tenths_per_hour / 10,
+                          battery.drain_tenths_per_hour % 10);
+        }
+        row(c().battery_life_title, life, ui::IconRole::Battery, ui::tokens::mint);
         row(c().battery_voltage, volts(battery.battery_mv), ui::IconRole::Battery, ui::tokens::mint);
         if (battery.usb_mv > 0) row(c().usb_voltage, volts(battery.usb_mv), ui::IconRole::Power, ui::tokens::ice);
         row(c().system_voltage, volts(battery.system_mv), ui::IconRole::Cpu, ui::tokens::blue);
@@ -4316,6 +4400,8 @@ struct AuraUi::Impl {
             case UiView::Files: render_files(); break;
             case UiView::FileDetails: render_file_details(); break;
             case UiView::FileDelete: render_file_delete(); break;
+            case UiView::FileRename: render_file_rename(); break;
+            case UiView::FilePreview: render_file_preview(); break;
             case UiView::Weather: render_weather(); break;
             case UiView::WeatherSettings: render_weather_settings(); break;
             case UiView::WeatherLocation: render_weather_location(); break;
@@ -4334,6 +4420,7 @@ struct AuraUi::Impl {
             case UiView::ReminderNew:
             case UiView::ClockItem:
             case UiView::ClockAlert:
+            case UiView::AlarmSound:
             case UiView::Notes:
             case UiView::NoteNew:
             case UiView::NoteDetail:
@@ -4609,6 +4696,32 @@ void AuraUi::set_language(InterfaceLanguage language) {
     impl_->interface_language = language;
     impl_->scroll_memory.clear();
     if (impl_->content) impl_->render(impl_->current_view);
+    if (!impl_->touch_available) impl_->update_touch_notice();
+}
+
+void AuraUi::show_weather_notice(const WeatherNotice& notice) {
+    char text[160];
+    switch (notice.kind) {
+        case WeatherNotice::Kind::Rain:
+            if (notice.minutes <= 0) std::snprintf(text, sizeof(text), "%s", impl_->c().weather_rain_now);
+            else std::snprintf(text, sizeof(text), impl_->c().weather_rain_in_format, notice.minutes);
+            break;
+        case WeatherNotice::Kind::Storm:
+            std::snprintf(text, sizeof(text), impl_->c().weather_storm_near_format,
+                          static_cast<int>(notice.km + 0.5F));
+            break;
+        case WeatherNotice::Kind::Alert:
+            std::snprintf(text, sizeof(text), impl_->c().weather_alert_format, notice.name.c_str());
+            break;
+    }
+    impl_->show_toast(text, ui::tokens::amber);
+}
+
+void AuraUi::set_touch_available(bool available) {
+    if (impl_->touch_available == available) return;
+    impl_->touch_available = available;
+    impl_->update_touch_notice();
+    if (available) impl_->show_toast(impl_->c().touch_back, ui::tokens::mint);
 }
 
 InterfaceLanguage AuraUi::language() const noexcept { return impl_->interface_language; }
@@ -4954,6 +5067,8 @@ void AuraUi::apply_files(const FileBrowserSnapshot& snapshot) {
     const bool path_changed = snapshot.path != self.files.path;
     const auto erased_before = self.files.erased;
     const bool was_deleting = self.files.deleting;
+    const auto renamed_before = self.files.renamed;
+    const bool was_renaming = self.files.renaming;
     self.files = snapshot;
     if (path_changed) self.file_page = 0;
     // A deletion that finished, seen on the screen that asked for it.
@@ -4961,7 +5076,12 @@ void AuraUi::apply_files(const FileBrowserSnapshot& snapshot) {
         const bool done = snapshot.erased != erased_before;
         self.show_toast(done ? self.fx().deleted : self.fx().delete_failed, done ? ui::tokens::mint : ui::tokens::coral);
     }
+    if (was_renaming && !snapshot.renaming) {
+        const bool done = snapshot.renamed != renamed_before;
+        self.show_toast(done ? self.fx().renamed : self.fx().rename_failed, done ? ui::tokens::mint : ui::tokens::coral);
+    }
     if (self.current_view == UiView::Files) self.render(UiView::Files);
+    if (self.current_view == UiView::FilePreview) self.render(UiView::FilePreview);
 }
 
 float AuraUi::photo_zoom() const noexcept { return impl_->photo_zoom.zoom(); }

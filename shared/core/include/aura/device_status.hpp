@@ -21,12 +21,18 @@ struct BatteryDetails {
     int chip_celsius{0};
     ChargeStage stage{ChargeStage::Unknown};
     int rated_mah{0};  // 0 when not known
+    // How long it lasts (BatteryHistory): minutes on battery since the USB
+    // went out (-1 on USB), and once measured the time left and the drain.
+    int minutes_on_battery{-1};
+    int minutes_left{-1};
+    int drain_tenths_per_hour{0};  // 63: 6.3 % an hour
     StatusOrigin origin{StatusOrigin::Unavailable};
     bool operator==(const BatteryDetails& other) const noexcept {
         return known == other.known && battery_mv == other.battery_mv && usb_mv == other.usb_mv &&
                system_mv == other.system_mv && chip_temperature_known == other.chip_temperature_known &&
                chip_celsius == other.chip_celsius && stage == other.stage && rated_mah == other.rated_mah &&
-               origin == other.origin;
+               minutes_on_battery == other.minutes_on_battery && minutes_left == other.minutes_left &&
+               drain_tenths_per_hour == other.drain_tenths_per_hour && origin == other.origin;
     }
     bool operator!=(const BatteryDetails& other) const noexcept { return !(*this == other); }
 };

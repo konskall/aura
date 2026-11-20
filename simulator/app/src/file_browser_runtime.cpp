@@ -2,6 +2,7 @@
 
 #include "aura/text_util.hpp"
 
+#include <fstream>
 #include <windows.h>
 
 #include <algorithm>
@@ -84,6 +85,29 @@ FileBrowserError DesktopFileStorage::erase(const std::string& path) {
     return error ? FileBrowserError::Delete : FileBrowserError::None;
 }
 
+FileBrowserError DesktopFileStorage::rename(const std::string& path, const std::string& new_name) {
+    std::filesystem::path from;
+    if (!resolve(path, from) || redirected(from) || path == kCardFolder) return FileBrowserError::NotFound;
+    const auto to = from.parent_path() / std::filesystem::u8path(new_name);
+    std::error_code error;
+    if (!std::filesystem::exists(from, error) || error) return FileBrowserError::NotFound;
+    if (std::filesystem::exists(to, error) || error) return FileBrowserError::Rename;  // never over another
+    std::filesystem::rename(from, to, error);
+    return error ? FileBrowserError::Rename : FileBrowserError::None;
+}
+
+FileBrowserError DesktopFileStorage::read(const std::string& path, std::size_t max_bytes,
+                                          std::vector<std::uint8_t>& bytes) {
+    std::filesystem::path target;
+    if (!resolve(path, target) || redirected(target)) return FileBrowserError::NotFound;
+    std::ifstream input(target, std::ios::binary);
+    if (!input) return FileBrowserError::NotFound;
+    bytes.assign(max_bytes, 0);
+    input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(max_bytes));
+    bytes.resize(static_cast<std::size_t>(input.gcount()));
+    return input.bad() ? FileBrowserError::Read : FileBrowserError::None;
+}
+
 bool DesktopFileStorage::space(std::uint64_t& total_bytes, std::uint64_t& free_bytes) {
     std::error_code error;
     const auto info = std::filesystem::space(root_, error);
@@ -100,6 +124,8 @@ DemoFileStorage::DemoFileStorage() {
     folders_["aura/photos"] = {{"DEMO ήλιος.jpg", false, 524288, minute}};
     folders_["aura/files"] = {};
     folders_["DEMO Μουσική"] = {{"DEMO ρυθμός.mp3", false, 3145728, minute}};
+    const std::string words = "DEMO\nΣημειώσεις της κάρτας.\nΔεύτερη γραμμή.\n";
+    contents_["DEMO.txt"] = std::vector<std::uint8_t>(words.begin(), words.end());
 }
 
 FileBrowserError DemoFileStorage::list(const std::string& path, std::vector<FileEntry>& entries, bool& truncated) {
@@ -119,6 +145,42 @@ FileBrowserError DemoFileStorage::erase(const std::string& path) {
                   entries.end());
     if (entries.size() == before) return FileBrowserError::NotFound;
     folders_.erase(path);
+    return FileBrowserError::None;
+}
+
+FileBrowserError DemoFileStorage::rename(const std::string& path, const std::string& new_name) {
+    auto parent = folders_.find(file_path_parent(path));
+    if (parent == folders_.end()) return FileBrowserError::NotFound;
+    const auto leaf = file_path_leaf(path);
+    auto& entries = parent->second;
+    for (const auto& entry : entries) {
+        if (entry.name == new_name) return FileBrowserError::Rename;
+    }
+    for (auto& entry : entries) {
+        if (entry.name != leaf) continue;
+        entry.name = new_name;
+        const auto renamed = file_path_join(file_path_parent(path), new_name);
+        if (auto folder = folders_.find(path); folder != folders_.end()) {
+            auto moved = std::move(folder->second);
+            folders_.erase(folder);
+            folders_[renamed] = std::move(moved);
+        }
+        if (auto content = contents_.find(path); content != contents_.end()) {
+            auto moved = std::move(content->second);
+            contents_.erase(content);
+            contents_[renamed] = std::move(moved);
+        }
+        return FileBrowserError::None;
+    }
+    return FileBrowserError::NotFound;
+}
+
+FileBrowserError DemoFileStorage::read(const std::string& path, std::size_t max_bytes,
+                                       std::vector<std::uint8_t>& bytes) {
+    const auto found = contents_.find(path);
+    if (found == contents_.end()) return FileBrowserError::Read;
+    bytes.assign(found->second.begin(),
+                 found->second.begin() + static_cast<std::ptrdiff_t>(std::min(max_bytes, found->second.size())));
     return FileBrowserError::None;
 }
 

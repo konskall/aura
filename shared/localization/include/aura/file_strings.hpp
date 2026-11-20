@@ -8,6 +8,9 @@ struct FileStrings {
         *kind_other, *device_file;
     const char *open, *delete_item, *delete_title, *delete_file_hint, *delete_folder_hint, *delete_confirm, *cancel,
         *deleted, *delete_failed, *deleting, *refresh, *decimal;
+    // Rename, a look inside, playing (2026-11-19).
+    const char *rename, *rename_title, *renamed, *rename_failed, *preview, *preview_loading, *preview_failed, *play,
+        *stop;
 };
 const FileStrings& file_strings(InterfaceLanguage language);
 }  // namespace aura::l10n

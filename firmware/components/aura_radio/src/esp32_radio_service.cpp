@@ -1,5 +1,7 @@
 #include "esp32_radio_service.hpp"
 
+#include "aura/file_browser.hpp"
+
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -10,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <utility>
 
@@ -258,6 +261,11 @@ void Esp32RadioService::stream(const RadioStation& station, std::uint64_t genera
     // A live stream that drops (a network blip, a server restart) is joined
     // again with growing pauses before the owner is told; a long stretch of
     // music starts the count again (as in the simulator).
+    std::string file;
+    if (radio_file_url(station.url, file)) {
+        stream_file(file, generation);
+        return;
+    }
     int attempt = 0;
     while (current(generation)) {
         bool heard_audio = false;
@@ -356,6 +364,64 @@ std::string Esp32RadioService::stream_once(const RadioStation& station, std::uin
         return radio_pump(parsed.metaint, sink, io, device_limits(), heard_audio);
     }
     return "RADIO_HTTP";  // too many redirects
+}
+
+void Esp32RadioService::stream_file(const std::string& path, std::uint64_t generation) {
+    // Only the card, and only a path the Αρχεία app could name.
+    constexpr const char* kCard = "/sdcard/";
+    std::FILE* input = nullptr;
+    if (path.rfind(kCard, 0) == 0 && file_path_valid(path.substr(std::strlen(kCard)))) input = std::fopen(path.c_str(), "rb");
+    if (!input) {
+        publish({RadioWorkerEventType::Failed, generation, "RADIO_FILE"});
+        return;
+    }
+    std::uint8_t head[10]{};
+    const auto head_bytes = std::fread(head, 1, sizeof(head), input);
+    const auto tag = id3v2_tag_size(head, head_bytes);
+    std::fseek(input, static_cast<long>(tag), SEEK_SET);
+    class Sink final : public IRadioAudioSink {
+    public:
+        Sink(Esp32RadioService& service, std::uint64_t generation) : service_(service), generation_(generation) {}
+        bool open(std::uint32_t sample_rate, std::uint8_t channels) override {
+            std::lock_guard<std::mutex> audio_lock(service_.audio_control_mutex_);
+            return service_.current(generation_) && service_.audio_.stream_open(sample_rate, channels);
+        }
+        bool push(const std::int16_t* samples, std::size_t frames) override {
+            return service_.current(generation_) && service_.audio_.stream_push(samples, frames);
+        }
+        std::uint32_t buffered_ms() const override { return service_.audio_.stream_buffered_ms(); }
+
+    private:
+        Esp32RadioService& service_;
+        std::uint64_t generation_;
+    } sink(*this, generation);
+    RadioPumpIo io;
+    io.read = [input](std::uint8_t* buffer, int size) -> int {
+        const auto got = std::fread(buffer, 1, static_cast<std::size_t>(size), input);
+        if (got > 0) return static_cast<int>(got);
+        return std::ferror(input) ? kRadioReadError : 0;
+    };
+    io.current = [this, generation] { return current(generation); };
+    io.title = [](std::string) {};
+    io.playing = [this, generation] { publish({RadioWorkerEventType::Playing, generation, {}}); };
+    io.wait = [](std::uint32_t ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); };
+    bool heard_audio = false;
+    const auto code = radio_pump(0, sink, io, device_limits(), heard_audio);
+    std::fclose(input);
+    if (!current(generation)) return;
+    // The last of it plays out before the player says it ended.
+    if (code == "RADIO_STREAM_ENDED") {
+        while (current(generation) && audio_.stream_buffered_ms() > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+    {
+        std::lock_guard<std::mutex> audio_lock(audio_control_mutex_);
+        if (current(generation)) audio_.stream_close();
+    }
+    ESP_LOGI(kTag, "file ended: %s", code.c_str());
+    publish({code == "RADIO_STREAM_ENDED" ? RadioWorkerEventType::Ended : RadioWorkerEventType::Failed,
+             generation, code});
 }
 
 }  // namespace aura::firmware

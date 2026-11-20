@@ -1,5 +1,7 @@
 #include "aura/assistant_actions.hpp"
+#include "aura/alarm_station.hpp"
 #include "aura/assistant_companion.hpp"
+#include "aura/battery_history.hpp"
 #include "aura/briefing.hpp"
 #include "aura/clock_services.hpp"
 #include "aura/display_power.hpp"
@@ -11,6 +13,7 @@
 #include "aura/sounds.hpp"
 #include "aura/text_util.hpp"
 #include "aura/voice.hpp"
+#include "aura/xweather.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -842,6 +845,36 @@ struct FakeUpdateVerifier final : aura::IUpdateSignatureVerifier {
     }
 };
 
+// The owner's Bluetooth switch (2026-11-19): on, the radio runs only for a
+// phone (off when not needed, for the battery); off, never; and the choice
+// survives a restart.
+void bluetooth_tests() {
+    using namespace aura;
+    expect(BluetoothSettings{}.enabled, "Bluetooth is allowed by default");
+    const BluetoothSettings on{true};
+    const BluetoothSettings off{false};
+    expect(!bluetooth_should_run(on, false, false), "allowed, but off with no phone paired or being paired");
+    expect(bluetooth_should_run(on, true, false), "on for a paired phone");
+    expect(bluetooth_should_run(on, false, true), "on while a phone is being paired");
+    expect(!bluetooth_should_run(off, true, true), "switched off: never");
+    expect(parse_bluetooth_settings(serialize_bluetooth_settings(off)) == off &&
+               parse_bluetooth_settings(serialize_bluetooth_settings(on)) == on,
+           "the choice round-trips through its store");
+    expect(parse_bluetooth_settings("") == BluetoothSettings{} &&
+               parse_bluetooth_settings("aura-bluetooth 1\nenabled=2\n") == BluetoothSettings{} &&
+               parse_bluetooth_settings("other 1\nenabled=0\n") == BluetoothSettings{},
+           "a missing or bad store keeps the default");
+    PhoneNotificationModel phone;
+    expect(phone.snapshot().bluetooth_enabled && !phone.snapshot().bluetooth_on, "allowed and not running at first");
+    const auto before = phone.snapshot().sequence;
+    phone.set_bluetooth(false, false);
+    expect(!phone.snapshot().bluetooth_enabled && !phone.snapshot().bluetooth_on && phone.snapshot().sequence != before,
+           "the phone's snapshot shows the switch and the radio");
+    const auto same = phone.snapshot().sequence;
+    phone.set_bluetooth(false, false);
+    expect(phone.snapshot().sequence == same, "the same state again is no change");
+}
+
 void ota_tests() {
     using namespace aura;
     expect(compare_versions("1.10.0", "1.9.9") > 0 && compare_versions("1.0.0", "1.0.0") == 0 &&
@@ -1375,6 +1408,269 @@ void power_tests() {
            "on USB power realtime stays on");
 }
 
+// An alarm that wakes with a station (the owner, 2026-11-19): the alarm keeps
+// its station through a restart, the ringing alert carries it, and the
+// player starts it, rings the melody when it does not play, and stops it.
+void alarm_station_tests() {
+    using namespace aura;
+    ClockServicesModel clock;
+    std::uint32_t id = 0;
+    expect(clock.add_alarm(7, 0, true, "", &id) == ClockResult::Ok, "an alarm");
+    const AlarmStation kosmos{"uuid-kosmos", "DEMO Κόσμος", "https://example.invalid/kosmos.mp3"};
+    expect(clock.snapshot().alarms.front().station.url.empty(), "the melody by default");
+    expect(clock.set_alarm_station(id, kosmos) == ClockResult::Ok &&
+               clock.snapshot().alarms.front().station.url == kosmos.url,
+           "it can wake with a station");
+    expect(clock.set_alarm_station(id + 99, kosmos) == ClockResult::NotFound, "only an alarm that exists");
+    ClockServicesModel restored;
+    expect(restored.restore(clock.serialize()) && restored.snapshot().alarms.size() == 1 &&
+               restored.snapshot().alarms.front().station.name == kosmos.name &&
+               restored.snapshot().alarms.front().station.id == kosmos.id,
+           "the station survives a restart");
+    ClockServicesModel older;
+    expect(older.restore("aura-clock 1\nN\t5\nA\t3\t6\t30\t1\t1\tΔουλειά\n") && older.snapshot().alarms.size() == 1 &&
+               older.snapshot().alarms.front().station.url.empty() && older.snapshot().alarms.front().label == "Δουλειά",
+           "an older store still reads, with the melody");
+    clock.set_clock(at(2026, 11, 20, 7, 0, 5));
+    expect(clock.snapshot().alert && clock.snapshot().alert->station.url == kosmos.url,
+           "the ringing alert carries the station");
+    ClockServicesModel after_restart;
+    expect(after_restart.restore(clock.serialize()), "a ringing alarm is stored");
+    after_restart.set_clock(at(2026, 11, 20, 7, 1, 5));
+    expect(after_restart.snapshot().alert && after_restart.snapshot().alert->station.url == kosmos.url,
+           "and rings with its station after a restart");
+    expect(clock.set_alarm_station(id, std::nullopt) == ClockResult::Ok &&
+               clock.snapshot().alarms.front().station.url.empty(),
+           "and back to the melody");
+
+    ClockAlert ringing;
+    ringing.kind = ClockAlertKind::Alarm;
+    ringing.id = 7;
+    ringing.station = kosmos;
+    AlarmStationPlayer player;
+    auto decision = player.step(ringing, RadioState::Idle, false, 1000);
+    expect(decision.start_station && decision.station.url == kosmos.url && !decision.melody && !decision.stop_station,
+           "the station starts and the melody waits");
+    decision = player.step(ringing, RadioState::Connecting, false, 5000);
+    expect(!decision.start_station && !decision.melody, "while it connects, no melody and no second start");
+    decision = player.step(ringing, RadioState::Playing, false, 8000);
+    expect(!decision.melody && !decision.start_station, "playing: the station is the alarm");
+    decision = player.step(std::nullopt, RadioState::Playing, false, 20000);
+    expect(decision.stop_station && !decision.start_station, "dismissed or snoozed: the station it started stops");
+    decision = player.step(std::nullopt, RadioState::Idle, false, 21000);
+    expect(!decision.stop_station && !decision.start_station, "once");
+
+    AlarmStationPlayer late;
+    late.step(ringing, RadioState::Idle, false, 0);
+    expect(!late.step(ringing, RadioState::Connecting, false, AlarmStationPlayer::kStationTimeoutMs - 1).melody,
+           "still connecting: still waiting");
+    decision = late.step(ringing, RadioState::Connecting, false, AlarmStationPlayer::kStationTimeoutMs);
+    expect(decision.melody && decision.stop_station, "not playing within the wait: stopped, and the melody rings");
+    expect(late.step(ringing, RadioState::Idle, false, AlarmStationPlayer::kStationTimeoutMs + 100).melody &&
+               !late.step(ringing, RadioState::Idle, false, AlarmStationPlayer::kStationTimeoutMs + 200).start_station,
+           "the melody goes on, and the station is not tried again for this alert");
+
+    AlarmStationPlayer failing;
+    failing.step(ringing, RadioState::Idle, false, 0);
+    expect(failing.step(ringing, RadioState::Error, false, 3000).melody, "a station that fails: the melody at once");
+
+    AlarmStationPlayer muted;
+    decision = muted.step(ringing, RadioState::Idle, true, 0);
+    expect(!decision.start_station && decision.melody, "muted: the melody, which always rings");
+
+    AlarmStationPlayer plain;
+    ClockAlert melody = ringing;
+    melody.station = {};
+    decision = plain.step(melody, RadioState::Idle, false, 0);
+    expect(!decision.start_station && decision.melody, "an alarm without a station: the melody");
+    ClockAlert timer = ringing;
+    timer.kind = ClockAlertKind::Timer;
+    AlarmStationPlayer timers;
+    expect(!timers.step(timer, RadioState::Idle, false, 0).start_station, "a timer never starts the radio");
+}
+
+// Xweather (the owner's keys, 2026-11-19): rain in the next hour minute by
+// minute, official alerts and lightning near, merged into the weather; checks
+// only when they can matter, and one notice per rain, storm or alert.
+void xweather_tests() {
+    using namespace aura;
+    expect(xweather_minutely_path(37.98, 23.73) == "conditions/37.980,23.730?filter=minutelyprecip&plimit=60" &&
+               xweather_alerts_path(37.98, 23.73) == "alerts/37.980,23.730?limit=10" &&
+               xweather_lightning_path(37.98, 23.73) ==
+                   "lightning/closest?p=37.980,23.730&radius=50km&from=-15minutes&to=now&limit=1&sort=dt:-1",
+           "the three requests, the place to three decimals");
+    expect(xweather_url("forecasts/1,2?filter=1hr", "id1", "s2") ==
+               "https://data.api.xweather.com/forecasts/1,2?filter=1hr&client_id=id1&client_secret=s2" &&
+               xweather_url("alerts/1,2", "id1", "s2") == "https://data.api.xweather.com/alerts/1,2?client_id=id1&client_secret=s2",
+           "the keys ride as query parameters");
+
+    // Rain in 7 minutes for 3 minutes, peaking at 3.2 mm/h.
+    std::string periods;
+    for (int minute = 0; minute < 60; ++minute) {
+        const char* rate = minute == 7 ? "0.4" : minute == 8 ? "3.2" : minute == 9 ? "1.1" : "0";
+        if (!periods.empty()) periods += ",";
+        periods += std::string("{\"timestamp\":") + std::to_string(1795123800 + minute * 60) +
+                   ",\"precipRateMM\":" + rate + ",\"precipMM\":0}";
+    }
+    XweatherNowcast now;
+    expect(parse_xweather_minutely("{\"success\":true,\"error\":null,\"response\":[{\"periods\":[" + periods + "]}]}", now) &&
+               now.rain_ok && now.rain_in_minutes == 7 && now.rain_minutes == 3 && now.rain_peak_mm_h > 3.1F,
+           "rain in seven minutes, for three, at most 3.2 mm/h");
+    XweatherNowcast dry;
+    expect(parse_xweather_minutely("{\"success\":true,\"response\":[{\"periods\":[{\"precipRateMM\":0}]}]}", dry) &&
+               dry.rain_ok && dry.rain_in_minutes == -1,
+           "no rain in the hour");
+    XweatherNowcast broken;
+    expect(!parse_xweather_minutely("{\"success\":false,\"error\":{\"code\":\"invalid_client\"}}", broken) &&
+               !broken.rain_ok && !parse_xweather_minutely("not json", broken),
+           "an error or a broken answer is no nowcast");
+
+    expect(parse_xweather_alerts("{\"success\":true,\"error\":{\"code\":\"warn_no_data\"},\"response\":[]}", now) &&
+               now.alerts_ok && now.alert_count == 0 && now.highest == WeatherAlertLevel::None,
+           "no alerts here");
+    expect(parse_xweather_alerts(
+               "{\"success\":true,\"response\":[{\"details\":{\"type\":\"AW.RA.MN\",\"name\":\"DEMO RAIN\"}},"
+               "{\"details\":{\"type\":\"AW.TS.SV\",\"name\":\"DEMO THUNDERSTORMS\"}}]}", now) &&
+               now.alert_count == 2 && now.highest == WeatherAlertLevel::Severe && now.alert_name == "DEMO THUNDERSTORMS",
+           "two alerts here, the worst severe, with its name");
+
+    expect(parse_xweather_lightning(
+               "{\"success\":true,\"response\":[{\"ob\":{\"timestamp\":1795123500},"
+               "\"relativeTo\":{\"distanceKM\":12.4,\"bearing\":225}}]}", 1795123800, now) &&
+               now.lightning_ok && now.lightning_near && now.lightning_km > 12.3F && now.lightning_age_minutes == 5 &&
+               now.lightning_bearing_deg == 225,
+           "a strike 12 km south-west five minutes ago");
+    XweatherNowcast calm;
+    expect(parse_xweather_lightning("{\"success\":true,\"error\":{\"code\":\"warn_no_data\"},\"response\":[]}",
+                                    1795123800, calm) && calm.lightning_ok && !calm.lightning_near,
+           "no lightning near");
+
+    WeatherData data;
+    data.condition = WeatherCondition::Cloudy;
+    apply_xweather(data, now);
+    expect(data.hazards.xweather_available && data.hazards.nowcast_available && data.hazards.rain_in_minutes == 7 &&
+               data.hazards.alerts_available && data.hazards.active_alert_count == 2 &&
+               data.hazards.highest_alert == WeatherAlertLevel::Severe && data.hazards.lightning_observed &&
+               data.condition == WeatherCondition::Thunderstorm,
+           "merged: a storm within 15 km shows as one");
+    WeatherData raining;
+    raining.condition = WeatherCondition::Cloudy;
+    XweatherNowcast falling;
+    falling.rain_ok = true;
+    falling.rain_in_minutes = 0;
+    falling.rain_minutes = 30;
+    falling.rain_peak_mm_h = 4.0F;
+    apply_xweather(raining, falling);
+    expect(raining.condition == WeatherCondition::Rain, "rain falling now shows as rain");
+
+    WeatherData plain;
+    plain.hourly_count = 3;
+    for (std::size_t index = 0; index < 3; ++index) plain.hourly[index].rain_probability_percent = 5;
+    plain.condition = WeatherCondition::Clear;
+    expect(!xweather_rain_plausible(plain) && !xweather_storm_plausible(plain), "a dry hour asks nothing");
+    plain.hourly[2].rain_probability_percent = 40;
+    expect(xweather_rain_plausible(plain) && !xweather_storm_plausible(plain), "a likely shower asks for rain");
+    plain.hourly[1].condition = WeatherCondition::Thunderstorm;
+    expect(xweather_storm_plausible(plain), "a likely storm asks for lightning too");
+
+    WeatherNoticeGate gate;
+    WeatherHazards hazards;
+    hazards.nowcast_available = true;
+    hazards.rain_in_minutes = 20;
+    auto notice = gate.observe(hazards, 1000);
+    expect(notice && notice->kind == WeatherNotice::Kind::Rain && notice->minutes == 20, "rain in twenty minutes: a notice");
+    hazards.rain_in_minutes = 10;
+    expect(!gate.observe(hazards, 1010), "the same rain: no second notice");
+    hazards.rain_in_minutes = -1;
+    gate.observe(hazards, 1100);
+    hazards.rain_in_minutes = 5;
+    expect(gate.observe(hazards, 1200).has_value(), "a new rain after a dry spell: a new notice");
+    hazards.lightning_available = hazards.lightning_observed = true;
+    hazards.nearest_lightning_km = 8.0F;
+    notice = gate.observe(hazards, 1210);
+    expect(notice && notice->kind == WeatherNotice::Kind::Storm && notice->km < 9.0F, "a storm near: a notice");
+    expect(!gate.observe(hazards, 1230), "not again within the hour");
+    hazards.alerts_available = true;
+    hazards.active_alert_count = 1;
+    hazards.highest_alert = WeatherAlertLevel::Moderate;
+    hazards.alert_name = "DEMO ALERT";
+    notice = gate.observe(hazards, 1240);
+    expect(notice && notice->kind == WeatherNotice::Kind::Alert && notice->name == "DEMO ALERT", "an alert: a notice");
+    expect(!gate.observe(hazards, 1250), "once per alert");
+    hazards.highest_alert = WeatherAlertLevel::Minor;
+    hazards.alert_name = "DEMO MINOR";
+    expect(!gate.observe(hazards, 1300) || gate.observe(hazards, 1300)->kind != WeatherNotice::Kind::Alert,
+           "a minor alert is no notice");
+
+    // Which requests are due: alerts each hour; rain each 15 minutes when
+    // plausible; lightning each 15 minutes when a storm is.
+    XweatherScheduler scheduler;
+    WeatherData quiet;
+    quiet.condition = WeatherCondition::Clear;
+    auto due = scheduler.due(quiet, 0);
+    expect(due.alerts && !due.rain && !due.lightning, "a dry, calm hour: alerts only");
+    due = scheduler.due(quiet, XweatherScheduler::kAlertsEveryMs - 1);
+    expect(!due.alerts && !due.rain && !due.lightning, "and not again within the hour");
+    quiet.condition = WeatherCondition::Thunderstorm;
+    due = scheduler.due(quiet, XweatherScheduler::kAlertsEveryMs);
+    expect(due.alerts && due.rain && due.lightning, "a storm: all three");
+    due = scheduler.due(quiet, XweatherScheduler::kAlertsEveryMs + XweatherScheduler::kRainEveryMs - 1);
+    expect(!due.rain && !due.lightning, "not again within fifteen minutes");
+    due = scheduler.due(quiet, XweatherScheduler::kAlertsEveryMs + XweatherScheduler::kRainEveryMs);
+    expect(due.rain && due.lightning && !due.alerts, "then rain and lightning again");
+    scheduler.reset();
+    expect(scheduler.due(quiet, XweatherScheduler::kAlertsEveryMs + XweatherScheduler::kRainEveryMs + 1).alerts,
+           "a new place asks at once");
+
+    WeatherData with_rain;
+    with_rain.hazards.nowcast_available = true;
+    with_rain.hazards.rain_in_minutes = 61;
+    expect(!with_rain.valid(), "rain beyond the hour is not valid");
+}
+
+// How long the battery lasts (the owner, 2026-11-19): a sample every five
+// minutes, the drain since the USB went out, the time left at that rate, and
+// the card's battery-log.csv.
+void battery_history_tests() {
+    using namespace aura;
+    constexpr std::uint64_t kMinute = 60000;
+    BatteryHistory history;
+    const auto reading = [](std::uint64_t at_ms, int percent, bool usb) {
+        BatterySample sample;
+        sample.at_ms = at_ms;
+        sample.unix_seconds = 1795125600 + static_cast<std::int64_t>(at_ms / 1000);  // 2026-11-20 00:00 local
+        sample.percent = percent;
+        sample.battery_mv = 3700 + percent * 5;
+        sample.external_power = usb;
+        sample.charging = usb && percent < 100;
+        sample.screen_on = true;
+        sample.wifi_on = true;
+        return sample;
+    };
+    expect(history.add(reading(0, 100, true)), "the first reading is kept");
+    expect(!history.add(reading(5000, 100, true)), "readings within five minutes are not");
+    expect(!history.drain_percent_per_hour() && !history.minutes_left(), "on USB: no estimate");
+    expect(history.add(reading(6000, 100, false)), "the USB going out is kept at once");
+    // 6 % an hour: one percent every ten minutes.
+    for (std::uint64_t minute = 5; minute <= 25; minute += 5) history.add(reading(6000 + minute * kMinute, 100 - static_cast<int>(minute / 10), false));
+    expect(!history.drain_percent_per_hour(), "under half an hour on battery: still measuring");
+    expect(history.minutes_on_battery() == 25, "and it says for how long it has measured");
+    for (std::uint64_t minute = 30; minute <= 60; minute += 5) history.add(reading(6000 + minute * kMinute, 100 - static_cast<int>(minute / 10), false));
+    const auto drain = history.drain_percent_per_hour();
+    expect(drain && *drain > 5.0F && *drain < 7.0F, "about 6 % an hour after an hour");
+    const auto left = history.minutes_left();
+    expect(left && *left > 840 && *left < 1100, "94 % at 6 %/h: about fifteen and a half hours left");
+    expect(history.add(reading(6000 + 61 * kMinute, 94, true)), "the USB coming back is kept at once");
+    expect(!history.drain_percent_per_hour() && history.minutes_on_battery() == -1, "and ends the estimate");
+    const auto csv = history.csv();
+    expect(csv.rfind("time_utc,percent,battery_mv,usb,charging,screen,bluetooth,wifi\n", 0) == 0,
+           "the log starts with its columns");
+    expect(csv.find("\n2026-11-19T22:00:00Z,100,4200,1,0,1,0,1\n") != std::string::npos,
+           "one line a sample, in UTC");
+    for (int sample = 0; sample < 400; ++sample) history.add(reading((200 + sample * 5) * kMinute, 50, false));
+    expect(history.samples().size() == BatteryHistory::kMaxSamples, "a day of samples at most");
+}
+
 // The screen turns with the device (the owner's request on the first flash,
 // 2026-11-14): the edge nearest the ground becomes the bottom.
 void orientation_tests() {
@@ -1453,6 +1749,9 @@ int main() {
     orientation_tests();
     sound_tests();
     power_tests();
+    battery_history_tests();
+    alarm_station_tests();
+    xweather_tests();
     metrics_tests();
     text_tests();
     clock_tests();
@@ -1461,6 +1760,7 @@ int main() {
     briefing_tests();
     motion_tests();
     phone_tests();
+    bluetooth_tests();
     ota_tests();
     voice_tests();
     std::cout << "companion_models_test: PASS\n";

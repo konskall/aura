@@ -44,11 +44,20 @@ try {
 } catch {
     throw 'The device refused the code or cannot be reached. Open File transfer on the device and check its address and code.'
 }
-$body = @{
+$keys = @{
     groq_api_key = "$env:GROQ_API_KEY".Trim()
     azure_speech_key = $azureKey
     azure_speech_region = $region
-} | ConvertTo-Json -Compress
+}
+# Xweather's two keys, when .env has both: the weather's rain, alerts and lightning.
+$xweatherId = "$env:XWEATHER_CLIENT_ID".Trim()
+$xweatherSecret = "$env:XWEATHER_CLIENT_SECRET".Trim()
+if ($xweatherId -and $xweatherSecret) {
+    $keys.xweather_client_id = $xweatherId
+    $keys.xweather_client_secret = $xweatherSecret
+}
+$body = $keys | ConvertTo-Json -Compress
+$keys = $null
 try {
     $result = Invoke-RestMethod -Method Post -Uri "$Address/api/keys" -ContentType 'application/json' -Body $body `
         -Headers @{ Authorization = "Bearer $($session.token)" } -TimeoutSec 15

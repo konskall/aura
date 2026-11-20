@@ -124,6 +124,10 @@ void AuraUi::apply_display(const DisplaySnapshot& snapshot) {
     if (snapshot.settings.appearance != previous.settings.appearance) {
         self.apply_appearance(snapshot.settings.appearance);
     }
+    if (snapshot.settings.large_text != ui::large_text()) {
+        ui::set_large_text(snapshot.settings.large_text);
+        if (self.content) self.render(self.current_view);
+    }
     self.update_dim_overlay();
     const bool dark = snapshot.mode == DisplayMode::AlwaysOn || snapshot.mode == DisplayMode::Off;
     if (dark) {
@@ -185,6 +189,10 @@ void AuraUi::apply_radio(const RadioSnapshot& snapshot) {
             break;
         case UiView::AlwaysOn:
             if (ambient_changed) self.render(UiView::AlwaysOn);
+            break;
+        // A card file's Play becomes Stop, and back when it ends.
+        case UiView::FileDetails:
+            if (ambient_changed) self.render(UiView::FileDetails);
             break;
         default: break;
     }

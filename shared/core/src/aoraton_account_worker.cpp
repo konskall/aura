@@ -164,6 +164,12 @@ void AoratonAccountWorker::start(std::int64_t now_ms, std::int64_t now_unix) {
         emit(std::move(connecting));
     }
     session_.refresh_token = secrets_.refresh_token;
+    // No address yet (the device before Wi-Fi is up): ask nothing, count no
+    // try, and look again shortly.
+    if (!http_.network_available()) {
+        next_retry_ms_ = now_ms_ + kNetworkWaitMs;
+        return;
+    }
     switch (refresh_session()) {
         case RefreshResult::Ok: {
             restore_tries_ = 0;
@@ -209,7 +215,10 @@ void AoratonAccountWorker::step(std::int64_t now_ms, std::int64_t now_unix) {
         realtime_refresh = update.refresh_required;
     }
     if (signed_in_ && connected_ && !thumbnail_queue_.empty()) load_next_thumbnail();
-    const bool periodic_due = (sync_settings_.polling_enabled || power_saving_) && now_ms_ >= next_poll_ms_;
+    // Without realtime (lost, or not acknowledged yet) the overview is checked
+    // even with the periodic check off, at kRealtimeFallbackPollMs.
+    const bool periodic_due = (sync_settings_.polling_enabled || power_saving_ || !realtime_active_) &&
+                              now_ms_ >= next_poll_ms_;
     const bool recovery_due = reconnecting_ && now_ms_ >= next_poll_ms_;
     if (signed_in_ && connected_ && (sync_requested_ || periodic_due || recovery_due || realtime_refresh)) {
         sync_requested_ = false;
@@ -377,7 +386,8 @@ void AoratonAccountWorker::connect() {
 }
 
 std::int64_t AoratonAccountWorker::poll_interval_ms() const {
-    const std::int64_t chosen = sync_settings_.interval_seconds * 1000LL;
+    const std::int64_t chosen = sync_settings_.polling_enabled ? sync_settings_.interval_seconds * 1000LL
+                                                               : kRealtimeFallbackPollMs;
     return power_saving_ && chosen < kPowerSavingPollMs ? kPowerSavingPollMs : chosen;
 }
 

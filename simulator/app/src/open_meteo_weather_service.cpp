@@ -572,7 +572,7 @@ WeatherFetchResult parse_open_meteo_forecast(const std::string& json,
     const std::size_t available = std::min({hourly_time->array.size(), hourly_temp->array.size(), hourly_code->array.size()});
     std::size_t start = 0;
     while (start + 1 < available && array_string(hourly_time, start) < data.observed_at) ++start;
-    for (std::size_t index = start; index < available && data.hourly_count < kWeatherHourlyCapacity; index += 3) {
+    for (std::size_t index = start; index < available && data.hourly_count < kWeatherHourlyCapacity; ++index) {
         const auto time = array_string(hourly_time, index);
         const auto value = array_number(hourly_temp, index, std::numeric_limits<double>::quiet_NaN());
         const auto hour_code = array_number(hourly_code, index, -1.0);

@@ -8,7 +8,9 @@ const FileStrings& file_strings(InterfaceLanguage language) {
         "Αρχείο της συσκευής: δεν διαγράφεται από εδώ.",
         "Άνοιγμα", "Διαγραφή", "Διαγραφή", "Το αρχείο θα διαγραφεί οριστικά από την κάρτα.",
         "Ο φάκελος και ό,τι περιέχει θα διαγραφούν οριστικά από την κάρτα.", "Διαγραφή", "Ακύρωση", "Διαγράφηκε",
-        "Η διαγραφή απέτυχε. Δοκίμασε ξανά.", "Διαγραφή…", "Ανανέωση", ","
+        "Η διαγραφή απέτυχε. Δοκίμασε ξανά.", "Διαγραφή…", "Ανανέωση", ",",
+        "Μετονομασία", "Νέο όνομα", "Μετονομάστηκε", "Δεν άλλαξε το όνομα. Μήπως υπάρχει ήδη;", "Προβολή",
+        "Ανοίγει…", "Δεν ανοίγει αυτό το αρχείο.", "Αναπαραγωγή", "Διακοπή"
     };
     static const FileStrings en{
         "Files", "SD card", "%s free of %s", "No SD card found", "Insert a microSD card and try again.",
@@ -17,7 +19,9 @@ const FileStrings& file_strings(InterfaceLanguage language) {
         "A device file: it cannot be deleted here.",
         "Open", "Delete", "Delete", "This file will be permanently deleted from the card.",
         "This folder and everything in it will be permanently deleted from the card.", "Delete", "Cancel", "Deleted",
-        "Could not delete it. Try again.", "Deleting…", "Refresh", "."
+        "Could not delete it. Try again.", "Deleting…", "Refresh", ".",
+        "Rename", "New name", "Renamed", "The name did not change. Is it taken?", "View",
+        "Opening…", "This file does not open.", "Play", "Stop"
     };
     return language == InterfaceLanguage::English ? en : el;
 }

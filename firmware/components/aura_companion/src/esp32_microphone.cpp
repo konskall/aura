@@ -314,7 +314,8 @@ bool Esp32CompanionStore::format() const {
 void Esp32CompanionStore::factory_reset() const {
     if (!mounted_) return;
     for (const char* name : {"clock.txt", "notes.txt", "organizer.txt", "conversations.txt", "sound.txt", "display.txt",
-                               "language.txt", "app-layout.txt", "photos-settings.json", "aoraton-sync.txt"}) {
+                               "language.txt", "app-layout.txt", "photos-settings.json", "aoraton-sync.txt",
+                               "bluetooth.txt"}) {
         const auto path = std::string(kRoot) + "/" + name;
         std::remove(path.c_str());
         std::remove((path + ".tmp").c_str());

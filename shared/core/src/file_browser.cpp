@@ -1,5 +1,7 @@
 #include "aura/file_browser.hpp"
 
+#include "aura/text_util.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -186,6 +188,25 @@ bool FileMailbox::consume(FileResult& result) {
     return true;
 }
 
+bool file_text_previewable(std::string_view name) noexcept {
+    const auto dot = name.rfind('.');
+    if (dot == std::string_view::npos || dot == 0) return false;
+    std::string extension;
+    for (const char ch : name.substr(dot + 1)) {
+        extension += static_cast<char>(ch >= 'A' && ch <= 'Z' ? ch - 'A' + 'a' : ch);
+    }
+    for (const char* known : {"txt", "md", "csv", "json", "log", "ini", "srt"}) {
+        if (extension == known) return true;
+    }
+    return false;
+}
+
+bool file_playable(std::string_view name) noexcept {
+    if (name.size() < 5) return false;
+    const auto extension = name.substr(name.size() - 4);
+    return extension == ".mp3" || extension == ".MP3" || extension == ".Mp3" || extension == ".mP3";
+}
+
 bool FileWorker::step() {
     FileJob job;
     if (!mailbox_.take(job)) return false;
@@ -198,6 +219,30 @@ bool FileWorker::step() {
     } else if (job.kind == FileJobKind::Erase) {
         // Checked here too: the worker never deletes the device's own files.
         result.error = file_path_protected(job.path) ? FileBrowserError::Protected : storage_.erase(job.path);
+    } else if (job.kind == FileJobKind::Rename) {
+        // And never renames them.
+        if (file_path_protected(job.path)) result.error = FileBrowserError::Protected;
+        else if (!file_name_valid(job.new_name)) result.error = FileBrowserError::Rename;
+        else result.error = storage_.rename(job.path, job.new_name);
+    } else if (job.kind == FileJobKind::Preview) {
+        const auto leaf = file_path_leaf(job.path);
+        std::vector<std::uint8_t> bytes;
+        if (file_kind(leaf, false) == FileKind::Image) {
+            result.error = storage_.read(job.path, kMaxPhotoFileBytes + 1, bytes);
+            if (result.error == FileBrowserError::None) {
+                PhotoError photo_error = PhotoError::None;
+                if (bytes.size() <= kMaxPhotoFileBytes) result.image = decode_photo(bytes, photo_error);
+                if (!result.image) result.error = FileBrowserError::Read;
+            }
+        } else if (file_text_previewable(leaf)) {
+            result.error = storage_.read(job.path, kMaxFilePreviewTextBytes, bytes);
+            if (result.error == FileBrowserError::None) {
+                const std::string_view raw(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                result.text = sanitize_fragment(raw.substr(0, complete_utf8_prefix(raw)), true);
+            }
+        } else {
+            result.error = FileBrowserError::Unsupported;
+        }
     } else {
         result.error = storage_.list(job.path, result.entries, result.truncated);
     }
@@ -265,6 +310,58 @@ bool FileBrowserModel::erase(const std::string& path) {
     return true;
 }
 
+bool FileBrowserModel::rename(const std::string& path, const std::string& new_name) {
+    if (snapshot_.renaming) return false;
+    if (!file_path_valid(path) || file_path_protected(path)) {
+        snapshot_.error = FileBrowserError::Protected;
+        changed();
+        return false;
+    }
+    if (!file_name_valid(new_name) || new_name == file_path_leaf(path)) return false;
+    FileJob job;
+    job.kind = FileJobKind::Rename;
+    job.generation = ++generation_;
+    job.path = path;
+    job.new_name = new_name;
+    if (!mailbox_.submit(std::move(job))) {
+        snapshot_.error = FileBrowserError::Busy;
+        changed();
+        return false;
+    }
+    snapshot_.renaming = true;
+    snapshot_.error = FileBrowserError::None;
+    changed();
+    return true;
+}
+
+bool FileBrowserModel::preview(const std::string& path) {
+    if (!file_path_valid(path)) return false;
+    const auto leaf = file_path_leaf(path);
+    snapshot_.preview_path = path;
+    snapshot_.preview_image.reset();
+    snapshot_.preview_text.clear();
+    if (file_kind(leaf, false) != FileKind::Image && !file_text_previewable(leaf)) {
+        snapshot_.previewing = false;
+        snapshot_.preview_error = FileBrowserError::Unsupported;
+        changed();
+        return false;
+    }
+    FileJob job;
+    job.kind = FileJobKind::Preview;
+    job.generation = ++preview_generation_;
+    job.path = path;
+    if (!mailbox_.submit(std::move(job))) {
+        snapshot_.previewing = false;
+        snapshot_.preview_error = FileBrowserError::Busy;
+        changed();
+        return false;
+    }
+    snapshot_.previewing = true;
+    snapshot_.preview_error = FileBrowserError::None;
+    changed();
+    return true;
+}
+
 void FileBrowserModel::poll() {
     FileResult result;
     while (mailbox_.consume(result)) {
@@ -272,6 +369,24 @@ void FileBrowserModel::poll() {
             snapshot_.space_known = true;
             snapshot_.total_bytes = result.total_bytes;
             snapshot_.free_bytes = result.free_bytes;
+        }
+        if (result.kind == FileJobKind::Rename) {
+            snapshot_.renaming = false;
+            snapshot_.error = result.error;
+            if (result.error == FileBrowserError::None) ++snapshot_.renamed;
+            changed();
+            refresh();
+            continue;
+        }
+        if (result.kind == FileJobKind::Preview) {
+            // Only the look last asked for.
+            if (result.generation != preview_generation_ || result.path != snapshot_.preview_path) continue;
+            snapshot_.previewing = false;
+            snapshot_.preview_error = result.error;
+            snapshot_.preview_image = std::move(result.image);
+            snapshot_.preview_text = std::move(result.text);
+            changed();
+            continue;
         }
         if (result.kind == FileJobKind::Erase) {
             snapshot_.deleting = false;

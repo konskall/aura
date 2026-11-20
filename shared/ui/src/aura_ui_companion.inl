@@ -87,6 +87,7 @@
         record_ring = nullptr;
         record_time = nullptr;
         reminder_area = nullptr;
+        file_rename_area = nullptr;
         note_area = nullptr;
         organizer_area = nullptr;
         update_bar = nullptr;
@@ -402,6 +403,32 @@
         }
     }
 
+    static void alarm_sound_open_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action() || !self->callbacks.on_alarm_station) return;
+        self->navigate(UiView::AlarmSound);
+    }
+
+    // 0: the melody; 1 and on: the radio's favourites in order.
+    static void alarm_sound_pick_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action() || !self->callbacks.on_alarm_station) return;
+        const auto choice = user_value(event);
+        std::optional<AlarmStation> station;
+        if (choice > 0 && choice <= self->radio.favorites.size()) {
+            const auto& favorite = self->radio.favorites[choice - 1];
+            station = AlarmStation{favorite.id, favorite.name, favorite.url};
+        }
+        if (!self->callbacks.on_alarm_station(self->selected_clock_id, station)) {
+            self->show_toast(self->c().alarm_sound_failed, ui::tokens::coral);
+            return;
+        }
+        for (auto& alarm : self->clock.alarms) {
+            if (alarm.id == self->selected_clock_id) alarm.station = station ? *station : AlarmStation{};
+        }
+        self->return_to(UiView::ClockItem);
+    }
+
     static void timer_pause_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (!self->accept_action() || !self->callbacks.on_timer_pause) return;
@@ -612,7 +639,7 @@
     }
 
     // value: 0 always-on, 1 raise, 2 flip, 3 timeout, 4 brightness, 5 24-hour
-    // time, 6 the battery's percentage, 7 the rotation lock
+    // time, 6 the battery's percentage, 7 the rotation lock, 8 large reading text
     static void display_setting_event(lv_event_t* event) {
         auto* self = self_of(event);
         if (!self->accept_action() || !self->callbacks.on_display_settings) return;
@@ -631,6 +658,7 @@
             case 5: settings.clock_24h = !settings.clock_24h; break;
             case 6: settings.battery_percent = !settings.battery_percent; break;
             case 7: settings.rotation_locked = !settings.rotation_locked; break;
+            case 8: settings.large_text = !settings.large_text; break;
             default: return;
         }
         self->callbacks.on_display_settings(settings);
@@ -1231,7 +1259,31 @@
 
     // Συνδέσεις, after Wi-Fi: the phone and File transfer. The wake word has no
     // row until a trained «Αύρα» model exists (docs/TASKS.md).
+    // Bluetooth (the owner, 2026-11-19): allowed, the radio runs only for the
+    // phone; off, never.
+    const char* bluetooth_summary() const {
+        if (!phone.bluetooth_enabled) return c().bluetooth_off;
+        return phone.bluetooth_on ? c().bluetooth_running : c().bluetooth_auto;
+    }
+    static void bluetooth_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action() || !self->callbacks.on_bluetooth_changed) return;
+        const bool enabled = !self->phone.bluetooth_enabled;
+        if (!self->callbacks.on_bluetooth_changed(enabled)) {
+            self->show_toast(self->c().bluetooth_failed, ui::tokens::coral);
+            return;
+        }
+        self->phone.bluetooth_enabled = enabled;
+        self->render(self->current_view);
+    }
+
     int render_settings_connections(lv_obj_t* list, int y) {
+        auto* bluetooth = list_row(list, y, c().bluetooth_title, bluetooth_summary(), ui::IconRole::Bluetooth,
+                                   ui::tokens::blue, kRowHeight, 252, true);
+        add_switch(bluetooth, phone.bluetooth_enabled);
+        lv_obj_set_clickable(bluetooth, static_cast<bool>(callbacks.on_bluetooth_changed));
+        lv_obj_add_event_cb(bluetooth, bluetooth_event, LV_EVENT_CLICKED, this);
+        y += kRowPitch;
         const auto summary = phone_summary();
         settings_row(list, y, c().phone_title, summary.c_str(), ui::IconRole::Smartphone, ui::tokens::mint,
                      UiView::PhoneLink);
@@ -1424,7 +1476,7 @@
         lv_obj_set_overflow_visible(reader, false);
         ui::style_scrollbar(reader);
         primary_scroller = reader;
-        answer_label = ui::make_label(reader, shown_answer(), ui::tokens::text, ui::font_body());
+        answer_label = ui::make_label(reader, shown_answer(), ui::tokens::text, ui::font_reading());
         lv_obj_set_width(answer_label, kWidth - 16);
         lv_obj_set_style_text_line_space(answer_label, 6, 0);
         lv_obj_align(answer_label, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -1694,13 +1746,19 @@
                 std::string(clock_period(alarm->hour, interface_language)) + " · ";
             detail += alarm->daily ? c().every_day : c().once;
             if (!alarm->label.empty()) detail += " · " + alarm->label;
+            detail += " · ";
+            detail += alarm->station.url.empty() ? c().alarm_sound_melody : alarm->station.name.c_str();
             line(content, detail.c_str(), kGutter, 196, kWidth, ui::font_body(), ui::tokens::text_secondary,
                  LV_TEXT_ALIGN_CENTER);
             auto* row = list_row(content, 252, c().enabled, nullptr, ui::IconRole::Reminder, ui::tokens::amber,
                                  kRowHeight, 252);
             tappable(row, alarm_switch_event, alarm->id);
             add_switch(row, alarm->enabled);
-            pill(content, c().delete_item, ui::ButtonTone::Danger, kGutter, kActionY, kWidth, clock_item_delete_event);
+            auto* sound = pill(content, c().alarm_sound, ui::ButtonTone::Secondary, kGutter, kActionY, kHalfWidth,
+                               alarm_sound_open_event);
+            ui::set_button_disabled(sound, !callbacks.on_alarm_station);
+            pill(content, c().delete_item, ui::ButtonTone::Danger, kGutter + kHalfWidth + 16, kActionY, kHalfWidth,
+                 clock_item_delete_event);
             return;
         }
         const ReminderItem* reminder = nullptr;
@@ -1714,6 +1772,42 @@
         const auto when = when_text(reminder->due_minute);
         state_text(204, reminder->text.c_str(), when.c_str());
         pill(content, c().delete_item, ui::ButtonTone::Danger, kGutter, kActionY, kWidth, clock_item_delete_event);
+    }
+
+    void render_alarm_sound() {
+        make_header(c().alarm_sound_title);
+        const AlarmItem* alarm = nullptr;
+        for (const auto& item : clock.alarms) if (item.id == selected_clock_id) alarm = &item;
+        if (!alarm) {
+            state_text(200, c().clock_empty, nullptr);
+            return;
+        }
+        auto* list = make_list();
+        int y = 0;
+        const auto choice = [&](const char* title, const char* detail, ui::IconRole role, std::uint32_t accent,
+                                bool selected, std::uintptr_t value) {
+            auto* row = list_row(list, y, title, detail, role, accent);
+            if (selected) {
+                auto* check = icon_view(row, ui::IconRole::Check, 24, ui::tokens::mint);
+                lv_obj_align(check, LV_ALIGN_RIGHT_MID, -12, 0);
+            }
+            tappable(row, alarm_sound_pick_event, value);
+            y += kRowPitch;
+        };
+        choice(c().alarm_sound_melody, nullptr, ui::IconRole::BellRing, ui::tokens::amber,
+               alarm->station.url.empty(), 0);
+        for (std::size_t index = 0; index < radio.favorites.size(); ++index) {
+            const auto& favorite = radio.favorites[index];
+            choice(favorite.name.c_str(), nullptr, ui::IconRole::Audio, ui::tokens::blue,
+                   !alarm->station.url.empty() && alarm->station.url == favorite.url, index + 1);
+        }
+        if (radio.favorites.empty()) {
+            auto* note = label(list, c().alarm_sound_no_favorites, kGutter + 4, y + 8, kWidth - 8,
+                                ui::font_caption(), ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
+            lv_obj_update_layout(note);
+            y += 16 + lv_obj_get_height(note);
+        }
+        list_end(list, y);
     }
 
     void render_clock_alert() {
@@ -1789,7 +1883,7 @@
         lv_obj_set_style_pad_row(card, 8, 0);
         auto* who = ui::make_label(card, speaker, accent, ui::font_caption());
         lv_obj_set_width(who, 352);
-        auto* body = ui::make_label(card, text.c_str(), ui::tokens::text, ui::font_body());
+        auto* body = ui::make_label(card, text.c_str(), ui::tokens::text, ui::font_reading());
         lv_obj_set_width(body, 352);
         lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
         lv_obj_update_layout(card);
@@ -2208,7 +2302,7 @@
             body = note->transcript == NoteTranscript::Pending ? c().transcript_pending : c().transcript_failed;
         }
         auto* text = ui::make_label(reader, body, note->text.empty() ? ui::tokens::text_tertiary : ui::tokens::text,
-                                    ui::font_body());
+                                    ui::font_reading());
         lv_obj_set_width(text, kWidth - 16);
         lv_obj_set_style_text_line_space(text, 6, 0);
         if (voice_note) {
@@ -2561,8 +2655,26 @@
         int y = top;
         if (has_weather) {
             auto* row = centered_row(y, 14);
+            // Rain within half an hour, or a storm near (Xweather, 2026-11-19):
+            // the icon breathes and the line below says so.
+            const bool rain_soon = sky.hazards.nowcast_available && sky.hazards.rain_in_minutes >= 0 &&
+                                   sky.hazards.rain_in_minutes <= 30;
+            const bool storm_near = sky.hazards.lightning_observed && sky.hazards.nearest_lightning_km <= 25.0F;
             if (auto* icon = icon_view(row, weather_condition_icon(sky.condition, sky.is_day), kWeatherIcon, tint)) {
                 lv_obj_set_style_opa(icon, LV_OPA_80, 0);
+                if ((rain_soon || storm_near) && !reduced_motion) {
+                    lv_anim_t breath;
+                    lv_anim_init(&breath);
+                    lv_anim_set_var(&breath, icon);
+                    lv_anim_set_values(&breath, LV_OPA_30, LV_OPA_COVER);
+                    lv_anim_set_duration(&breath, 1200);
+                    lv_anim_set_playback_duration(&breath, 1200);
+                    lv_anim_set_repeat_count(&breath, LV_ANIM_REPEAT_INFINITE);
+                    lv_anim_set_exec_cb(&breath, [](void* object, std::int32_t value) {
+                        lv_obj_set_style_opa(static_cast<lv_obj_t*>(object), static_cast<lv_opa_t>(value), 0);
+                    });
+                    lv_anim_start(&breath);
+                }
             }
             char temperature[16];
             std::snprintf(temperature, sizeof(temperature), "%d°", whole_degrees(sky.temperature_c));
@@ -2575,6 +2687,14 @@
             std::snprintf(range, sizeof(range), "↑ %d°   ↓ %d°", whole_degrees(sky.daily_maximum_c),
                           whole_degrees(sky.daily_minimum_c));
             std::string detail = range;
+            if (storm_near) {
+                char storm[64];
+                std::snprintf(storm, sizeof(storm), c().weather_storm_near_format,
+                              static_cast<int>(sky.hazards.nearest_lightning_km + 0.5F));
+                detail = storm;
+            } else if (rain_soon) {
+                detail = weather_rain_text();
+            }
             if (sky.origin == WeatherDataOrigin::Demo) {
                 detail += std::string(" · ") + v().demo_badge;
             } else if (sky.origin == WeatherDataOrigin::Cache || sky.stale) {
@@ -2672,7 +2792,7 @@
         lv_obj_set_scroll_dir(reader, LV_DIR_VER);
         lv_obj_set_overflow_visible(reader, false);
         primary_scroller = reader;
-        auto* body = ui::make_label(reader, item->message.c_str(), ui::tokens::text_secondary, ui::font_body());
+        auto* body = ui::make_label(reader, item->message.c_str(), ui::tokens::text_secondary, ui::font_reading());
         lv_obj_set_width(body, kWidth - 16);
         auto* dismiss = pill(content, c().dismiss_notification, ui::ButtonTone::Secondary, kGutter, kActionY, kWidth,
                              phone_dismiss_event);
@@ -2745,7 +2865,9 @@
         // The screen turns with the device unless locked (the first flash).
         setting_switch_row(list, kRowPitch * 7, c().rotation_lock_title, c().rotation_lock_detail,
                            ui::IconRole::Lock, ui::tokens::ice, settings.rotation_locked, capabilities.imu, 7);
-        list_end(list, kRowPitch * 8);
+        setting_switch_row(list, kRowPitch * 8, c().large_text_title, c().large_text_detail,
+                           ui::IconRole::Visibility, ui::tokens::amber, settings.large_text, true, 8);
+        list_end(list, kRowPitch * 9);
     }
 
     void render_update() {
@@ -2859,6 +2981,7 @@
             case UiView::ReminderNew: render_reminder_new(); break;
             case UiView::ClockItem: render_clock_item(); break;
             case UiView::ClockAlert: render_clock_alert(); break;
+            case UiView::AlarmSound: render_alarm_sound(); break;
             case UiView::Calendar: render_organizer(); break;
             case UiView::OrganizerNew: render_organizer_new(); break;
             case UiView::Notes: render_notes(); break;

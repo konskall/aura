@@ -58,6 +58,12 @@ const lv_image_dsc_t* light_disc() {
 lv_color_t color(std::uint32_t value) { return lv_color_hex(value); }
 const lv_font_t* font_caption() { return fonts().caption; }
 const lv_font_t* font_body() { return fonts().body; }
+namespace {
+bool g_large_text = false;
+}  // namespace
+void set_large_text(bool large) noexcept { g_large_text = large; }
+bool large_text() noexcept { return g_large_text; }
+const lv_font_t* font_reading() { return g_large_text ? fonts().title : fonts().body; }
 const lv_font_t* font_headline() { return fonts().headline; }
 const lv_font_t* font_title() { return fonts().title; }
 const lv_font_t* font_display() { return fonts().display; }

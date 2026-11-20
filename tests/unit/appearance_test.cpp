@@ -60,5 +60,10 @@ int main() {
     expect(!chosen.battery_percent && !chosen.clock_24h, "both choices are stored");
     const auto mangled = parse_display_settings("aura-display 1\nbattery_percent=2\nclock_24h=yes\n");
     expect(mangled.battery_percent && mangled.clock_24h, "an unreadable value keeps the default");
+
+    // Large text for reading (the owner, 2026-11-19).
+    expect(!shown.large_text && !old.large_text, "normal text by default and from an older file");
+    shown.large_text = true;
+    expect(parse_display_settings(serialize_display_settings(shown)).large_text, "large text is stored");
     return 0;
 }

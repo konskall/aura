@@ -4,6 +4,8 @@
 #include "aura/windows_audio_backend.hpp"
 
 #define WIN32_LEAN_AND_MEAN
+#include <filesystem>
+#include <fstream>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -316,6 +318,11 @@ void WindowsRadioService::stream(const RadioStation& station, std::uint64_t gene
     // A live stream that drops (a network blip, a server restart) is joined
     // again with growing pauses before the owner is told; a long stretch of
     // music starts the count again.
+    std::string file;
+    if (radio_file_url(station.url, file)) {
+        stream_file(file, generation);
+        return;
+    }
     int attempt = 0;
     while (current(generation)) {
         bool heard_audio = false;
@@ -467,6 +474,39 @@ std::string WindowsRadioService::stream_icy(const std::wstring& host, const std:
     auto code = pump(read, parsed.metaint, generation, heard_audio);
     release_socket(handle);
     return code;
+}
+
+void WindowsRadioService::stream_file(const std::string& path, std::uint64_t generation) {
+    std::ifstream input(std::filesystem::u8path(path), std::ios::binary);
+    if (!input) {
+        publish({RadioWorkerEventType::Failed, generation, "RADIO_FILE"});
+        return;
+    }
+    std::uint8_t head[10]{};
+    input.read(reinterpret_cast<char*>(head), sizeof(head));
+    const auto tag = id3v2_tag_size(head, static_cast<std::size_t>(input.gcount()));
+    input.clear();
+    input.seekg(static_cast<std::streamoff>(tag));
+    const StreamReader read = [&input](std::uint8_t* buffer, int size) -> int {
+        input.read(reinterpret_cast<char*>(buffer), size);
+        const auto got = static_cast<int>(input.gcount());
+        if (got > 0) return got;
+        return input.bad() ? kRadioReadError : 0;
+    };
+    bool heard_audio = false;
+    const auto code = pump(read, 0, generation, heard_audio);
+    if (!current(generation)) return;
+    if (code == "RADIO_STREAM_ENDED") {
+        while (current(generation) && audio_.stream_buffered_ms() > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+    {
+        std::lock_guard<std::mutex> audio_lock(audio_control_mutex_);
+        if (current(generation)) audio_.stream_close();
+    }
+    publish({code == "RADIO_STREAM_ENDED" ? RadioWorkerEventType::Ended : RadioWorkerEventType::Failed,
+             generation, code});
 }
 
 std::string WindowsRadioService::pump(const StreamReader& read, std::size_t metaint, std::uint64_t generation,

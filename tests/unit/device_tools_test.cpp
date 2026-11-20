@@ -3,8 +3,11 @@
 #include "aura/conversation_log.hpp"
 #include "aura/file_browser.hpp"
 #include "aura/photo_zoom.hpp"
+#include "aura/photos.hpp"
 
 #include <cmath>
+#include <fstream>
+#include <iterator>
 #include <cstdlib>
 #include <iostream>
 #include <map>
@@ -73,6 +76,22 @@ public:
     }
     aura::FileBrowserError erase(const std::string& path) override {
         erased.push_back(path);
+        return aura::FileBrowserError::None;
+    }
+    std::vector<std::pair<std::string, std::string>> renamed;
+    aura::FileBrowserError rename(const std::string& path, const std::string& new_name) override {
+        renamed.emplace_back(path, new_name);
+        return aura::FileBrowserError::None;
+    }
+    std::map<std::string, std::vector<std::uint8_t>> contents;
+    std::size_t last_read_limit{0};
+    aura::FileBrowserError read(const std::string& path, std::size_t max_bytes,
+                                std::vector<std::uint8_t>& bytes) override {
+        last_read_limit = max_bytes;
+        const auto found = contents.find(path);
+        if (found == contents.end()) return aura::FileBrowserError::NotFound;
+        bytes.assign(found->second.begin(),
+                     found->second.begin() + static_cast<std::ptrdiff_t>(std::min(max_bytes, found->second.size())));
         return aura::FileBrowserError::None;
     }
     bool space(std::uint64_t& total, std::uint64_t& free) override {
@@ -208,6 +227,77 @@ void file_browser_tests() {
            "sample entries say DEMO");
 }
 
+// Αρχεία: renaming and a look inside (the owner, 2026-11-19). A file or folder
+// the owner put there takes a valid new name in its own folder; a picture is
+// decoded for a look, a text file shows its first lines.
+void file_rename_preview_tests() {
+    using namespace aura;
+    FileMailbox mailbox;
+    FakeStorage storage;
+    storage.folders[""] = {{"report.pdf", false, 4096, 5}, {"notes.txt", false, 20, 5}, {"photo.jpg", false, 1350, 5}};
+    FileWorker worker(mailbox, storage);
+    FileBrowserModel model(mailbox);
+    model.open("");
+    worker.step();
+    model.poll();
+
+    expect(model.rename("report.pdf", "Έκθεση 2026.pdf") && model.snapshot().renaming, "a rename starts");
+    expect(!model.rename("notes.txt", "other.txt"), "one rename at a time");
+    worker.step();
+    model.poll();
+    expect(storage.renamed.size() == 1 && storage.renamed.front().first == "report.pdf" &&
+               storage.renamed.front().second == "Έκθεση 2026.pdf" && !model.snapshot().renaming &&
+               model.snapshot().renamed == 1 && model.snapshot().loading,
+           "the card renames it and the folder is read again");
+    worker.step();
+    model.poll();
+    for (const char* bad : {"", "a/b.txt", "..", ".", "a\nb", "con\\x"}) {
+        expect(!model.rename("notes.txt", bad), "an invalid name is refused");
+    }
+    expect(!model.rename("notes.txt", "notes.txt"), "the same name is no rename");
+    expect(!model.rename("aura/clock.txt", "x.txt") && model.snapshot().error == FileBrowserError::Protected,
+           "the device's own files keep their names");
+    FileJob forced;
+    forced.kind = FileJobKind::Rename;
+    forced.path = "aura/clock.txt";
+    forced.new_name = "x.txt";
+    expect(mailbox.submit(forced), "a forced rename reaches the worker");
+    worker.step();
+    FileResult refused;
+    expect(mailbox.consume(refused) && refused.error == FileBrowserError::Protected && storage.renamed.size() == 1,
+           "and the worker refuses it on its own");
+
+    const std::string words = "Γεια σου\nδεύτερη γραμμή\n";
+    storage.contents["notes.txt"] = std::vector<std::uint8_t>(words.begin(), words.end());
+    expect(model.preview("notes.txt") && model.snapshot().previewing, "a text file is read for a look");
+    worker.step();
+    model.poll();
+    expect(!model.snapshot().previewing && model.snapshot().preview_path == "notes.txt" &&
+               model.snapshot().preview_text == words && !model.snapshot().preview_image &&
+               storage.last_read_limit == kMaxFilePreviewTextBytes,
+           "its first lines, with their line breaks");
+
+    std::ifstream fixture(std::string(AURA_PHOTO_FIXTURES) + "/DEMO-baseline.jpg", std::ios::binary);
+    storage.contents["photo.jpg"] = std::vector<std::uint8_t>(std::istreambuf_iterator<char>(fixture), {});
+    expect(!storage.contents["photo.jpg"].empty(), "the picture's bytes");
+    expect(model.preview("photo.jpg"), "a picture is decoded for a look");
+    worker.step();
+    model.poll();
+    expect(model.snapshot().preview_path == "photo.jpg" && model.snapshot().preview_image &&
+               model.snapshot().preview_image->width > 0 && model.snapshot().preview_text.empty() &&
+               model.snapshot().preview_error == FileBrowserError::None,
+           "and shown");
+
+    storage.contents["broken.jpg"] = {1, 2, 3};
+    expect(model.preview("broken.jpg"), "a damaged picture is tried");
+    worker.step();
+    model.poll();
+    expect(model.snapshot().preview_error == FileBrowserError::Read && !model.snapshot().preview_image,
+           "and says it cannot be read");
+    expect(!model.preview("report.pdf") && model.snapshot().preview_error == FileBrowserError::Unsupported,
+           "a kind without a look says so at once");
+}
+
 void photo_zoom_tests() {
     using aura::PhotoZoom;
     PhotoZoom zoom;
@@ -326,6 +416,7 @@ void photo_zoom_tests() {
 int main() {
     conversation_log_tests();
     file_browser_tests();
+    file_rename_preview_tests();
     photo_zoom_tests();
     std::cout << "Device tools tests passed\n";
     return 0;

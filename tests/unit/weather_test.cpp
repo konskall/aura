@@ -156,12 +156,14 @@ int main() {
       "daily":{"time":["2026-10-19","2026-10-20","2026-10-21","2026-10-22"],"weather_code":[1,63,3,0],"temperature_2m_max":[25,23,21,24],"temperature_2m_min":[17,16,15,16],"precipitation_probability_max":[24,78,35,12]}
     })";
     const auto parsed = aura::simulator::parse_open_meteo_forecast(forecast, athens());
-    check(parsed.ok && parsed.data.valid() && parsed.data.hourly_count == 4 && parsed.data.daily_count == 4,
-          "Open-Meteo current/hourly/daily JSON parsed");
+    check(parsed.ok && parsed.data.valid() && parsed.data.hourly_count == 10 && parsed.data.daily_count == 4,
+          "Open-Meteo current/hourly/daily JSON parsed, hour by hour (the owner, 2026-11-19)");
+    check(parsed.data.hourly[1].time == "2026-10-19T19:00" && parsed.data.hourly[9].time == "2026-10-20T03:00",
+          "one hour apart, from the hour now");
     check(parsed.data.condition == aura::WeatherCondition::PartlyCloudy,
           "forecast condition mapping applied");
     check(parsed.data.weather_code == 1 && parsed.data.rain_probability_percent == 18 &&
-          parsed.data.hourly[1].rain_probability_percent == 24 &&
+          parsed.data.hourly[1].rain_probability_percent == 20 &&
           parsed.data.daily[1].rain_probability_max_percent == 78,
           "WMO code and rain probability retained");
     check(parsed.data.hourly[0].is_day && !parsed.data.hourly[1].is_day,

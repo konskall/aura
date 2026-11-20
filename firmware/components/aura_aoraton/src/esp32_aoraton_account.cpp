@@ -10,6 +10,7 @@
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "esp_pthread.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -219,6 +220,15 @@ void Esp32AoratonHttp::drop() {
     client_ = nullptr;
     origin_.clear();
     headers_.clear();
+}
+
+bool Esp32AoratonHttp::network_available() const {
+    esp_netif_t* station = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (!station || !esp_netif_is_netif_up(station)) return false;
+    esp_netif_ip_info_t info{};
+    if (esp_netif_get_ip_info(station, &info) == ESP_OK && info.ip.addr != 0) return true;
+    esp_ip6_addr_t global{};
+    return esp_netif_get_ip6_global(station, &global) == ESP_OK;
 }
 
 AoratonHttpResponse Esp32AoratonHttp::send(const AoratonHttpRequest& request) {

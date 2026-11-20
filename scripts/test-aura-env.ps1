@@ -4,7 +4,8 @@ param()
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'aura-env.ps1')
 
-$names = @('GROQ_API_KEY','AZURE_SPEECH_KEY','AZURE_SPEECH_REGION','AZURE_SPEECH_ENDPOINT','AURA_GROQ_MODEL')
+$names = @('GROQ_API_KEY','AZURE_SPEECH_KEY','AZURE_SPEECH_REGION','AZURE_SPEECH_ENDPOINT','AURA_GROQ_MODEL',
+    'XWEATHER_CLIENT_ID','XWEATHER_CLIENT_SECRET')
 $saved = @{}
 foreach ($name in $names) {
     $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -19,12 +20,16 @@ GROQ_API_KEY=gsk_test_only_abcdefghijklmnopqrstuvwxyz
 AZURE_SPEECH_KEY=
 AZURE_SPEECH_REGION=swedencentral
 AURA_GROQ_MODEL='test/model'
+XWEATHER_CLIENT_ID=test_only_client
+XWEATHER_CLIENT_SECRET=test_only_secret
 '@, [Text.UTF8Encoding]::new($false))
     Import-AuraLocalEnv -Path $testFile
     if ($env:GROQ_API_KEY -ne 'gsk_test_only_abcdefghijklmnopqrstuvwxyz') { throw 'Groq value was not imported.' }
     if ($env:AZURE_SPEECH_KEY) { throw 'An empty value must remain unset.' }
     if ($env:AZURE_SPEECH_REGION -ne 'swedencentral') { throw 'Azure region was not imported.' }
     if ($env:AURA_GROQ_MODEL -ne 'test/model') { throw 'Quoted value was not normalized.' }
+    if ($env:XWEATHER_CLIENT_ID -ne 'test_only_client') { throw 'Xweather client id was not imported.' }
+    if ($env:XWEATHER_CLIENT_SECRET -ne 'test_only_secret') { throw 'Xweather secret was not imported.' }
 
     [Environment]::SetEnvironmentVariable('AZURE_SPEECH_REGION', 'shell-wins', 'Process')
     Import-AuraLocalEnv -Path $testFile

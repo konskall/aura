@@ -150,6 +150,8 @@ public:
         return {};
     }
 
+    bool network_available() const override { return !offline; }
+
     AoratonHttpResponse send(const AoratonHttpRequest& request) override {
         ++requests;
         if (header(request, "apikey") != kAnon) return {400, "{}"};
@@ -367,6 +369,7 @@ public:
     std::string last_insert_username;
     InsertMode insert_mode{InsertMode::Ok};
     bool network_down{false};
+    bool offline{false};  // the platform knows it has no address yet
     bool revoked{false};
     bool access_expired{false};
     bool vault{true};
@@ -871,7 +874,7 @@ int main() {
         rig.pump();
         expect(!rig.service.snapshot().realtime_active, "socket loss accurately displays polling fallback");
         rig.server.add(kAlpha, "u-maria", "Maria", "DEMO during disconnect");
-        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs);
         expect(rig.notifications() == 2, "fallback fetches missed messages");
         rig.server.add(kAlpha, "u-maria", "Maria", "DEMO reconnect backfill");
         rig.realtime.update = {true, true};
@@ -956,21 +959,21 @@ int main() {
                    rig.service.snapshot().messages[0].direction == AoratonDirection::Incoming,
                "history decrypted");
         rig.server.add(kBeta, "u-nikos", "Nikos", "DEMO νέο μήνυμα");
-        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs);
         expect(rig.notifications() == 1 && rig.service.snapshot().notifications[0].room_id == kBeta,
                "incoming_after_baseline_notifies_once");
-        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs);
         expect(rig.notifications() == 1, "a quiet poll does not notify again");
         expect(room(rig.service.snapshot(), kBeta)->unread == 1, "overview unread count shown");
 
         rig.server.add(kAlpha, kUser, "Owner in browser", "DEMO από τον browser");
-        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs);
         expect(rig.notifications() == 1, "own_messages_from_other_devices do not notify");
         const auto& own = rig.service.snapshot().messages.back();
         expect(own.direction == AoratonDirection::Outgoing && own.delivery == AoratonDelivery::Acknowledged,
                "own message shown as sent");
         rig.server.add(kAlpha, "u-maria", "Maria", "", "image");
-        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs);
         expect(rig.notifications() == 1, "non-text rows are not shown in v1");
 
         // Sending.
@@ -995,7 +998,7 @@ int main() {
         expect(rig.service.snapshot().messages.back().delivery == AoratonDelivery::Uncertain, "lost response");
         rig.server.insert_mode = FakeSupabase::InsertMode::Ok;
         const auto rows_before = rig.server.rows.size();
-        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs);
         bool reconciled = false;
         for (const auto& message : rig.service.snapshot().messages) {
             if (message.client_message_id == uncertain_id) {
@@ -1008,17 +1011,17 @@ int main() {
         // Expired access token: one refresh, one retry, rotated token stored.
         const int refreshes = rig.server.refreshes;
         rig.server.access_expired = true;
-        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs);
         expect(rig.server.refreshes == refreshes + 1 && rig.store.refresh == rig.server.refresh &&
                    rig.service.snapshot().pairing == AoratonPairingState::Paired,
                "401 refreshes once and keeps the rotated token");
 
         // Network loss is shown, not hidden.
         rig.server.network_down = true;
-        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs);
         expect(rig.service.snapshot().connection == AoratonConnectionState::Reconnecting, "network loss shown");
         rig.server.network_down = false;
-        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs);
         expect(rig.service.snapshot().connection == AoratonConnectionState::Connected, "reconnects by itself");
 
         // no_secret_in_events: nothing secret reached the UI snapshot.
@@ -1033,7 +1036,7 @@ int main() {
         // revoked_session_requires_sign_in
         rig.server.revoked = true;
         rig.server.access_expired = true;
-        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs);
         expect(rig.service.snapshot().pairing == AoratonPairingState::ReauthorizationRequired &&
                    rig.store.refresh.empty() && rig.store.keys.size() == 2,
                "revoked session needs a new sign-in; room keys are kept");
@@ -1086,6 +1089,33 @@ int main() {
         expect(restarted.service.snapshot().pairing == AoratonPairingState::Paired &&
                    restarted.service.snapshot().connection == AoratonConnectionState::Connected,
                "it connects within seconds once the network is up");
+    }
+
+    // The device knows when it has no address yet (2026-11-19): every request
+    // before Wi-Fi was up failed and logged errors at boot. The stored session
+    // still shows as signed in and connecting, nothing is asked until the
+    // network is up, and then it connects within a second.
+    {
+        Rig rig;
+        rig.sign_in();
+        const std::string stored = rig.store.refresh;
+        Rig restarted;
+        restarted.server.generation = rig.server.generation;
+        restarted.server.refresh = rig.server.refresh;
+        restarted.store.present = true;
+        restarted.store.refresh = stored;
+        restarted.server.offline = true;
+        restarted.worker.start(restarted.now_ms, 1792760000);
+        restarted.pump();
+        for (int second = 0; second < 40; ++second) restarted.advance(1000);
+        expect(restarted.server.requests == 0, "no request before the network is up");
+        expect(restarted.service.snapshot().pairing == AoratonPairingState::Paired &&
+                   restarted.service.snapshot().connection == AoratonConnectionState::Connecting,
+               "and the stored session shows as signed in and connecting meanwhile");
+        restarted.server.offline = false;
+        restarted.advance(AoratonAccountWorker::kNetworkWaitMs);
+        expect(restarted.service.snapshot().connection == AoratonConnectionState::Connected,
+               "it connects within a second of the network coming up");
     }
 
     // sign_in_times_out and a cancelled / rejected exchange
@@ -1196,7 +1226,7 @@ int main() {
         expect(shown.author == "inco" && shown.local_display_text == "Είναι 01:15." &&
                    shown.direction == AoratonDirection::Incoming,
                "the answer appears on AURA at once");
-        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs);
         std::size_t copies = 0;
         for (const auto& message : rig.service.snapshot().messages) copies += message.author == "inco";
         expect(copies == 1 && rig.server.inco_requests.size() == 1, "the next poll neither duplicates nor re-asks");
@@ -1204,7 +1234,7 @@ int main() {
         send(kBeta, "@inco εδώ;");
         send(kAlpha, "incoming νέα");
         rig.server.add(kAlpha, kUser, "Owner in browser", "@inco από τον browser");
-        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs);
         expect(rig.server.inco_requests.size() == 1,
                "no inco room, no mention, or another device's message: never asked here");
 
@@ -1252,6 +1282,34 @@ int main() {
                        line.find("Αθήνα") == std::string::npos && line.find("at-") == std::string::npos,
                    "the log has ids and codes only");
         }
+    }
+
+    // The owner's choice (2026-11-19): realtime brings the messages, so the
+    // periodic check is off by default; it still checks while realtime is down.
+    {
+        expect(!AoratonSyncSettings{}.polling_enabled && AoratonSyncSettings{}.interval_seconds == 10,
+               "the periodic check is off by default and keeps its ten-second choice");
+        Rig rig({}, true);
+        rig.sign_in();
+        expect(rig.service.unlock_keys(passphrase), "unlock for the default sync settings");
+        rig.pump();
+        rig.realtime.update = {true, true};
+        rig.pump();
+        expect(rig.service.snapshot().realtime_active, "realtime acknowledged");
+        const int quiet = rig.server.requests;
+        for (int minute = 0; minute < 10; ++minute) rig.advance(60000);
+        expect(rig.server.requests == quiet, "with realtime and the default settings: no periodic checks in ten minutes");
+        rig.realtime.update = {false, false};
+        rig.pump();
+        expect(!rig.service.snapshot().realtime_active, "realtime lost");
+        const int lost = rig.server.requests;
+        const auto delivered = rig.notifications();
+        rig.server.add(kAlpha, "u-maria", "Maria", "DEMO while realtime is down");
+        rig.advance(AoratonAccountWorker::kPollIntervalMs);
+        expect(rig.server.requests == lost, "without realtime: no check at the periodic check's ten seconds");
+        rig.advance(AoratonAccountWorker::kRealtimeFallbackPollMs - AoratonAccountWorker::kPollIntervalMs);
+        expect(rig.server.requests > lost && rig.notifications() == delivered + 1,
+               "but a check once a minute, even with the periodic check off");
     }
 
     // inco stays off until the owner enables it.

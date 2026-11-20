@@ -213,7 +213,8 @@
         constexpr int kStripHeight = 112;
         auto* strip = glass_panel(kGutter, kStripY, kWidth, kStripHeight);
         const std::size_t hourly_count = std::min<std::size_t>(data.hourly_count, weather_hour_cards.size());
-        const int column = hourly_count > 0 ? kWidth / static_cast<int>(hourly_count) : kWidth;
+        const int column = weather_hour_column(hourly_count);
+        weather_hours_scroll(strip, hourly_count);
         for (std::size_t index = 0; index < hourly_count; ++index) {
             const auto& hour = data.hourly[index];
             auto* cell = glass_cell(strip, static_cast<int>(index) * column, 0, column, kStripHeight - 2);
@@ -255,9 +256,9 @@
         lv_obj_set_height(weather_detail_label, detail_height);
         y += detail_height + 16;
 
-        if (data.provider == WeatherProvider::TlesDetector) {
+        if (weather_hazards_shown()) {
             weather_hazard_block(y);
-            y += 188;
+            y += weather_hazard_space();
         }
 
         // The days in one glass panel; a tap describes the day above.

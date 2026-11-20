@@ -35,8 +35,10 @@ enum class AoratonDelivery {
 };
 enum class AoratonRuntimeMode { Mock, IntegrationTest, Live };
 
+// The periodic overview check is off by default (the owner, 2026-11-19):
+// realtime brings messages, and while it is down the worker still checks.
 struct AoratonSyncSettings {
-    bool polling_enabled{true};
+    bool polling_enabled{false};
     std::uint32_t interval_seconds{10};
     bool operator==(const AoratonSyncSettings& other) const noexcept {
         return polling_enabled == other.polling_enabled && interval_seconds == other.interval_seconds;

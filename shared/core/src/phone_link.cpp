@@ -8,6 +8,27 @@
 
 namespace aura {
 
+std::string serialize_bluetooth_settings(const BluetoothSettings& settings) {
+    return std::string("aura-bluetooth 1\nenabled=") + (settings.enabled ? "1" : "0") + "\n";
+}
+
+BluetoothSettings parse_bluetooth_settings(const std::string& data) {
+    BluetoothSettings settings;
+    if (data == "aura-bluetooth 1\nenabled=0\n" || data == "aura-bluetooth 1\nenabled=0") settings.enabled = false;
+    return settings;
+}
+
+bool bluetooth_should_run(const BluetoothSettings& settings, bool phone_paired, bool pairing) noexcept {
+    return settings.enabled && (phone_paired || pairing);
+}
+
+void PhoneNotificationModel::set_bluetooth(bool enabled, bool on) {
+    if (enabled == snapshot_.bluetooth_enabled && on == snapshot_.bluetooth_on) return;
+    snapshot_.bluetooth_enabled = enabled;
+    snapshot_.bluetooth_on = on;
+    changed();
+}
+
 void PhoneNotificationModel::set_link(PhoneLinkState link, PhonePlatform platform, const std::string& device_name) {
     auto name = sanitize_text(device_name, 48);
     if (link == snapshot_.link && platform == snapshot_.platform && name == snapshot_.device_name) return;

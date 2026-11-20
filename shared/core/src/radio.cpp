@@ -337,6 +337,24 @@ bool parse_stream_response_head(std::string_view head, StreamResponseHead& out) 
     return true;
 }
 
+bool radio_file_url(std::string_view url, std::string& path) {
+    constexpr std::string_view kPrefix = "file://";
+    if (url.size() <= kPrefix.size() || url.substr(0, kPrefix.size()) != kPrefix) return false;
+    path = std::string(url.substr(kPrefix.size()));
+    return true;
+}
+
+std::size_t id3v2_tag_size(const std::uint8_t* head, std::size_t size) noexcept {
+    if (size < 10 || head[0] != 'I' || head[1] != 'D' || head[2] != '3') return 0;
+    for (std::size_t index = 6; index < 10; ++index) {
+        if ((head[index] & 0x80U) != 0) return 0;  // sizes are syncsafe
+    }
+    const std::size_t body = (static_cast<std::size_t>(head[6]) << 21) | (static_cast<std::size_t>(head[7]) << 14) |
+                             (static_cast<std::size_t>(head[8]) << 7) | static_cast<std::size_t>(head[9]);
+    const bool footer = (head[5] & 0x10U) != 0;
+    return 10 + body + (footer ? 10 : 0);
+}
+
 bool radio_error_retryable(std::string_view code) noexcept {
     return code == "RADIO_NETWORK" || code == "RADIO_STREAM_ENDED" || code == "RADIO_TIMEOUT";
 }

@@ -2,6 +2,7 @@
 
 #include "esp_log.h"
 #include "host/ble_hs.h"
+#include "nvs.h"
 #include "host/util/util.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -335,8 +336,14 @@ void host_task(void*) {
 
 }  // namespace
 
-bool Esp32PhoneLink::start() {
+bool Esp32PhoneLink::start(bool pairable) {
+    if (started_) return true;
     instance = this;
+    {
+        std::lock_guard<std::recursive_mutex> guard(link_mutex);
+        link = Link{};
+        link.pairable = pairable;
+    }
     if (nimble_port_init() != ESP_OK) {
         ESP_LOGW(kTag, "NimBLE unavailable");
         return false;
@@ -358,6 +365,41 @@ bool Esp32PhoneLink::start() {
     started_ = true;
     ESP_LOGI(kTag, "BLE phone link started (ANCS client)");
     return true;
+}
+
+void Esp32PhoneLink::stop() {
+    if (!started_) return;
+    {
+        std::lock_guard<std::recursive_mutex> guard(link_mutex);
+        if (link.connection != BLE_HS_CONN_HANDLE_NONE) ble_gap_terminate(link.connection, BLE_ERR_REM_USER_CONN_TERM);
+        ble_gap_adv_stop();
+    }
+    // The host task's nimble_port_run() returns and it deletes itself.
+    if (nimble_port_stop() == 0) nimble_port_deinit();
+    {
+        std::lock_guard<std::recursive_mutex> guard(link_mutex);
+        link = Link{};
+    }
+    {
+        // Nothing the host said before it stopped reaches the UI after it.
+        std::lock_guard<std::mutex> lock(mutex_);
+        events_.clear();
+    }
+    started_ = false;
+    ESP_LOGI(kTag, "BLE phone link stopped");
+}
+
+bool Esp32PhoneLink::has_bond() {
+    nvs_iterator_t entry = nullptr;
+    esp_err_t found = nvs_entry_find(NVS_DEFAULT_PART_NAME, "nimble_bond", NVS_TYPE_ANY, &entry);
+    bool bonded = false;
+    while (found == ESP_OK && entry != nullptr && !bonded) {
+        nvs_entry_info_t info{};
+        if (nvs_entry_info(entry, &info) == ESP_OK) bonded = std::strncmp(info.key, "peer_sec", 8) == 0;
+        if (!bonded) found = nvs_entry_next(&entry);
+    }
+    if (entry != nullptr) nvs_release_iterator(entry);
+    return bonded;
 }
 
 void Esp32PhoneLink::set_pairable(bool pairable) {

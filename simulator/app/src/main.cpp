@@ -1,3 +1,7 @@
+#include "aura/winhttp_client.hpp"
+#include "aura/xweather.hpp"
+#include "aura/file_browser.hpp"
+#include "aura/alarm_station.hpp"
 #include "aura/assistant_state.hpp"
 #include "aura/assistant_stream.hpp"
 #include "aura/aoraton.hpp"
@@ -242,16 +246,17 @@ aura::WeatherData demo_weather_data(aura::WeatherCondition condition = aura::Wea
         (condition == aura::WeatherCondition::Rain ? 84 :
          (condition == aura::WeatherCondition::Drizzle ? 55 : 8));
     data.observed_at = "2026-10-19T18:24";
-    const aura::WeatherCondition later[] = {condition, aura::WeatherCondition::PartlyCloudy,
-        aura::WeatherCondition::Cloudy, aura::WeatherCondition::Clear};
-    const float temperatures[] = {data.temperature_c, data.temperature_c - 1.0F,
-                                  data.temperature_c - 2.0F, data.temperature_c - 3.0F};
-    const char* times[] = {"2026-10-19T18:00", "2026-10-19T21:00",
-                           "2026-10-20T00:00", "2026-10-20T03:00"};
+    // Twelve hours from 18:00, one by one: the condition now for three, then
+    // clearing, a degree cooler every two hours.
     for (std::size_t index = 0; index < data.hourly.size(); ++index) {
-        data.hourly[index] = {times[index], temperatures[index], later[index], demo_code(later[index]),
-            later[index] == aura::WeatherCondition::Rain ? 82 :
-            (later[index] == aura::WeatherCondition::Thunderstorm ? 92 : 12), is_day && index == 0};
+        const auto later = index < 3 ? condition : (index < 6 ? aura::WeatherCondition::PartlyCloudy :
+            (index < 9 ? aura::WeatherCondition::Cloudy : aura::WeatherCondition::Clear));
+        char when[24];
+        const int hour = (18 + static_cast<int>(index)) % 24;
+        std::snprintf(when, sizeof(when), "2026-10-%02dT%02d:00", 18 + static_cast<int>(index) < 24 ? 19 : 20, hour);
+        data.hourly[index] = {when, data.temperature_c - static_cast<float>(index / 2), later, demo_code(later),
+            later == aura::WeatherCondition::Rain ? 82 : (later == aura::WeatherCondition::Thunderstorm ? 92 : 12),
+            is_day && index == 0};
     }
     data.hourly_count = data.hourly.size();
     const char* dates[] = {"2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22"};
@@ -277,6 +282,28 @@ std::vector<aura::WifiNetwork> demo_wifi_networks() {
         {"Corp Secure · DEMO", -77, aura::WifiSecurity::Enterprise},
         {"Guest · DEMO", -84, aura::WifiSecurity::WpaPersonal},
     };
+}
+
+// Xweather's requests that are due, on a worker; the keys stay in this call.
+aura::XweatherNowcast fetch_xweather(const std::string& client_id, const std::string& client_secret,
+                                     double latitude, double longitude, aura::XweatherScheduler::Due due) {
+    aura::simulator::WinHttpClient http;
+    aura::XweatherNowcast now;
+    const auto get = [&](const std::string& path) {
+        aura::AoratonHttpRequest request;
+        request.method = "GET";
+        request.url = aura::xweather_url(path, client_id, client_secret);
+        request.timeout_ms = 15000;
+        const auto response = http.send(request);
+        return response.status == 200 ? response.body : std::string{};
+    };
+    if (due.rain) aura::parse_xweather_minutely(get(aura::xweather_minutely_path(latitude, longitude)), now);
+    if (due.alerts) aura::parse_xweather_alerts(get(aura::xweather_alerts_path(latitude, longitude)), now);
+    if (due.lightning) {
+        aura::parse_xweather_lightning(get(aura::xweather_lightning_path(latitude, longitude)),
+                                       static_cast<std::int64_t>(std::time(nullptr)), now);
+    }
+    return now;
 }
 
 aura::WeatherData demo_tlesdetector_weather_data(
@@ -942,7 +969,8 @@ int main(int argc, char** argv) {
         bool changed = false;
         while (radio_service.poll(event)) {
             if (event.generation != radio_generation) continue;
-            if (event.type == aura::simulator::RadioWorkerEventType::Playing) radio_model.set_playing();
+            if (event.type == aura::simulator::RadioWorkerEventType::Ended) radio_model.stop();
+            else if (event.type == aura::simulator::RadioWorkerEventType::Playing) radio_model.set_playing();
             else if (event.type == aura::simulator::RadioWorkerEventType::Title) radio_model.set_title(event.text);
             else if (event.type == aura::simulator::RadioWorkerEventType::Reconnecting) {
                 // The stream dropped and is being joined again: show "Σύνδεση…".
@@ -1191,6 +1219,79 @@ int main(int argc, char** argv) {
     companion_context.store_dir = companion_store_dir;
     companion_context.aoraton_link = aoraton_device_mode ? aoraton_device_mode->endpoint() : nullptr;
     aura::simulator::CompanionRuntime companion(std::move(companion_context));
+    // Xweather with the owner's keys (.env, 2026-11-19); never in a deterministic run.
+    const std::string xweather_id = deterministic_run ? std::string{} : environment("XWEATHER_CLIENT_ID", "");
+    const std::string xweather_secret =
+        deterministic_run ? std::string{} : environment("XWEATHER_CLIENT_SECRET", "");
+    aura::XweatherScheduler xweather_schedule;
+    aura::WeatherNoticeGate weather_notices;
+    aura::XweatherNowcast xweather_last;
+    std::optional<std::future<aura::XweatherNowcast>> pending_xweather;
+    auto poll_xweather = [&] {
+        if (xweather_id.empty() || xweather_secret.empty()) return;
+        const auto& weather_now = weather_model.snapshot();
+        // A forecast refresh replaces the data: what Xweather said goes back in.
+        if (weather_now.has_data && !weather_now.data.hazards.xweather_available &&
+            (xweather_last.rain_ok || xweather_last.alerts_ok || xweather_last.lightning_ok)) {
+            if (weather_model.apply_xweather(xweather_last)) apply_weather();
+        }
+        if (pending_xweather) {
+            if (pending_xweather->wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+            const auto arrived = pending_xweather->get();
+            pending_xweather.reset();
+            if (arrived.rain_ok) {
+                xweather_last.rain_ok = true;
+                xweather_last.rain_in_minutes = arrived.rain_in_minutes;
+                xweather_last.rain_minutes = arrived.rain_minutes;
+                xweather_last.rain_peak_mm_h = arrived.rain_peak_mm_h;
+            }
+            if (arrived.alerts_ok) {
+                xweather_last.alerts_ok = true;
+                xweather_last.alert_count = arrived.alert_count;
+                xweather_last.highest = arrived.highest;
+                xweather_last.alert_name = arrived.alert_name;
+            }
+            if (arrived.lightning_ok) {
+                xweather_last.lightning_ok = true;
+                xweather_last.lightning_near = arrived.lightning_near;
+                xweather_last.lightning_km = arrived.lightning_km;
+                xweather_last.lightning_age_minutes = arrived.lightning_age_minutes;
+                xweather_last.lightning_bearing_deg = arrived.lightning_bearing_deg;
+            }
+            if (weather_model.apply_xweather(xweather_last)) {
+                apply_weather();
+                const auto minute = static_cast<std::int64_t>(std::time(nullptr) / 60);
+                if (const auto notice = weather_notices.observe(weather_model.snapshot().data.hazards, minute)) {
+                    ui.show_weather_notice(*notice);
+                }
+            }
+            return;
+        }
+        if (!weather_now.has_data || !weather_now.data.location.valid()) return;
+        const auto due = xweather_schedule.due(weather_now.data, companion.now_ms());
+        if (!due.alerts && !due.rain && !due.lightning) return;
+        const double latitude = weather_now.data.location.latitude;
+        const double longitude = weather_now.data.location.longitude;
+        pending_xweather.emplace(std::async(std::launch::async, [id = xweather_id, secret = xweather_secret,
+                                                                latitude, longitude, due] {
+            return fetch_xweather(id, secret, latitude, longitude, due);
+        }));
+    };
+    // An alarm that wakes with a station (the owner, 2026-11-19), beside the radio.
+    aura::AlarmStationPlayer alarm_station;
+    auto poll_alarm_station = [&] {
+        const auto decision = alarm_station.step(companion.clock().snapshot().alert, radio_model.snapshot().state,
+                                                 audio.diagnostics().muted, companion.now_ms());
+        if (decision.start_station) {
+            aura::RadioStation station;
+            station.id = decision.station.id;
+            station.name = decision.station.name;
+            station.url = decision.station.url;
+            play_radio(station);
+        }
+        if (decision.stop_station) stop_radio();
+        companion.set_alarm_melody_allowed(decision.melody);
+    };
     // As on the board: the account's Google button opens the sign-in screen.
     if (aoraton_device_mode) ui.set_aoraton_sign_in_relay(true);
     if (language_override) companion.set_language(*language_override);
@@ -1391,6 +1492,15 @@ int main(int argc, char** argv) {
     ui_callbacks.on_radio_stop = [&] {
         ++interaction_counts.radio_stop;
         stop_radio();
+    };
+    // Αρχεία's Play: a card MP3 through the radio's player (2026-11-19).
+    ui_callbacks.on_file_play = [&](const std::string& path) {
+        if (!aura::file_path_valid(path) || !aura::file_playable(aura::file_path_leaf(path))) return;
+        aura::RadioStation station;
+        station.id = aura::file_station_id(path);
+        station.name = std::string(aura::file_path_leaf(path));
+        station.url = companion.file_url(path);
+        play_radio(station);
     };
     ui_callbacks.on_radio_search = [&](const std::string& query) {
         ++interaction_counts.radio_search;
@@ -1959,7 +2069,7 @@ int main(int argc, char** argv) {
                    capture_scenario == "weather-snowy" || capture_scenario == "weather-night" ||
                    capture_scenario == "weather-night-cloudy" ||
                    capture_scenario == "weather-forecast" || capture_scenario == "weather-gateway" ||
-                   capture_scenario == "weather-gateway-details") {
+                   capture_scenario == "weather-gateway-details" || capture_scenario == "weather-xweather") {
             aura::WeatherCondition condition = aura::WeatherCondition::Clear;
             if (capture_scenario == "weather-cloudy") condition = aura::WeatherCondition::Cloudy;
             else if (capture_scenario == "weather-rainy") condition = aura::WeatherCondition::Rain;
@@ -1973,11 +2083,31 @@ int main(int argc, char** argv) {
                 demo_weather_data(condition, {}, ui.language(), !night);
             weather_model.clear_location();
             weather_model.fetch_succeeded(data);
+            if (capture_scenario == "weather-xweather") {
+                // DEMO Xweather (2026-11-19): rain in 12 minutes, a moderate alert,
+                // lightning 9 km to the south-west.
+                aura::XweatherNowcast now;
+                now.rain_ok = true;
+                now.rain_in_minutes = 12;
+                now.rain_minutes = 25;
+                now.rain_peak_mm_h = 3.4F;
+                now.alerts_ok = true;
+                now.alert_count = 1;
+                now.highest = aura::WeatherAlertLevel::Moderate;
+                now.alert_name = "DEMO ΚΑΤΑΙΓΙΔΕΣ";
+                now.lightning_ok = true;
+                now.lightning_near = true;
+                now.lightning_km = 9.0F;
+                now.lightning_age_minutes = 4;
+                now.lightning_bearing_deg = 225;
+                weather_model.apply_xweather(now);
+            }
             apply_weather();
             ui.show(aura::UiView::Weather);
             capture_weather_forecast = capture_scenario == "weather-forecast" ||
-                capture_scenario == "weather-gateway-details";
+                capture_scenario == "weather-gateway-details" || capture_scenario == "weather-xweather";
             if (capture_scenario == "weather-gateway-details") capture_weather_scroll_y = 270;
+            if (capture_scenario == "weather-xweather") capture_weather_scroll_y = 270;
         } else if (capture_scenario == "weather" || capture_scenario == "weather-success" ||
                    capture_scenario == "weather-from-quick-actions") {
             weather_model.clear_location();
@@ -2309,6 +2439,7 @@ int main(int argc, char** argv) {
                 aoraton.tick(8);
                 poll_wifi(std::chrono::steady_clock::now());
                 poll_radio();
+                poll_alarm_station();
                 poll_fuel();
                 apply();
                 ui.apply_audio(audio.diagnostics());
@@ -2367,7 +2498,13 @@ int main(int argc, char** argv) {
         auto tap = [&](int x, int y) {
             push_motion(x, y);
             push_button(SDL_MOUSEBUTTONDOWN, x, y);
+            // Held by the clock as well: LVGL reads the pointer every 33 ms of
+            // real time, and five frames (30-50 ms) sometimes passed without a
+            // read, so the press was never seen (aoraton.message_ui's Cancel, 1
+            // run in 4 at 1x, 2026-11-20).
+            const Uint32 pressed_at = SDL_GetTicks();
             pump(5);
+            while (SDL_GetTicks() - pressed_at < 45U) pump(1);
             push_button(SDL_MOUSEBUTTONUP, x, y);
             pump(8);
         };
@@ -2560,9 +2697,9 @@ int main(int argc, char** argv) {
         // Settings is a scrolling list from y=96 in four groups (2026-11-14): a
         // 40 px caption over each group, 8 px between groups, then rows 88 px
         // high on a 96 px pitch. The rows' tops in the list:
-        constexpr int kSetWifi = 40, kSetPhone = 136, kSetDisplay = 376, kSetAppearance = 472,
-                      kSetSound = 568, kSetProvider = 712, kSetWeather = 808, kSetLanguage = 952,
-                      kSetStatus = 1048, kSetSystem = 1144;
+        constexpr int kSetWifi = 40, kSetBluetooth = 136, kSetPhone = 232, kSetDisplay = 472,
+                      kSetAppearance = 568, kSetSound = 664, kSetProvider = 808, kSetWeather = 904,
+                      kSetLanguage = 1048, kSetStatus = 1144, kSetSystem = 1240;
         // A row's centre on the screen with the list scrolled by `scroll`.
         auto settings_row_y = [](int top, int scroll) { return 96 + top + 44 - scroll; };
         // Οθόνη → Λιγότερη κίνηση, its seventh row, with the list at its end.
@@ -2576,22 +2713,22 @@ int main(int argc, char** argv) {
             pump(3);
         };
         reset_to(aura::UiView::Settings);
-        scroll_view_to(520);
+        scroll_view_to(616);
         const int rapid_provider_before = interaction_counts.provider;
-        rapid_double_tap(220, settings_row_y(kSetProvider, 520));
+        rapid_double_tap(220, settings_row_y(kSetProvider, 616));
         record("settings.provider", "rapid-double-tap",
                interaction_counts.provider == rapid_provider_before + 1,
                std::to_string(interaction_counts.provider - rapid_provider_before));
 
         reset_to(aura::UiView::Settings);
-        scroll_view_to(760);
-        tap(220, settings_row_y(kSetLanguage, 760));
+        scroll_view_to(856);
+        tap(220, settings_row_y(kSetLanguage, 856));
         const bool language_page = ui.view() == aura::UiView::LanguageSettings;
         tap(220, 236);
         const bool english_selected = ui.language() == aura::InterfaceLanguage::English;
         tap(48, 48);
-        scroll_view_to(760);
-        tap(220, settings_row_y(kSetLanguage, 760));
+        scroll_view_to(856);
+        tap(220, settings_row_y(kSetLanguage, 856));
         tap(220, 140);
         const bool greek_restored = ui.language() == aura::InterfaceLanguage::Greek;
         tap(48, 48);
@@ -2660,9 +2797,9 @@ int main(int argc, char** argv) {
         record("nav.home", "back-long-press", ui.view() == aura::UiView::Home,
                std::to_string(static_cast<int>(ui.view())));
 
-        for (const auto& point : row_points(settings_row_y(kSetProvider, 520))) {
+        for (const auto& point : row_points(settings_row_y(kSetProvider, 616))) {
             reset_to(aura::UiView::Settings);
-            scroll_view_to(520);
+            scroll_view_to(616);
             const int provider_before = interaction_counts.provider;
             const bool live_before = live_provider;
             tap(point.x, point.y);
@@ -2685,8 +2822,8 @@ int main(int argc, char** argv) {
             // Every check starts from Home: after reset_to, Back never reaches a
             // screen left over from an earlier check.
             reset_to(aura::UiView::Settings);
-            scroll_view_to(760);
-            tap(240, settings_row_y(kSetLanguage, 760));
+            scroll_view_to(856);
+            tap(240, settings_row_y(kSetLanguage, 856));
             const bool language_opened = ui.view() == aura::UiView::LanguageSettings;
             reset_to(aura::UiView::Clock);
             tap(48, 48);
@@ -2695,10 +2832,10 @@ int main(int argc, char** argv) {
         }
         // Lower rows are reached by scrolling the list while preserving 80 px targets.
         const struct { const char* action; int top; int scroll; aura::UiView expected; } setting_routes[] = {
-            {"settings.weather", kSetWeather, 600, aura::UiView::WeatherSettings},
-            {"settings.audio", kSetSound, 400, aura::UiView::Audio},
-            {"settings.status", kSetStatus, 760, aura::UiView::Battery},
-            {"settings.system", kSetSystem, 864, aura::UiView::System},
+            {"settings.weather", kSetWeather, 696, aura::UiView::WeatherSettings},
+            {"settings.audio", kSetSound, 496, aura::UiView::Audio},
+            {"settings.status", kSetStatus, 856, aura::UiView::Battery},
+            {"settings.system", kSetSystem, 960, aura::UiView::System},
         };
         for (const auto& route : setting_routes) {
             for (const auto& point : row_points(settings_row_y(route.top, route.scroll))) {
@@ -2800,6 +2937,23 @@ int main(int argc, char** argv) {
         record("settings.motion_persistence", "leave-reopen",
                ui.reduced_motion() != persisted_motion_before,
                ui.reduced_motion() ? "reduced persisted" : "full persisted");
+
+        // Μεγάλα γράμματα, Οθόνη's ninth row (2026-11-19): on, the reading
+        // face is the look's larger one; off again.
+        reset_to(aura::UiView::DisplaySettings);
+        const bool large_before = companion.display().snapshot().settings.large_text;
+        scroll_view_to(480);
+        tap(220, 96 + 8 * 96 + 44 - 480);
+        pump(3);
+        const bool large_on = companion.display().snapshot().settings.large_text && aura::ui::large_text() &&
+                              aura::ui::font_reading() != aura::ui::font_body();
+        scroll_view_to(480);
+        tap(220, 96 + 8 * 96 + 44 - 480);
+        pump(3);
+        record("settings.large_text", "switch-on-off",
+               !large_before && large_on && !companion.display().snapshot().settings.large_text &&
+                   aura::ui::font_reading() == aura::ui::font_body(),
+               std::to_string(large_on));
 
         weather_model.clear_location();
         apply_weather();
@@ -2908,8 +3062,8 @@ int main(int argc, char** argv) {
                std::to_string(static_cast<int>(ui.view())));
 
         reset_to(aura::UiView::Settings);
-        scroll_view_to(600);
-        tap(184, settings_row_y(kSetWeather, 600));
+        scroll_view_to(696);
+        tap(184, settings_row_y(kSetWeather, 696));
         tap(48, 48);
         record("weather_settings.back", "header-button",
                ui.view() == aura::UiView::Settings,
@@ -3316,15 +3470,15 @@ int main(int argc, char** argv) {
 
         // Back returns to a list where it was left.
         reset_to(aura::UiView::Settings);
-        scroll_view_to(760);
-        tap(220, settings_row_y(kSetStatus, 760));
+        scroll_view_to(856);
+        tap(220, settings_row_y(kSetStatus, 856));
         const bool opened_status = ui.view() == aura::UiView::Battery;
         tap(56, 56);
         lv_obj_update_layout(ui.root());
         auto* settings_list = find_scrollable(ui.root());
         const int kept = settings_list ? static_cast<int>(lv_obj_get_scroll_y(settings_list)) : -1;
         record("nav.back_keeps_scroll", "header-back",
-               opened_status && ui.view() == aura::UiView::Settings && kept == 760, std::to_string(kept));
+               opened_status && ui.view() == aura::UiView::Settings && kept == 856, std::to_string(kept));
 
         controller.dispatch({aura::EventType::Reset});
         controller.dispatch({aura::EventType::TurnStarted, text().capture_speaking_prompt});
@@ -4066,7 +4220,12 @@ int main(int argc, char** argv) {
             };
             auto* spinner = find_arc(ui.root());
             const auto angle_before = spinner ? lv_arc_get_rotation(spinner) : 0;
-            pump(16);
+            // By the clock, as the spinner turns (16 frames sometimes passed
+            // without a visible step, 1 run in 3 at 1x, 2026-11-20).
+            const Uint32 spun_from = SDL_GetTicks();
+            do {
+                pump(1);
+            } while (SDL_GetTicks() - spun_from < 400U);
             const auto angle_after = spinner ? lv_arc_get_rotation(spinner) : 0;
             record("radio.search_spinner", "turns-while-searching", spinner && angle_before != angle_after,
                    std::to_string(angle_before) + "->" + std::to_string(angle_after));
@@ -4136,6 +4295,55 @@ int main(int argc, char** argv) {
         record("clock.alarm_roller_save", "lower-row-then-save",
                clock_model.snapshot().alarms.size() == alarms_before + 1 && eight_oclock && ui.view() == aura::UiView::Clock,
                view_text());
+
+        // An alarm's sound (2026-11-19): Ήχος, the first favourite, then the melody again.
+        {
+            std::uint32_t sound_alarm = 0;
+            clock_model.add_alarm(6, 15, true, "DEMO", &sound_alarm);
+            const bool has_favorite = !radio_model.snapshot().favorites.empty();
+            const auto favorite = has_favorite ? radio_model.snapshot().favorites.front() : aura::RadioStation{};
+            const auto alarm_station_url = [&]() -> std::optional<std::string> {
+                for (const auto& alarm : clock_model.snapshot().alarms) {
+                    if (alarm.id == sound_alarm) return alarm.station.url;
+                }
+                return std::nullopt;
+            };
+            apply();
+            ui.open_clock_item(aura::ClockAlertKind::Alarm, sound_alarm);
+            pump(3);
+            const bool item = ui.view() == aura::UiView::ClockItem;
+            tap(128, 420);
+            const bool chooser = ui.view() == aura::UiView::AlarmSound;
+            tap(220, 236);
+            const auto chosen = alarm_station_url();
+            const bool woke_with_station = chosen && *chosen == favorite.url && ui.view() == aura::UiView::ClockItem;
+            tap(128, 420);
+            tap(220, 140);
+            const auto melody = alarm_station_url();
+            record("clock.alarm_sound", "station-then-melody",
+                   has_favorite && item && chooser && woke_with_station && melody && melody->empty(), view_text());
+
+            // It rings with its station: the radio plays it and the melody
+            // waits; Stop ends both.
+            clock_model.set_alarm_station(sound_alarm, aura::AlarmStation{favorite.id, favorite.name, favorite.url});
+            audio.set_muted(false);
+            companion.set_clock({2026, 11, 21, 6, 14, 0, 6});
+            pump(2);
+            companion.set_clock({2026, 11, 21, 6, 15, 0, 6});
+            pump(6);
+            const bool rings = clock_model.snapshot().alert && clock_model.snapshot().alert->id == sound_alarm &&
+                               ui.view() == aura::UiView::ClockAlert;
+            const bool station_plays = radio_model.snapshot().state == aura::RadioState::Playing &&
+                                       radio_model.snapshot().station.url == favorite.url;
+            tap(128, 420);
+            pump(6);
+            const bool both_stopped = !clock_model.snapshot().alert &&
+                                      radio_model.snapshot().state == aura::RadioState::Idle;
+            clock_model.remove_alarm(sound_alarm);
+            record("clock.alarm_station_rings", "station-then-stop",
+                   has_favorite && rings && station_plays && both_stopped,
+                   std::to_string(rings) + std::to_string(station_plays) + std::to_string(both_stopped));
+        }
 
         reset_to(aura::UiView::ClockNew);
         tap(220, 332);
@@ -4643,12 +4851,21 @@ int main(int argc, char** argv) {
                checking && asked && companion.ota().snapshot().state == aura::UpdateState::Downloading, view_text());
 
         reset_to(aura::UiView::Settings);
-        scroll_view_to(300);
-        tap(220, settings_row_y(kSetDisplay, 300));
+        scroll_view_to(396);
+        tap(220, settings_row_y(kSetDisplay, 396));
         record("settings.display", "row", ui.view() == aura::UiView::DisplaySettings, view_text());
         reset_to(aura::UiView::Settings);
         tap(220, settings_row_y(kSetPhone, 0));
         record("settings.phone", "row", ui.view() == aura::UiView::PhoneLink, view_text());
+        reset_to(aura::UiView::Settings);
+        const bool bluetooth_at_first = companion.phone().snapshot().bluetooth_enabled;
+        tap(220, settings_row_y(kSetBluetooth, 0));
+        const bool bluetooth_switched_off = !companion.phone().snapshot().bluetooth_enabled &&
+                                            ui.view() == aura::UiView::Settings;
+        tap(220, settings_row_y(kSetBluetooth, 0));
+        record("settings.bluetooth", "switch-off-on",
+               bluetooth_at_first && bluetooth_switched_off && companion.phone().snapshot().bluetooth_enabled,
+               view_text());
         // No wake-word row until a trained «Αύρα» model exists; the four group
         // captions are there.
         reset_to(aura::UiView::Settings);
@@ -4675,8 +4892,8 @@ int main(int argc, char** argv) {
             reset_to(aura::UiView::Settings);
             const bool row_named = find_text(ui.root(), el.appearance_title) != nullptr &&
                                    find_text(ui.root(), el.appearance_halo) != nullptr;
-            scroll_view_to(300);
-            tap(220, settings_row_y(kSetAppearance, 300));
+            scroll_view_to(396);
+            tap(220, settings_row_y(kSetAppearance, 396));
             record("appearance.settings_row", "row",
                    row_named && ui.view() == aura::UiView::AppearanceSettings, view_text());
 
@@ -4902,8 +5119,14 @@ int main(int argc, char** argv) {
 
             // Signature screens keep every cut label inside its box and every
             // control at least 64 px (labels made tappable keep their own margin).
-            std::function<bool(lv_obj_t*)> labels_inside = [&](lv_obj_t* object) {
+            // A label within a row that scrolls sideways (the weather's twelve
+            // hours, 2026-11-19) may lie past the screen's edge, scrolled away;
+            // it must still sit inside its cell.
+            std::function<bool(lv_obj_t*, bool)> labels_inside_scrolled = [&](lv_obj_t* object, bool scrolled) {
                 bool inside = true;
+                const bool sideways = scrolled || (lv_obj_is_scrollable(object) &&
+                                                   (lv_obj_get_scroll_dir(object) & LV_DIR_HOR) == LV_DIR_HOR &&
+                                                   lv_obj_get_scroll_dir(object) != LV_DIR_ALL);
                 const auto count = lv_obj_get_child_count(object);
                 for (std::uint32_t index = 0; index < count; ++index) {
                     auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
@@ -4914,13 +5137,14 @@ int main(int argc, char** argv) {
                         lv_area_t parent{};
                         lv_obj_get_coords(child, &own);
                         lv_obj_get_coords(object, &parent);
-                        inside = inside && own.x1 >= parent.x1 - 1 && own.x2 <= parent.x2 + 1 && own.x1 >= 0 &&
-                                 own.x2 <= 480;
+                        inside = inside && own.x1 >= parent.x1 - 1 && own.x2 <= parent.x2 + 1 &&
+                                 (sideways || (own.x1 >= 0 && own.x2 <= 480));
                     }
-                    inside = labels_inside(child) && inside;
+                    inside = labels_inside_scrolled(child, sideways) && inside;
                 }
                 return inside;
             };
+            const auto labels_inside = [&](lv_obj_t* object) { return labels_inside_scrolled(object, false); };
             std::function<int(lv_obj_t*)> smallest_target = [&](lv_obj_t* object) {
                 int smallest = 9999;
                 const auto count = lv_obj_get_child_count(object);
@@ -6428,8 +6652,12 @@ int main(int argc, char** argv) {
                             // The settings row is visible above the sign-out action.
                             tap(240, 440);
                             const bool opened = ui.view() == aura::UiView::AoratonSyncSettings;
-                            tap(240, 140);
+                            // Off by default: realtime brings the messages.
                             settings_ok = settings_ok && opened && !aoraton.snapshot().sync_settings.polling_enabled;
+                            tap(240, 140);
+                            settings_ok = settings_ok && aoraton.snapshot().sync_settings.polling_enabled;
+                            tap(240, 140);
+                            settings_ok = settings_ok && !aoraton.snapshot().sync_settings.polling_enabled;
                             tap(240, 140);
                             const struct { int x, y; std::uint32_t seconds; } choices[]{
                                 {130, 268, 10}, {350, 268, 30}, {130, 344, 60}, {350, 344, 300}
@@ -6553,6 +6781,64 @@ int main(int argc, char** argv) {
                     swipe(60, 300, 420, 300);
                     pump(4);
                     check_files(ui.view() == aura::UiView::Files && companion.files().snapshot().path.empty(), "swipe-up");
+                    // A look into a text file (2026-11-19).
+                    if (auto* row = find_text(view_content(), "DEMO.txt")) lv_obj_scroll_to_view_recursive(row, LV_ANIM_OFF);
+                    pump(2);
+                    tap_center(find_text(view_content(), "DEMO.txt"));
+                    tap_center(find_text(view_content(), fx.preview));
+                    pump(6);
+                    check_files(ui.view() == aura::UiView::FilePreview &&
+                                    find_text(view_content(), "DEMO\nΣημειώσεις της κάρτας.\nΔεύτερη γραμμή.\n") != nullptr,
+                                "text-look");
+                    tap(48, 48);
+                    pump(2);
+                    tap(48, 48);
+                    pump(4);
+                    // A card MP3 plays through the radio's player, and stops.
+                    tap_center(find_text(view_content(), "DEMO Μουσική"));
+                    pump(4);
+                    tap_center(find_text(view_content(), "DEMO ρυθμός.mp3"));
+                    tap_center(find_text(view_content(), fx.play));
+                    pump(4);
+                    check_files(radio_model.snapshot().station.id == aura::file_station_id("DEMO Μουσική/DEMO ρυθμός.mp3") &&
+                                    radio_model.snapshot().state == aura::RadioState::Playing &&
+                                    find_text(view_content(), fx.stop) != nullptr, "mp3-plays");
+                    tap_center(find_text(view_content(), fx.stop));
+                    pump(4);
+                    check_files(radio_model.snapshot().state == aura::RadioState::Idle &&
+                                    find_text(view_content(), fx.play) != nullptr, "mp3-stops");
+                    // And takes a new name in its folder.
+                    const auto renamed_before = companion.files().snapshot().renamed;
+                    if (auto* row = find_text(view_content(), fx.rename)) lv_obj_scroll_to_view_recursive(row, LV_ANIM_OFF);
+                    pump(2);
+                    tap_center(find_text(view_content(), fx.rename));
+                    pump(2);
+                    lv_obj_t* name_field = nullptr;
+                    const std::function<void(lv_obj_t*)> find_field = [&](lv_obj_t* object) {
+                        for (std::uint32_t index = 0; index < lv_obj_get_child_count(object) && !name_field; ++index) {
+                            auto* child = lv_obj_get_child(object, static_cast<std::int32_t>(index));
+                            if (lv_obj_check_type(child, &lv_textarea_class)) name_field = child;
+                            else find_field(child);
+                        }
+                    };
+                    find_field(view_content());
+                    check_files(ui.view() == aura::UiView::FileRename && name_field &&
+                                    std::string(lv_textarea_get_text(name_field)) == "DEMO ρυθμός.mp3", "rename-form");
+                    if (name_field) {
+                        lv_textarea_set_text(name_field, "DEMO ρυθμός 2.mp3");
+                        lv_obj_send_event(name_field, LV_EVENT_VALUE_CHANGED, nullptr);
+                    }
+                    tap(432, 48);
+                    pump(8);
+                    check_files(ui.view() == aura::UiView::Files, "renamed-view");
+                    check_files(companion.files().snapshot().renamed == renamed_before + 1, "renamed-count");
+                    bool renamed_listed = false;
+                    for (const auto& entry : companion.files().snapshot().entries) {
+                        renamed_listed = renamed_listed || entry.name == "DEMO ρυθμός 2.mp3";
+                    }
+                    check_files(renamed_listed && companion.files().snapshot().path == "DEMO Μουσική", "renamed-listed");
+                    tap(48, 48);
+                    pump(4);
                     // The device's own files show but stay.
                     tap_center(find_text(view_content(), "aura"));
                     pump(4);
@@ -7758,6 +8044,8 @@ int main(int argc, char** argv) {
         }
         poll_wifi(now);
         poll_radio();
+        poll_alarm_station();
+        poll_xweather();
         poll_fuel();
         tick_fuel(elapsed);
         poll_ancs();

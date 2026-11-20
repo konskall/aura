@@ -12,8 +12,15 @@ extern "C" {
 // Starts the panel, touch and LVGL as the BSP's bsp_display_start() does, except
 // that LVGL draws `draw_rows` rows at a time into its two PSRAM draw buffers
 // (the BSP fixes 50), and the panel stays dark until aura_board_display_reveal().
-// Returns NULL if any step fails.
+// Returns NULL if a step of the panel or LVGL fails; a touch controller that
+// does not answer leaves AURA running without touch (aura_board_touch_ready).
 lv_display_t* aura_board_display_start(int draw_rows);
+
+// Whether the touch controller answered, at the start or at a later try.
+bool aura_board_touch_ready(void);
+// Asks the touch controller once more (takes the display lock: never call it
+// with the lock held by another task's wait); true once it is running.
+bool aura_board_touch_retry(void);
 
 // Draws the whole screen now and then lights the panel at `brightness_percent`:
 // the first thing it shows is AURA's own screen, never what its memory held nor

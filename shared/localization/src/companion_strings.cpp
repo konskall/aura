@@ -93,6 +93,16 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.stt_unavailable_detail = "Η αναγνώριση ομιλίας δεν είναι εγκατεστημένη σε αυτή τη συσκευή.";
         s.mic_unavailable_detail = "Το μικρόφωνο δεν είναι διαθέσιμο ή δεν επιτρέπεται η χρήση του.";
         s.tts_unavailable = "Η φωνή δεν είναι διαθέσιμη";
+        s.touch_unavailable = "Η αφή δεν ξεκίνησε. Πατήστε το μεσαίο κουμπί για να μιλήσετε.";
+        s.touch_back = "Η αφή λειτουργεί ξανά";
+        s.large_text_title = "Μεγάλα γράμματα";
+        s.weather_rain_now = "Βρέχει τώρα";
+        s.weather_rain_in_format = "Βροχή σε %d λεπτά";
+        s.weather_rain_none = "Χωρίς βροχή την επόμενη ώρα";
+        s.weather_storm_near_format = "Καταιγίδα κοντά · %d χλμ";
+        s.weather_alert_format = "Προειδοποίηση: %s";
+        s.weather_powered_xweather = "Powered by Vaisala Xweather";
+        s.large_text_detail = "Απαντήσεις, μηνύματα και σημειώσεις";
 
         s.clock_empty = "Δεν υπάρχουν χρονόμετρα ή ξυπνητήρια";
         s.clock_empty_hint = "Πες «βάλε χρονόμετρο 10 λεπτά» ή πάτα +";
@@ -118,6 +128,11 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.unit_hour = "ώρα";
         s.new_timer = "Νέο χρονόμετρο";
         s.new_alarm = "Νέο ξυπνητήρι";
+        s.alarm_sound = "Ήχος";
+        s.alarm_sound_title = "Ήχος ξυπνητηριού";
+        s.alarm_sound_melody = "Μελωδία";
+        s.alarm_sound_no_favorites = "Πρόσθεσε σταθμούς στα αγαπημένα του Ράδιου για να ξυπνάς με αυτούς.";
+        s.alarm_sound_failed = "Δεν άλλαξε ο ήχος.";
         s.new_reminder = "Νέα υπενθύμιση";
         s.reminder_placeholder = "Τι να σου θυμίσω;";
         s.reminder_when = "Πότε;";
@@ -235,6 +250,11 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.read_aloud = "Ανάγνωση";
 
         s.phone_title = "Κινητό";
+        s.bluetooth_title = "Bluetooth";
+        s.bluetooth_off = "Κλειστό";
+        s.bluetooth_running = "Ανοιχτό · για το κινητό";
+        s.bluetooth_auto = "Ανοίγει μόνο για το κινητό";
+        s.bluetooth_failed = "Δεν άλλαξε το Bluetooth.";
         s.phone_not_paired = "Δεν έχει συνδεθεί κινητό";
         s.phone_pairing = "Σύνδεση…";
         s.phone_connected = "Συνδεδεμένο";
@@ -263,6 +283,10 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.system_voltage = "Τάση συστήματος";
         s.chip_temperature = "Θερμοκρασία chip";
         s.charge_stage_title = "Φόρτιση";
+        s.battery_life_title = "Διάρκεια μπαταρίας";
+        s.battery_life_on_power = "Στο ρεύμα · μετράει στην μπαταρία";
+        s.battery_life_measuring_format = "Μετράει… %d λ στην μπαταρία";
+        s.battery_life_format = "Περίπου %d ώ %02d λ ακόμα · %d,%d%%/ώρα";
         s.charge_trickle = "Αρχική φόρτιση";
         s.charge_precharge = "Προφόρτιση";
         s.charge_fast = "Γρήγορη φόρτιση";
@@ -403,7 +427,8 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.aoraton_sync_30 = "30 δευτ.";
         s.aoraton_sync_60 = "1 λεπτό";
         s.aoraton_sync_300 = "5 λεπτά";
-        s.aoraton_sync_note = "Η άμεση ενημέρωση λειτουργεί ανεξάρτητα από αυτόν τον έλεγχο.";
+        s.aoraton_sync_note = "Η άμεση ενημέρωση φέρνει τα μηνύματα αμέσως. Όσο δεν είναι διαθέσιμη, "
+                              "η συσκευή ελέγχει κάθε λεπτό.";
         s.aoraton_sync_failed = "Δεν αποθηκεύτηκε η ρύθμιση.";
         s.aoraton_room_locked = "Κλειδωμένο";
         s.aoraton_keys = "Κλειδιά δωματίων";
@@ -602,6 +627,16 @@ const CompanionStrings& companion_en_us() noexcept {
         s.stt_unavailable_detail = "Speech recognition is not installed on this device.";
         s.mic_unavailable_detail = "The microphone is unavailable or not allowed.";
         s.tts_unavailable = "Voice is unavailable";
+        s.touch_unavailable = "Touch did not start. Press the centre key to speak.";
+        s.touch_back = "Touch works again";
+        s.large_text_title = "Large text";
+        s.weather_rain_now = "Raining now";
+        s.weather_rain_in_format = "Rain in %d min";
+        s.weather_rain_none = "No rain in the next hour";
+        s.weather_storm_near_format = "Storm nearby · %d km";
+        s.weather_alert_format = "Alert: %s";
+        s.weather_powered_xweather = "Powered by Vaisala Xweather";
+        s.large_text_detail = "Answers, messages and notes";
 
         s.clock_empty = "No timers or alarms";
         s.clock_empty_hint = "Say “set a timer for 10 minutes” or tap +";
@@ -627,6 +662,11 @@ const CompanionStrings& companion_en_us() noexcept {
         s.unit_hour = "hour";
         s.new_timer = "New timer";
         s.new_alarm = "New alarm";
+        s.alarm_sound = "Sound";
+        s.alarm_sound_title = "Alarm sound";
+        s.alarm_sound_melody = "Melody";
+        s.alarm_sound_no_favorites = "Add stations to the Radio's favourites to wake with them.";
+        s.alarm_sound_failed = "The sound did not change.";
         s.new_reminder = "New reminder";
         s.reminder_placeholder = "What should I remind you?";
         s.reminder_when = "When?";
@@ -743,6 +783,11 @@ const CompanionStrings& companion_en_us() noexcept {
         s.read_aloud = "Read aloud";
 
         s.phone_title = "Phone";
+        s.bluetooth_title = "Bluetooth";
+        s.bluetooth_off = "Off";
+        s.bluetooth_running = "On · for the phone";
+        s.bluetooth_auto = "Turns on only for the phone";
+        s.bluetooth_failed = "Bluetooth did not change.";
         s.phone_not_paired = "No phone connected";
         s.phone_pairing = "Pairing…";
         s.phone_connected = "Connected";
@@ -771,6 +816,10 @@ const CompanionStrings& companion_en_us() noexcept {
         s.system_voltage = "System voltage";
         s.chip_temperature = "Chip temperature";
         s.charge_stage_title = "Charging";
+        s.battery_life_title = "Battery life";
+        s.battery_life_on_power = "On power · measured on battery";
+        s.battery_life_measuring_format = "Measuring… %d min on battery";
+        s.battery_life_format = "About %d h %02d min left · %d.%d%%/h";
         s.charge_trickle = "Trickle charge";
         s.charge_precharge = "Pre-charge";
         s.charge_fast = "Fast charge";
@@ -910,7 +959,7 @@ const CompanionStrings& companion_en_us() noexcept {
         s.aoraton_sync_30 = "30 sec";
         s.aoraton_sync_60 = "1 minute";
         s.aoraton_sync_300 = "5 minutes";
-        s.aoraton_sync_note = "Realtime updates work independently of this periodic check.";
+        s.aoraton_sync_note = "Realtime brings messages at once. While it is unavailable, the device checks every minute.";
         s.aoraton_sync_failed = "Could not save this setting.";
         s.aoraton_room_locked = "Locked";
         s.aoraton_keys = "Room keys";

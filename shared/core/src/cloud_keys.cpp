@@ -34,13 +34,21 @@ bool cloud_keys_valid(const CloudKeys& keys) noexcept {
                           only(region, [](unsigned char ch) {
                               return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-';
                           });
-    return groq_ok && (no_azure || azure_ok);
+    const auto& xweather_id = keys.xweather_client_id;
+    const auto& xweather_secret = keys.xweather_client_secret;
+    const bool no_xweather = xweather_id.empty() && xweather_secret.empty();
+    const bool xweather_ok = xweather_id.size() >= 10 && xweather_id.size() <= 64 && only(xweather_id, letter_or_digit) &&
+                             xweather_secret.size() >= 20 && xweather_secret.size() <= 128 &&
+                             only(xweather_secret, letter_or_digit);
+    return groq_ok && (no_azure || azure_ok) && (no_xweather || xweather_ok);
 }
 
 void wipe_cloud_keys(CloudKeys& keys) noexcept {
     wipe(keys.groq_api_key);
     wipe(keys.azure_speech_key);
     wipe(keys.azure_speech_region);
+    wipe(keys.xweather_client_id);
+    wipe(keys.xweather_client_secret);
 }
 
 }  // namespace aura

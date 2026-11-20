@@ -1,5 +1,6 @@
 #pragma once
 
+#include "aura/xweather.hpp"
 #include "aura/assistant_companion.hpp"
 #include "aura/assistant_state.hpp"
 #include "aura/app_layout.hpp"
@@ -107,6 +108,11 @@ enum class UiView {
     Files,
     FileDetails,
     FileDelete,
+    // What an alarm wakes with: the melody or a radio favourite (2026-11-19).
+    AlarmSound,
+    // Αρχεία: a new name, and a look inside a picture or a text file.
+    FileRename,
+    FilePreview,
 };
 
 // Power actions from Settings > System. PowerOn comes from a long press on the
@@ -165,6 +171,11 @@ struct AuraUiCallbacks {
     std::function<bool(const std::string& path)> on_files_open;
     std::function<void()> on_files_refresh;
     std::function<bool(const std::string& path)> on_files_delete;
+    // A new name in the same folder; a look inside; an MP3 played through the
+    // radio's player (station file_station_id(path); on_radio_stop stops it).
+    std::function<bool(const std::string& path, const std::string& new_name)> on_files_rename;
+    std::function<bool(const std::string& path)> on_files_preview;
+    std::function<void(const std::string& path)> on_file_play;
     // Platform timezone conversion for the timestamp's date (including DST),
     // never the offset of today's clock applied to all historical messages.
     std::function<std::optional<LocalDateTime>(std::int64_t unix_seconds)> on_local_time;
@@ -260,6 +271,10 @@ struct AuraUiCallbacks {
     std::function<void(std::uint32_t uid, bool accept)> on_phone_call;
     std::function<void(std::uint32_t uid)> on_phone_dismiss;
     std::function<void()> on_phone_pair;
+    // An alarm's sound: a station, or none for the melody.
+    std::function<bool(std::uint32_t alarm_id, std::optional<AlarmStation> station)> on_alarm_station;
+    // The Bluetooth switch (Συνδέσεις): true when the platform took the choice.
+    std::function<bool(bool enabled)> on_bluetooth_changed;
     std::function<void()> on_phone_forget;
     std::function<void()> on_update_check;
     std::function<void()> on_update_install;
@@ -348,6 +363,12 @@ public:
     // executes the action; the user still has to press the confirm button.
     void show_system_confirmation(SystemAction action);
     void show_message(const char* text, bool error);
+    // False when the touch controller did not start: a notice above every
+    // screen says the centre key asks. True again once it answers.
+    void set_touch_available(bool available);
+    // Rain soon, a storm near, an alert (WeatherNoticeGate): a toast; the
+    // platform also chimes.
+    void show_weather_notice(const WeatherNotice& notice);
     void set_input_amplitude(float amplitude, bool simulated);
     void tick(std::uint32_t elapsed_ms);
     // How long the board's loop may sleep before the presence wants its next

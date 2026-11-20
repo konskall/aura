@@ -41,6 +41,8 @@ public:
 private:
     void run();
     void stream(const RadioStation& station, std::uint64_t generation);
+    // A card file (file:///sdcard/...): played once, to its end.
+    void stream_file(const std::string& path, std::uint64_t generation);
     std::string stream_once(const RadioStation& station, std::uint64_t generation, bool& heard_audio);
     bool current(std::uint64_t generation) const noexcept { return generation_.load() == generation; }
     void publish(RadioWorkerEvent event);

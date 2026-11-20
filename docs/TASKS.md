@@ -25,7 +25,7 @@
 - [ ] On the board: tune barge-in (no echo reference there) and check it never cuts an answer by itself.
 - [ ] The first flash (`docs/FIRST_FLASH.md`), its board checks, and the update signing key.
 - [ ] Build the AURA Link Android app and the device-side GATT server (`docs/phone/ANDROID_COMPANION.md`).
-- [ ] Train and license a Greek wake-word model for «Αύρα» (ESP-SR WakeNet, openWakeWord or microWakeWord); measure false accepts/rejects and battery cost before enabling the existing capability.
+- [ ] Train and license a Greek wake-word model for «Αύρα» (ESP-SR WakeNet, openWakeWord or microWakeWord); measure false accepts/rejects and battery cost before enabling the existing capability. Chosen 2026-11-19: microWakeWord, trained in Google Colab with `tools/wakeword/aura_avra_microwakeword.ipynb` (the owner runs it); still to build: the detector in the firmware (16 kHz microphone → micro_speech features → the streaming model).
 - [x] Signed updates in code (2026-11-05): the manifest carries the owner's ECDSA P-256 signature (`scripts/update-signing.mjs`); production adds Secure Boot V2.
 - [x] Updates are hosted on GitHub Releases (2026-11-11, the owner's choice; `releases/README.md`): the device's default source, redirects followed, `update-signing.mjs release`.
 - [ ] When the board is here: generate the owner's update signing key and put its public key in `sdkconfig.defaults`; then run the first update from a GitHub release on the board.

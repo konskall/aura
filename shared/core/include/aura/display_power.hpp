@@ -96,6 +96,8 @@ struct DisplaySettings {
     bool clock_24h{true};
     // The screen keeps its rotation instead of turning with the device.
     bool rotation_locked{false};
+    // Larger reading text: answers, messages, notes (2026-11-19).
+    bool large_text{false};
 };
 
 std::string serialize_display_settings(const DisplaySettings& settings);

@@ -10,6 +10,8 @@ function Import-AuraLocalEnv {
         AZURE_SPEECH_REGION = $true
         AZURE_SPEECH_ENDPOINT = $true
         AURA_GROQ_MODEL = $true
+        XWEATHER_CLIENT_ID = $true
+        XWEATHER_CLIENT_SECRET = $true
     }
     $lineNumber = 0
     foreach ($rawLine in Get-Content -LiteralPath $Path -Encoding UTF8) {

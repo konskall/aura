@@ -45,6 +45,7 @@ std::string serialize_display_settings(const DisplaySettings& settings) {
     text += std::string("battery_percent=") + (settings.battery_percent ? "1\n" : "0\n");
     text += std::string("clock_24h=") + (settings.clock_24h ? "1\n" : "0\n");
     text += std::string("rotation_locked=") + (settings.rotation_locked ? "1\n" : "0\n");
+    text += std::string("large_text=") + (settings.large_text ? "1\n" : "0\n");
     return text;
 }
 
@@ -63,7 +64,7 @@ DisplaySettings parse_display_settings(const std::string& data) {
             continue;
         }
         if (key == "always_on" || key == "raise_to_wake" || key == "flip_to_mute" || key == "battery_percent" ||
-            key == "clock_24h" || key == "rotation_locked") {
+            key == "clock_24h" || key == "rotation_locked" || key == "large_text") {
             if (value != "0" && value != "1") continue;
             const bool enabled = value == "1";
             if (key == "always_on") settings.always_on = enabled;
@@ -71,6 +72,7 @@ DisplaySettings parse_display_settings(const std::string& data) {
             else if (key == "flip_to_mute") settings.flip_to_mute = enabled;
             else if (key == "battery_percent") settings.battery_percent = enabled;
             else if (key == "rotation_locked") settings.rotation_locked = enabled;
+            else if (key == "large_text") settings.large_text = enabled;
             else settings.clock_24h = enabled;
             continue;
         }

@@ -10,6 +10,10 @@
     static constexpr std::size_t kFilesPerPage = 8;
 
     const l10n::FileStrings& fx() const { return l10n::file_strings(interface_language); }
+    // Rename's draft and field; the look's picture.
+    std::string file_rename_draft;
+    lv_obj_t* file_rename_area{};
+    lv_image_dsc_t file_preview_descriptor{};
 
     static void files_open_event(lv_event_t* event) {
         auto* self = self_of(event);
@@ -84,6 +88,50 @@
         } else {
             self->show_toast(self->p().bad_file, ui::tokens::coral);
         }
+    }
+
+    static void file_rename_open_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action() || file_path_protected(self->file_selected_path)) return;
+        self->file_rename_draft = self->file_selected.name;
+        self->navigate(UiView::FileRename);
+    }
+
+    static void file_rename_text_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->file_rename_area) return;
+        const char* typed = lv_textarea_get_text(self->file_rename_area);
+        self->file_rename_draft = typed ? typed : "";
+    }
+
+    static void file_rename_save_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action() || !self->callbacks.on_files_rename) return;
+        const auto name = sanitize_text(self->file_rename_draft, kMaxFileNameBytes);
+        if (name == self->file_selected.name) {
+            self->return_to(UiView::FileDetails);
+            return;
+        }
+        if (self->callbacks.on_files_rename(self->file_selected_path, name)) self->return_to(UiView::Files);
+        else self->show_toast(self->fx().rename_failed, ui::tokens::coral);
+    }
+
+    static void file_preview_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action() || !self->callbacks.on_files_preview) return;
+        self->callbacks.on_files_preview(self->file_selected_path);
+        self->navigate(UiView::FilePreview);
+    }
+
+    static void file_play_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        if (self->file_playing()) {
+            if (self->callbacks.on_radio_stop) self->callbacks.on_radio_stop();
+        } else if (self->callbacks.on_file_play) {
+            self->callbacks.on_file_play(self->file_selected_path);
+        }
+        self->render(UiView::FileDetails);
     }
 
     static void file_delete_event(lv_event_t* event) {
@@ -277,19 +325,76 @@
             list_row(list, y, fx().modified, stamp.c_str(), ui::IconRole::Clock, ui::tokens::indigo);
             y += kRowPitch;
         }
+        if (!file_path_protected(file_selected_path) && callbacks.on_files_rename) {
+            auto* rename = list_row(list, y, fx().rename, nullptr, ui::IconRole::Edit, ui::tokens::blue);
+            add_chevron(rename);
+            tappable(rename, file_rename_open_event);
+            y += kRowPitch;
+        }
         list_end(list, y);
         if (file_path_protected(file_selected_path)) {
             label(content, fx().device_file, kGutter + 8, kActionY + 8, kWidth - 16, ui::font_caption(),
                   ui::tokens::text_secondary, LV_TEXT_ALIGN_CENTER);
             return;
         }
+        // One action beside Delete: a photo opens, a picture or a text file shows
+        // what is inside, an MP3 plays (2026-11-19).
         const bool opens = selected_photo_index().has_value() && callbacks.on_photo_select;
-        if (opens) {
-            pill(content, fx().open, ui::ButtonTone::Primary, kGutter, kActionY, kHalfWidth, file_open_photo_event);
+        const auto kind = file_kind(file_selected.name, file_selected.folder);
+        const bool previews = !opens && !file_selected.folder && callbacks.on_files_preview &&
+                              (kind == FileKind::Image || file_text_previewable(file_selected.name));
+        const bool plays = !file_selected.folder && callbacks.on_file_play && file_playable(file_selected.name);
+        const char* primary = opens ? fx().open : previews ? fx().preview :
+                              plays ? (file_playing() ? fx().stop : fx().play) : nullptr;
+        if (primary) {
+            pill(content, primary, ui::ButtonTone::Primary, kGutter, kActionY, kHalfWidth,
+                 opens ? file_open_photo_event : previews ? file_preview_event : file_play_event);
         }
-        auto* remove = pill(content, fx().delete_item, ui::ButtonTone::Danger, opens ? kGutter + kHalfWidth + 16 : kGutter,
-                            kActionY, opens ? kHalfWidth : kWidth, file_delete_event);
+        auto* remove = pill(content, fx().delete_item, ui::ButtonTone::Danger, primary ? kGutter + kHalfWidth + 16 : kGutter,
+                            kActionY, primary ? kHalfWidth : kWidth, file_delete_event);
         ui::set_button_disabled(remove, !callbacks.on_files_delete || files.deleting);
+    }
+
+    // The card file the radio's player plays now, or is about to.
+    bool file_playing() const {
+        return radio.station.id == file_station_id(file_selected_path) &&
+               (radio.state == RadioState::Connecting || radio.state == RadioState::Playing);
+    }
+
+    void render_file_rename() {
+        make_header(fx().rename_title, ui::IconRole::Check, file_rename_save_event, ui::tokens::blue,
+                    static_cast<bool>(callbacks.on_files_rename));
+        file_rename_area = make_text_input(kGutter, 100, kWidth, 72, fx().rename_title, true);
+        lv_textarea_set_max_length(file_rename_area, 64);
+        lv_textarea_set_text(file_rename_area, file_rename_draft.c_str());
+        lv_obj_add_event_cb(file_rename_area, file_rename_text_event, LV_EVENT_VALUE_CHANGED, this);
+        lv_obj_add_event_cb(file_rename_area, file_rename_save_event, LV_EVENT_READY, this);
+        make_form_keyboard(file_rename_area, ui::KeyboardProfile::Text, 184);
+    }
+
+    void render_file_preview() {
+        make_header(file_selected.name.c_str());
+        if (files.demo) header_tag(t().demo, ui::tokens::amber);
+        const bool this_file = files.preview_path == file_selected_path;
+        if (!this_file || files.previewing) {
+            state_text(200, fx().preview_loading, nullptr);
+            return;
+        }
+        if (files.preview_error != FileBrowserError::None) {
+            state_symbol(112, 96, ui::IconRole::Warning, ui::tokens::amber);
+            state_text(232, fx().preview_failed, nullptr);
+            return;
+        }
+        if (files.preview_image) {
+            photo_image(content, *files.preview_image, file_preview_descriptor, 0, kHeader, ui::tokens::display_width,
+                        480 - kHeader);
+            return;
+        }
+        auto* list = make_list();
+        auto* words = label(list, files.preview_text.c_str(), kGutter + 4, 8, kWidth - 8, ui::font_reading(),
+                            ui::tokens::text, LV_TEXT_ALIGN_LEFT);
+        lv_obj_update_layout(words);
+        list_end(list, 16 + lv_obj_get_height(words));
     }
 
     void render_file_delete() {

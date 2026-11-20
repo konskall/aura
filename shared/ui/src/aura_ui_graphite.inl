@@ -310,7 +310,8 @@
             coolest = std::min(coolest, data.hourly[index].temperature_c);
             warmest = std::max(warmest, data.hourly[index].temperature_c);
         }
-        const int column = hourly_count > 0 ? kWidth / static_cast<int>(hourly_count) : kWidth;
+        const int column = weather_hour_column(hourly_count);
+        weather_hours_scroll(hours, hourly_count);
         for (std::size_t index = 0; index < hourly_count; ++index) {
             const auto& hour = data.hourly[index];
             auto* cell = lv_button_create(hours);
@@ -424,9 +425,9 @@
         lv_label_set_long_mode(weather_detail_label, LV_LABEL_LONG_DOT);
         lv_obj_set_height(weather_detail_label, detail_height);
         y += detail_height + 16;
-        if (data.provider == WeatherProvider::TlesDetector) {
+        if (weather_hazards_shown()) {
             weather_hazard_block(y);
-            y += 188;
+            y += weather_hazard_space();
         }
 
         // The days, one platter each; a tap describes the day above.

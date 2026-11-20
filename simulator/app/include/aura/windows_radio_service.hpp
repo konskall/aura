@@ -42,6 +42,8 @@ private:
     // Reads one chunk: > 0 bytes, 0 at the end of the stream, or a negative
     // value for a quiet stream (timeout) or a failure.
     using StreamReader = std::function<int(std::uint8_t* buffer, int size)>;
+    // A card file (file://<PC path>): played once, to its end.
+    void stream_file(const std::string& path, std::uint64_t generation);
 
     void run();
     void stream(const RadioStation& station, std::uint64_t generation);

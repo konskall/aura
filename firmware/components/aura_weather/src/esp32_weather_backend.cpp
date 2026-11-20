@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
 
+#include <ctime>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -242,7 +243,7 @@ WeatherFetchResult parse_payload(const std::string& json, const WeatherLocation&
     }
 
     const int hour_count = cJSON_GetArraySize(hours);
-    for (int index = 0; index < hour_count && data.hourly_count < kWeatherHourlyCapacity; index += 3) {
+    for (int index = 0; index < hour_count && data.hourly_count < kWeatherHourlyCapacity; ++index) {
         const auto* item = cJSON_GetArrayItem(hours, index);
         double value = 0.0;
         double hour_code = -1.0;
@@ -400,7 +401,7 @@ WeatherFetchResult parse_open_meteo_payload(const std::string& json,
                                     cJSON_GetArraySize(hourly_code)});
     int start = 0;
     while (start + 1 < available && array_text_at(hourly_time, start) < data.observed_at) ++start;
-    for (int index = start; index < available && data.hourly_count < kWeatherHourlyCapacity; index += 3) {
+    for (int index = start; index < available && data.hourly_count < kWeatherHourlyCapacity; ++index) {
         const auto time = array_text_at(hourly_time, index);
         double value = 0.0;
         double hour_code = -1.0;
@@ -613,6 +614,35 @@ bool Esp32WeatherBackend::request(const WeatherLocation& location) {
     return true;
 }
 
+bool Esp32WeatherBackend::request_xweather(const std::string& client_id, const std::string& client_secret,
+                                           const WeatherLocation& location, XweatherScheduler::Due due) {
+    bool expected = false;
+    if (!initialized_ || !result_mutex_ || !location.valid() || client_id.empty() || client_secret.empty() ||
+        !busy_.compare_exchange_strong(expected, true)) return false;
+    pending_operation_ = Operation::Xweather;
+    pending_location_ = location;
+    xweather_id_ = client_id;
+    xweather_secret_ = client_secret;
+    xweather_due_ = due;
+    if (xTaskCreateWithCaps(worker_entry, "aura-xweather", 8192, this, 4, nullptr,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        busy_ = false;
+        return false;
+    }
+    return true;
+}
+
+bool Esp32WeatherBackend::poll_xweather(XweatherNowcast& result) {
+    if (!result_mutex_ || xSemaphoreTake(result_mutex_, 0) != pdTRUE) return false;
+    const bool ready = completed_xweather_.has_value();
+    if (ready) {
+        result = std::move(*completed_xweather_);
+        completed_xweather_.reset();
+    }
+    xSemaphoreGive(result_mutex_);
+    return ready;
+}
+
 bool Esp32WeatherBackend::request_search(std::string query, InterfaceLanguage language) {
     if (!result_mutex_ || query.size() < 2 || query.size() > 96 ||
         std::any_of(query.begin(), query.end(), [](unsigned char ch) { return ch < 0x20 || ch == 0x7F; })) {
@@ -640,7 +670,27 @@ bool Esp32WeatherBackend::request_search(std::string query, InterfaceLanguage la
 
 void Esp32WeatherBackend::worker_entry(void* context) {
     auto* self = static_cast<Esp32WeatherBackend*>(context);
-    if (self->pending_operation_ == Operation::Search) {
+    if (self->pending_operation_ == Operation::Xweather) {
+        XweatherNowcast now;
+        const auto get = [self](const std::string& path) {
+            ResponseBuffer response;
+            int status = 0;
+            const bool ok = get_json(xweather_url(path, self->xweather_id_, self->xweather_secret_), response, status);
+            return ok && status == 200 ? response.body : std::string{};
+        };
+        const auto& location = self->pending_location_;
+        const auto due = self->xweather_due_;
+        if (due.rain) parse_xweather_minutely(get(xweather_minutely_path(location.latitude, location.longitude)), now);
+        if (due.alerts) parse_xweather_alerts(get(xweather_alerts_path(location.latitude, location.longitude)), now);
+        if (due.lightning) {
+            parse_xweather_lightning(get(xweather_lightning_path(location.latitude, location.longitude)),
+                                     static_cast<std::int64_t>(std::time(nullptr)), now);
+        }
+        if (xSemaphoreTake(self->result_mutex_, portMAX_DELAY) == pdTRUE) {
+            self->completed_xweather_ = std::move(now);
+            xSemaphoreGive(self->result_mutex_);
+        }
+    } else if (self->pending_operation_ == Operation::Search) {
         auto result = self->search(self->pending_query_, self->pending_language_);
         if (xSemaphoreTake(self->result_mutex_, portMAX_DELAY) == pdTRUE) {
             self->completed_search_ = std::move(result);

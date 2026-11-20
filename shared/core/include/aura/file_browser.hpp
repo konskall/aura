@@ -1,8 +1,11 @@
 #pragma once
 
+#include "aura/photos.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -19,11 +22,13 @@ namespace aura {
 constexpr std::size_t kMaxFileEntries = 200;
 constexpr std::size_t kMaxFilePathBytes = 240;
 constexpr std::size_t kMaxFileNameBytes = 128;
+// A text file's look: its first bytes, whole characters only.
+constexpr std::size_t kMaxFilePreviewTextBytes = 4096;
 // A folder deleted with what it holds: the worker stops after this many files.
 constexpr std::size_t kMaxFileEraseEntries = 4096;
 constexpr std::size_t kMaxFileEraseDepth = 12;
 
-enum class FileBrowserError { None, NoCard, NotFound, Read, Delete, Protected, Busy };
+enum class FileBrowserError { None, NoCard, NotFound, Read, Delete, Protected, Busy, Rename, Unsupported };
 enum class FileKind { Folder, Image, Audio, Document, Other };
 
 struct FileEntry {
@@ -40,6 +45,12 @@ std::string file_path_join(std::string_view folder, std::string_view name);
 std::string file_path_parent(std::string_view path);
 std::string_view file_path_leaf(std::string_view path) noexcept;
 FileKind file_kind(std::string_view name, bool folder) noexcept;
+// Plain text the Αρχεία app can show: .txt, .md, .csv, .json, .log, .ini, .srt.
+bool file_text_previewable(std::string_view name) noexcept;
+// What the card's player plays: MP3 (the radio's decoder).
+bool file_playable(std::string_view name) noexcept;
+// The radio station that plays a card file: id "file:<path>".
+inline std::string file_station_id(std::string_view path) { return "file:" + std::string(path); }
 // The device's own files, which the Αρχεία app shows but never deletes: its
 // folder and everything in it, except what is in the photos and files folders.
 bool file_path_protected(std::string_view path) noexcept;
@@ -56,20 +67,29 @@ struct FileBrowserSnapshot {
     bool truncated{false};           // the folder holds more than is listed
     bool loading{false};
     bool deleting{false};
+    bool renaming{false};
     FileBrowserError error{FileBrowserError::None};
     bool space_known{false};
     std::uint64_t total_bytes{0};
     std::uint64_t free_bytes{0};
     bool demo{false};
     std::uint64_t erased{0};  // how many deletions finished: photos may be gone
+    std::uint64_t renamed{0};  // how many renames finished
+    // A look inside one file: a decoded picture or a text file's first lines.
+    bool previewing{false};
+    std::string preview_path;
+    std::shared_ptr<const PhotoImage> preview_image;
+    std::string preview_text;
+    FileBrowserError preview_error{FileBrowserError::None};
     std::uint64_t sequence{0};
 };
 
-enum class FileJobKind { List, Erase };
+enum class FileJobKind { List, Erase, Rename, Preview };
 struct FileJob {
     FileJobKind kind{FileJobKind::List};
     std::uint64_t generation{0};
     std::string path;
+    std::string new_name;  // Rename: in the same folder
 };
 struct FileResult {
     FileJobKind kind{FileJobKind::List};
@@ -81,6 +101,8 @@ struct FileResult {
     bool space_known{false};
     std::uint64_t total_bytes{0};
     std::uint64_t free_bytes{0};
+    std::shared_ptr<const PhotoImage> image;  // Preview of a picture
+    std::string text;                         // Preview of a text file
 };
 
 class FileMailbox {
@@ -104,6 +126,10 @@ public:
     virtual FileBrowserError list(const std::string& path, std::vector<FileEntry>& entries, bool& truncated) = 0;
     // A file, or a folder with everything in it.
     virtual FileBrowserError erase(const std::string& path) = 0;
+    // The file or folder at `path` takes `new_name` in the same folder; never over another.
+    virtual FileBrowserError rename(const std::string& path, const std::string& new_name) = 0;
+    // Up to `max_bytes` from the start of a file.
+    virtual FileBrowserError read(const std::string& path, std::size_t max_bytes, std::vector<std::uint8_t>& bytes) = 0;
     virtual bool space(std::uint64_t& total_bytes, std::uint64_t& free_bytes) = 0;
 };
 
@@ -131,6 +157,11 @@ public:
     void unavailable(FileBrowserError error);
     // Exactly this path, after the owner's confirmation; a protected one is refused.
     bool erase(const std::string& path);
+    // A new name in the same folder, for what the owner put there; one at a time.
+    bool rename(const std::string& path, const std::string& new_name);
+    // A look inside: a picture or a text file (file_text_previewable); any other
+    // kind says Unsupported at once.
+    bool preview(const std::string& path);
     void poll();
     void seed_demo();
 
@@ -138,6 +169,7 @@ private:
     void changed() noexcept { ++snapshot_.sequence; }
     FileMailbox& mailbox_;
     FileBrowserSnapshot snapshot_{};
+    std::uint64_t preview_generation_{0};
     std::uint64_t generation_{0};
 };
 

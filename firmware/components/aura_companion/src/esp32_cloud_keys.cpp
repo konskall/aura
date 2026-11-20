@@ -42,6 +42,8 @@ CloudKeys Esp32CloudKeyStore::load() const {
         keys.groq_api_key = read_key(handle, "groq");
         keys.azure_speech_key = read_key(handle, "azure");
         keys.azure_speech_region = read_key(handle, "region");
+        keys.xweather_client_id = read_key(handle, "xw_id");
+        keys.xweather_client_secret = read_key(handle, "xw_secret");
         nvs_close(handle);
         return true;
     });
@@ -56,7 +58,9 @@ bool Esp32CloudKeyStore::store(const CloudKeys& keys) {
         if (nvs_open(kNamespace, NVS_READWRITE, &handle) != ESP_OK) return false;
         const bool written = write_key(handle, "groq", keys.groq_api_key) &&
                              write_key(handle, "azure", keys.azure_speech_key) &&
-                             write_key(handle, "region", keys.azure_speech_region) && nvs_commit(handle) == ESP_OK;
+                             write_key(handle, "region", keys.azure_speech_region) &&
+                             write_key(handle, "xw_id", keys.xweather_client_id) &&
+                             write_key(handle, "xw_secret", keys.xweather_client_secret) && nvs_commit(handle) == ESP_OK;
         nvs_close(handle);
         return written;
     });

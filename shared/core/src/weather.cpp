@@ -1,4 +1,5 @@
 #include "aura/weather.hpp"
+#include "aura/xweather.hpp"
 
 #include "aura/text_util.hpp"
 
@@ -118,7 +119,12 @@ bool WeatherData::valid() const noexcept {
           hazards.max_flashes_per_5_min < 0 || hazards.max_flashes_per_5_min > 100000)) ||
         (hazards.xweather_available &&
          (hazards.positive_cg_count < 0 || hazards.positive_cg_count > 1000000 ||
-          hazards.max_positive_ka < 0 || hazards.max_positive_ka > 10000))) return false;
+          hazards.max_positive_ka < 0 || hazards.max_positive_ka > 10000)) ||
+        (hazards.nowcast_available &&
+         (hazards.rain_in_minutes < -1 || hazards.rain_in_minutes > 60 || hazards.rain_minutes < 0 ||
+          hazards.rain_minutes > 60 || !std::isfinite(hazards.rain_peak_mm_h) || hazards.rain_peak_mm_h < 0.0F ||
+          hazards.rain_peak_mm_h > 500.0F)) ||
+        hazards.alert_name.size() > 96) return false;
     for (std::size_t index = 0; index < hourly_count; ++index) {
         if (hourly[index].time.size() > 32 || !std::isfinite(hourly[index].temperature_c) ||
             hourly[index].weather_code < -1 || hourly[index].weather_code > 99 ||
@@ -197,6 +203,16 @@ bool WeatherModel::begin_fetch(const WeatherLocation& location, bool save_as_def
     snapshot_.error_code.clear();
     snapshot_.notice_code.clear();
     snapshot_.suggestion_count = 0;
+    ++snapshot_.sequence;
+    return true;
+}
+
+bool WeatherModel::apply_xweather(const XweatherNowcast& now) {
+    if (!snapshot_.has_data) return false;
+    WeatherData merged = snapshot_.data;
+    aura::apply_xweather(merged, now);
+    if (!merged.valid()) return false;
+    snapshot_.data = std::move(merged);
     ++snapshot_.sequence;
     return true;
 }

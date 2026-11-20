@@ -41,6 +41,8 @@ public:
     static constexpr std::size_t kMaxDownloadBytes = 4 * 1024 * 1024 + 64;
     ~Esp32AoratonHttp() override;
     AoratonHttpResponse send(const AoratonHttpRequest& request) override;
+    // Whether the Wi-Fi station has an address (IPv4, or a global IPv6 one).
+    bool network_available() const override;
 
 private:
     // One exchange on the kept connection (`reuse`) or a new one;

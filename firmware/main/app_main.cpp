@@ -36,6 +36,10 @@
 #include "esp_pthread.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "aura/battery_history.hpp"
+#include "aura/alarm_station.hpp"
+#include "aura/file_browser.hpp"
+#include "aura/xweather.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
@@ -660,6 +664,15 @@ extern "C" void app_main(void) {
         if (radio) {
             callbacks.on_radio_play = play_radio;
             callbacks.on_radio_stop = stop_radio;
+            // Αρχεία's Play: a card MP3 through the radio's player (2026-11-19).
+            callbacks.on_file_play = [](const std::string& path) {
+                if (!aura::file_path_valid(path) || !aura::file_playable(aura::file_path_leaf(path))) return;
+                aura::RadioStation station;
+                station.id = aura::file_station_id(path);
+                station.name = std::string(aura::file_path_leaf(path));
+                station.url = "file:///sdcard/" + path;
+                play_radio(station);
+            };
             callbacks.on_radio_search = [](const std::string& query) {
                 radio_model.begin_search(query);
                 if (!radio->search(query)) radio_model.search_finished({}, "RADIO_BUSY");
@@ -731,6 +744,14 @@ extern "C" void app_main(void) {
         ui.set_appearance(companion.appearance());
         ui.set_aoraton_sign_in_relay(true);
         ui.create(display, std::move(callbacks));
+        // Without touch (F-4 of 2026-11-19) AURA runs on: a notice above every
+        // screen, the centre key asks, and the loop asks the touch again.
+        companion.set_key_ask([] { start_listening(false); });
+        if (!aura_board_touch_ready()) {
+            ESP_LOGW(kTag, "No touch: the centre key asks, and the touch is asked again");
+            ui.set_touch_available(false);
+            companion.set_touch_available(false);
+        }
         // Διαγνωστικά shows the board's measurements, never the simulator's.
         ui.set_device_metrics(companion_strings(companion.language()).diagnostics_device_waiting);
         companion.apply(ui);
@@ -866,6 +887,13 @@ extern "C" void app_main(void) {
     std::string aoraton_city;
     std::shared_ptr<const aura::PcmClip> voice_message_playing;
 
+    // The touch controller's tries after the start (F-4 of 2026-11-19).
+    constexpr int kTouchTries = 12;
+    constexpr std::int64_t kTouchRetryMs = 5000;
+    bool touch_running = aura_board_touch_ready();
+    int touch_tries = 0;
+    std::int64_t touch_tried_ms = esp_timer_get_time() / 1000;
+
     esp_pm_lock_handle_t full_speed = start_power_management();
     std::uint32_t metrics_ms = 0;
     std::uint64_t presence_frames = 0;
@@ -908,7 +936,8 @@ extern "C" void app_main(void) {
                 aura::RadioWorkerEvent event;
                 while (radio->poll(event)) {
                     if (event.generation != radio_generation) continue;
-                    if (event.type == aura::RadioWorkerEventType::Playing) radio_model.set_playing();
+                    if (event.type == aura::RadioWorkerEventType::Ended) radio_model.stop();
+                    else if (event.type == aura::RadioWorkerEventType::Playing) radio_model.set_playing();
                     else if (event.type == aura::RadioWorkerEventType::Title) radio_model.set_title(event.text);
                     else if (event.type == aura::RadioWorkerEventType::Reconnecting)
                         radio_model.begin_connect(radio_model.snapshot().station);
@@ -922,6 +951,20 @@ extern "C" void app_main(void) {
                     radio_changed = true;
                 }
                 if (radio_changed) ui.apply_radio(radio_model.snapshot());
+                // An alarm that wakes with a station (the owner, 2026-11-19).
+                static aura::AlarmStationPlayer alarm_station;
+                const auto wake = alarm_station.step(companion.clock().snapshot().alert, radio_model.snapshot().state,
+                                                     audio.diagnostics().muted,
+                                                     static_cast<std::uint64_t>(esp_timer_get_time() / 1000));
+                if (wake.start_station) {
+                    aura::RadioStation station;
+                    station.id = wake.station.id;
+                    station.name = wake.station.name;
+                    station.url = wake.station.url;
+                    play_radio(station);
+                }
+                if (wake.stop_station) stop_radio();
+                companion.set_alarm_melody_allowed(wake.melody);
                 if (const bool hold = companion.microphone_active(); hold != radio_held) {
                     radio_held = hold;
                     radio->set_hold(hold);
@@ -986,6 +1029,68 @@ extern "C" void app_main(void) {
                     assistant.turn->stop_speaking();
                     audio.stop();
                     start_listening(true);
+                }
+            }
+            // Xweather (2026-11-19): with the keys the PC sent, its rain, alerts and
+            // lightning; what arrived goes back in after each forecast refresh.
+            {
+                static aura::XweatherScheduler xweather_schedule;
+                static aura::WeatherNoticeGate weather_notices;
+                static aura::XweatherNowcast xweather_last;
+                static std::uint32_t xweather_keys_generation = 0;
+                static std::string xweather_id;
+                static std::string xweather_secret;
+                if (xweather_keys_generation != cloud_keys.generation() || xweather_keys_generation == 0) {
+                    xweather_keys_generation = cloud_keys.generation() == 0 ? 1 : cloud_keys.generation();
+                    auto keys = cloud_keys.load();
+                    xweather_id = keys.xweather_client_id;
+                    xweather_secret = keys.xweather_client_secret;
+                    aura::wipe_cloud_keys(keys);
+                }
+                const auto& sky = weather.snapshot();
+                if (!xweather_id.empty() && sky.has_data && !sky.data.hazards.xweather_available &&
+                    (xweather_last.rain_ok || xweather_last.alerts_ok || xweather_last.lightning_ok)) {
+                    weather.apply_xweather(xweather_last);
+                }
+                aura::XweatherNowcast arrived;
+                if (weather_backend.poll_xweather(arrived)) {
+                    if (arrived.rain_ok) {
+                        xweather_last.rain_ok = true;
+                        xweather_last.rain_in_minutes = arrived.rain_in_minutes;
+                        xweather_last.rain_minutes = arrived.rain_minutes;
+                        xweather_last.rain_peak_mm_h = arrived.rain_peak_mm_h;
+                    }
+                    if (arrived.alerts_ok) {
+                        xweather_last.alerts_ok = true;
+                        xweather_last.alert_count = arrived.alert_count;
+                        xweather_last.highest = arrived.highest;
+                        xweather_last.alert_name = arrived.alert_name;
+                    }
+                    if (arrived.lightning_ok) {
+                        xweather_last.lightning_ok = true;
+                        xweather_last.lightning_near = arrived.lightning_near;
+                        xweather_last.lightning_km = arrived.lightning_km;
+                        xweather_last.lightning_age_minutes = arrived.lightning_age_minutes;
+                        xweather_last.lightning_bearing_deg = arrived.lightning_bearing_deg;
+                    }
+                    ESP_LOGI(kTag, "xweather: rain %d min, %d alerts, lightning %s", arrived.rain_in_minutes,
+                             arrived.alert_count, arrived.lightning_near ? "near" : "none");
+                    if (weather.apply_xweather(xweather_last)) {
+                        const auto minute = static_cast<std::int64_t>(std::time(nullptr) / 60);
+                        if (const auto notice = weather_notices.observe(weather.snapshot().data.hazards, minute)) {
+                            ui.show_weather_notice(*notice);
+                            companion.notice_chime();
+                        }
+                    }
+                } else if (!xweather_id.empty() && network_started && network.connected() && sky.has_data &&
+                           sky.data.location.valid()) {
+                    const auto now_ms = static_cast<std::uint64_t>(esp_timer_get_time() / 1000);
+                    static aura::XweatherScheduler::Due waiting{};
+                    if (!waiting.alerts && !waiting.rain && !waiting.lightning) waiting = xweather_schedule.due(sky.data, now_ms);
+                    if ((waiting.alerts || waiting.rain || waiting.lightning) &&
+                        weather_backend.request_xweather(xweather_id, xweather_secret, sky.data.location, waiting)) {
+                        waiting = {};
+                    }
                 }
             }
             aura::WeatherFetchResult weather_result;
@@ -1082,6 +1187,29 @@ extern "C" void app_main(void) {
                     details.rated_mah = aura_board::battery_rated_mah;
                     details.origin = aura::StatusOrigin::Live;
                 }
+                // How long the battery lasts (the owner, 2026-11-19): a sample each
+                // five minutes to battery-log.csv, and the estimate on battery.
+                if (reading && reading->battery_present && reading->percent) {
+                    static aura::BatteryHistory battery_history;
+                    aura::BatterySample sample;
+                    sample.at_ms = static_cast<std::uint64_t>(esp_timer_get_time() / 1000);
+                    const std::time_t unix_now = std::time(nullptr);
+                    sample.unix_seconds = unix_now > 1700000000 ? static_cast<std::int64_t>(unix_now) : 0;
+                    sample.percent = *reading->percent;
+                    sample.battery_mv = reading->battery_mv;
+                    sample.external_power = reading->external_power;
+                    sample.charging = reading->charging;
+                    sample.screen_on = aura::needs_full_speed(companion.display_mode());
+                    sample.bluetooth_on = companion.phone().snapshot().bluetooth_on;
+                    sample.wifi_on = network_started && network.connected();
+                    if (battery_history.add(sample)) companion.save_battery_log(battery_history.csv());
+                    details.minutes_on_battery = battery_history.minutes_on_battery();
+                    if (const auto left = battery_history.minutes_left()) {
+                        details.minutes_left = *left;
+                        details.drain_tenths_per_hour = static_cast<int>(
+                            *battery_history.drain_percent_per_hour() * 10.0F + 0.5F);
+                    }
+                }
                 device_status.set_battery_details(details);
             }
             // A new network time goes to the board clock, in UTC.
@@ -1169,6 +1297,24 @@ extern "C" void app_main(void) {
         // New aoraton settings from the PC restart the account, outside the
         // display lock: stopping waits for a request in flight.
         if (aoraton_config_changed.exchange(false)) start_aoraton();
+        // A touch controller that did not answer at the start is asked again
+        // every 5 s for a minute, outside the display lock (the retry takes it).
+        if (!touch_running && touch_tries < kTouchTries) {
+            const std::int64_t now_ms = esp_timer_get_time() / 1000;
+            if (now_ms - touch_tried_ms >= kTouchRetryMs) {
+                touch_tried_ms = now_ms;
+                ++touch_tries;
+                if (aura_board_touch_retry()) {
+                    touch_running = true;
+                    ESP_LOGI(kTag, "Touch answered on try %d", touch_tries);
+                    if (aura_board_display_lock(-1)) {
+                        ui.set_touch_available(true);
+                        companion.set_touch_available(true);
+                        aura_board_display_unlock();
+                    }
+                }
+            }
+        }
         // A dark screen lets the loop slow down and the processor drop its clock.
         const aura::DisplayMode mode = companion.display_mode();
         if (full_speed && aura::needs_full_speed(mode) != at_full_speed) {

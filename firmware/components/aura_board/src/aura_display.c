@@ -34,6 +34,7 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_touch.h"
+#include "esp_lcd_touch_cst9217.h"
 #include "esp_lv_adapter.h"
 #include "bsp/esp32_s3_touch_amoled_2_16.h"
 #include "bsp/display.h"
@@ -235,6 +236,66 @@ static void rotated_touch_read(lv_indev_t* indev, lv_indev_data_t* data) {
     data->point.y = y;
 }
 
+// The touch controller, as the BSP's bsp_touch_new() starts it, but its I2C
+// channel is made once and kept: a controller that does not answer at the
+// start is asked again later (aura_board_touch_retry) without a new channel
+// each time. AURA stopped with no screen when it did not answer (F-4 of
+// 2026-11-19). Its reset is GPIO40, apart from the panel's GPIO39, so asking
+// again never resets the panel.
+static lv_display_t* s_display = NULL;
+static esp_lcd_panel_io_handle_t s_touch_io = NULL;
+static bool s_touch_ready = false;
+static unsigned s_touch_swap_xy = 0;
+static unsigned s_touch_mirror_x = 0;
+static unsigned s_touch_mirror_y = 0;
+
+static bool start_touch(void) {
+    if (s_touch_ready) return true;
+    if (s_display == NULL) return false;
+    if (s_touch_io == NULL) {
+        if (bsp_i2c_init() != ESP_OK) return false;
+        esp_lcd_panel_io_i2c_config_t io_config = ESP_LCD_TOUCH_IO_I2C_CST9217_CONFIG();
+        io_config.scl_speed_hz = CONFIG_BSP_I2C_CLK_SPEED_HZ;
+        if (esp_lcd_new_panel_io_i2c(bsp_i2c_get_handle(), &io_config, &s_touch_io) != ESP_OK) {
+            s_touch_io = NULL;
+            return false;
+        }
+    }
+    const esp_lcd_touch_config_t touch_config = {
+        .x_max = BSP_LCD_H_RES,
+        .y_max = BSP_LCD_V_RES,
+        .rst_gpio_num = BSP_LCD_TOUCH_RST,
+        .int_gpio_num = BSP_LCD_TOUCH_INT,
+        .levels = {.reset = 0, .interrupt = 0},
+        .flags = {.swap_xy = s_touch_swap_xy, .mirror_x = s_touch_mirror_x, .mirror_y = s_touch_mirror_y},
+    };
+    esp_lcd_touch_handle_t touch = NULL;
+    if (esp_lcd_touch_new_i2c_cst9217(s_touch_io, &touch_config, &touch) != ESP_OK || touch == NULL) return false;
+    esp_lv_adapter_touch_config_t touch_cfg = ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(s_display, touch);
+    touch_cfg.callbacks.custom_touch_read = read_two_fingers;
+    lv_indev_t* touch_input = esp_lv_adapter_register_touch(&touch_cfg);
+    if (touch_input == NULL) {
+        esp_lcd_touch_del(touch);
+        return false;
+    }
+    // Touches reach LVGL through the rotation (aura_board_display_set_rotation).
+    s_touch_read = lv_indev_get_read_cb(touch_input);
+    if (s_touch_read != NULL) lv_indev_set_read_cb(touch_input, rotated_touch_read);
+    s_touch_ready = true;
+    return true;
+}
+
+bool aura_board_touch_ready(void) { return s_touch_ready; }
+
+bool aura_board_touch_retry(void) {
+    if (s_touch_ready) return true;
+    if (!aura_board_display_lock(-1)) return false;
+    const bool ready = start_touch();
+    aura_board_display_unlock();
+    if (ready) ESP_LOGI(TAG, "the touch controller answered");
+    return ready;
+}
+
 void aura_board_display_set_rotation(int rotation) {
     if (s_panel_io == NULL || rotation < 0 || rotation > 3 || rotation == s_rotation) return;
     const uint8_t madctl = kMadctl[rotation];
@@ -350,15 +411,11 @@ lv_display_t* aura_board_display_start(int draw_rows) {
         }
     }
 
-    esp_lcd_touch_handle_t touch = NULL;
-    if (bsp_touch_new(&cfg, &touch) != ESP_OK || touch == NULL) return NULL;
-    esp_lv_adapter_touch_config_t touch_cfg = ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(display, touch);
-    touch_cfg.callbacks.custom_touch_read = read_two_fingers;
-    lv_indev_t* touch_input = esp_lv_adapter_register_touch(&touch_cfg);
-    if (touch_input == NULL) return NULL;
-    // Touches reach LVGL through the rotation (aura_board_display_set_rotation).
-    s_touch_read = lv_indev_get_read_cb(touch_input);
-    if (s_touch_read != NULL) lv_indev_set_read_cb(touch_input, rotated_touch_read);
+    s_display = display;
+    s_touch_swap_xy = cfg.touch_flags.swap_xy;
+    s_touch_mirror_x = cfg.touch_flags.mirror_x;
+    s_touch_mirror_y = cfg.touch_flags.mirror_y;
+    if (!start_touch()) ESP_LOGW(TAG, "the touch controller did not answer: AURA starts without it");
     s_panel_io = io;
     s_panel = panel;
 

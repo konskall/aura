@@ -406,13 +406,21 @@ TransferResponse TransferProtocol::store_keys(const TransferRequest& r, ITransfe
     const auto json = parse_flat_json(body, 1024);
     wipe(body);
     CloudKeys keys;
-    if (json && json->size() == 3) {
+    // The three as before, or five with Xweather's two.
+    const bool with_xweather = json && json->size() == 5 && json->string("xweather_client_id") &&
+                               json->string("xweather_client_secret");
+    if (json && (json->size() == 3 || with_xweather)) {
         keys.groq_api_key = json->string("groq_api_key").value_or("");
         keys.azure_speech_key = json->string("azure_speech_key").value_or("");
         keys.azure_speech_region = json->string("azure_speech_region").value_or("");
+        if (with_xweather) {
+            keys.xweather_client_id = json->string("xweather_client_id").value_or("");
+            keys.xweather_client_secret = json->string("xweather_client_secret").value_or("");
+        }
     }
-    const bool valid = json && json->size() == 3 && json->string("groq_api_key") && json->string("azure_speech_key") &&
-                       json->string("azure_speech_region") && cloud_keys_valid(keys);
+    const bool valid = json && (json->size() == 3 || with_xweather) && json->string("groq_api_key") &&
+                       json->string("azure_speech_key") && json->string("azure_speech_region") &&
+                       cloud_keys_valid(keys);
     if (!valid || !session_.valid(ticket, clock_())) {
         wipe_cloud_keys(keys);
         return error_response(400, TransferError::Name);

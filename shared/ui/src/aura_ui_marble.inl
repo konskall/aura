@@ -102,14 +102,20 @@
 
         // The hours: time, condition and serif temperature; a tap describes the hour below.
         const std::size_t hourly_count = std::min<std::size_t>(data.hourly_count, weather_hour_cards.size());
-        const int column = hourly_count > 0 ? kWidth / static_cast<int>(hourly_count) : kWidth;
+        const int column = weather_hour_column(hourly_count);
+        // Their own row, which scrolls sideways past six hours.
+        auto* hours = lv_obj_create(weather_scroll);
+        ui::reset(hours);
+        lv_obj_set_pos(hours, kGutter, 134);
+        lv_obj_set_size(hours, kWidth, 116);
+        weather_hours_scroll(hours, hourly_count);
         for (std::size_t index = 0; index < hourly_count; ++index) {
             const auto& hour = data.hourly[index];
-            auto* cell = lv_button_create(weather_scroll);
+            auto* cell = lv_button_create(hours);
             ui::reset(cell);
             lv_obj_set_clickable(cell, true);
             lv_obj_set_size(cell, column, 116);
-            lv_obj_set_pos(cell, kGutter + static_cast<int>(index) * column, 134);
+            lv_obj_set_pos(cell, static_cast<int>(index) * column, 0);
             lv_obj_set_style_radius(cell, ui::tokens::radius_medium, 0);
             lv_obj_set_style_bg_color(cell, ui::color(ui::tokens::surface_high), LV_STATE_PRESSED);
             lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
@@ -163,9 +169,9 @@
         lv_obj_set_height(weather_detail_label, detail_height);
         y += detail_height + 16;
 
-        if (data.provider == WeatherProvider::TlesDetector) {
+        if (weather_hazards_shown()) {
             weather_hazard_block(y);
-            y += 188;
+            y += weather_hazard_space();
         }
 
         // The days: name, condition and the serif range; a tap describes the day above.

@@ -12,6 +12,9 @@ struct CloudKeys {
     std::string groq_api_key;
     std::string azure_speech_key;
     std::string azure_speech_region;
+    // Xweather (2026-11-19): the weather's rain, alerts and lightning; both or none.
+    std::string xweather_client_id;
+    std::string xweather_client_secret;
 };
 
 // Whether the keys look like Groq's ("gsk_...") and Azure's (32 to 128 letters

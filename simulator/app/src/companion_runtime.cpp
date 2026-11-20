@@ -337,6 +337,9 @@ void CompanionRuntime::install(AuraUiCallbacks& callbacks) {
     };
     callbacks.on_alarm_enable = [this](std::uint32_t id, bool enabled) { clock_.set_alarm_enabled(id, enabled); };
     callbacks.on_alarm_remove = [this](std::uint32_t id) { clock_.remove_alarm(id); };
+    callbacks.on_alarm_station = [this](std::uint32_t id, std::optional<AlarmStation> station) {
+        return clock_.set_alarm_station(id, std::move(station)) == ClockResult::Ok;
+    };
     callbacks.on_reminder_add = [this](std::int64_t due, const std::string& text) {
         return clock_.add_reminder_at(due, text) == ClockResult::Ok;
     };
@@ -376,6 +379,10 @@ void CompanionRuntime::install(AuraUiCallbacks& callbacks) {
     callbacks.on_files_open = [this](const std::string& path) { return files().open(path); };
     callbacks.on_files_refresh = [this] { files().refresh(); };
     callbacks.on_files_delete = [this](const std::string& path) { return files().erase(path); };
+    callbacks.on_files_rename = [this](const std::string& path, const std::string& name) {
+        return files().rename(path, name);
+    };
+    callbacks.on_files_preview = [this](const std::string& path) { return files().preview(path); };
     callbacks.on_transfer_start = [this] { return transfer().start(); };
     callbacks.on_transfer_stop = [this] { transfer().stop(); };
     callbacks.on_transfer_browser = [this] { transfer().open_browser(); };
@@ -396,7 +403,14 @@ void CompanionRuntime::install(AuraUiCallbacks& callbacks) {
         if (ctx_.on_phone_action) ctx_.on_phone_action(uid, false);
         phone_.remove(uid);
     };
+    callbacks.on_bluetooth_changed = [this](bool enabled) {
+        bluetooth_.enabled = enabled;
+        update_bluetooth();
+        return true;
+    };
     callbacks.on_phone_pair = [this] {
+        // Pairing needs the radio: it turns the switch on.
+        bluetooth_.enabled = true;
         if (ctx_.on_phone_pair) {
             phone_.set_link(PhoneLinkState::Pairing, PhonePlatform::Unknown, {});
             ctx_.on_phone_pair();
@@ -1133,7 +1147,7 @@ void CompanionRuntime::poll(std::uint32_t elapsed_ms) {
         was_dark_ = dark;
         // The alert rings until it is handled, a little louder each pass and
         // through mute; face down silences it.
-        if (const auto* pass = alarm_ringer_.next(clock_.snapshot().alert.has_value(),
+        if (const auto* pass = alarm_ringer_.next(clock_.snapshot().alert.has_value() && alarm_melody_allowed_,
                                                   display_.snapshot().muted_by_flip,
                                                   audio_state == AudioState::Playing, now)) {
             ctx_.audio->play_alert(*pass);
@@ -1190,6 +1204,7 @@ void CompanionRuntime::apply() {
     ui.apply_notes(notes_.snapshot());
     ui.apply_organizer(organizer_.snapshot());
     ui.apply_voice(voice_);
+    update_bluetooth();
     ui.apply_phone(phone_.snapshot());
     ui.apply_update(ota_.snapshot());
     ui.apply_assistant_extras(extras_);
@@ -1255,6 +1270,9 @@ void CompanionRuntime::factory_reset() {
     pair_ready_ms_ = 0;
     phone_.set_link(PhoneLinkState::NotPaired, PhonePlatform::Unknown, {});
     for (const auto& item : std::vector<PhoneNotification>(phone_.snapshot().notifications)) phone_.remove(item.uid);
+    bluetooth_ = BluetoothSettings{};
+    saved_bluetooth_text_ = serialize_bluetooth_settings(bluetooth_);
+    update_bluetooth();
     ota_.reset();
     last_briefing_day_ = -1;
     language_ = InterfaceLanguage::Greek;
@@ -1266,7 +1284,7 @@ void CompanionRuntime::factory_reset() {
         const std::filesystem::path root(ctx_.store_dir);
         std::error_code error;
         for (const char* name : {"clock.txt", "notes.txt", "organizer.txt", "sound.txt", "display.txt", "language.txt",
-                                 "aoraton-sync.txt", "conversations.txt"}) {
+                                 "aoraton-sync.txt", "conversations.txt", "bluetooth.txt"}) {
             const auto path = root / name;
             std::filesystem::remove(path, error);
             auto temporary = path;
@@ -1442,9 +1460,18 @@ void CompanionRuntime::load_stores() {
     const auto display_data = read_file(root / "display.txt");
     if (!display_data.empty()) display_.set_settings(parse_display_settings(display_data));
     saved_display_text_ = serialize_display_settings(display_.snapshot().settings);
+    bluetooth_ = parse_bluetooth_settings(read_file(root / "bluetooth.txt"));
+    saved_bluetooth_text_ = serialize_bluetooth_settings(bluetooth_);
 }
 
 // Alarms, reminders, notes and sound settings are stored, in the ignored runtime folder.
+void CompanionRuntime::update_bluetooth() {
+    const auto link = phone_.snapshot().link;
+    const bool paired = link == PhoneLinkState::Connected || link == PhoneLinkState::Disconnected;
+    phone_.set_bluetooth(bluetooth_.enabled,
+                         bluetooth_should_run(bluetooth_, paired, link == PhoneLinkState::Pairing));
+}
+
 void CompanionRuntime::save_stores(bool flush) {
     const std::filesystem::path root(ctx_.store_dir);
     // Running timers bump the sequence every second; only real changes are written.
@@ -1508,6 +1535,10 @@ void CompanionRuntime::save_stores(bool flush) {
             saved_display_text_ = std::move(display_text);
             saved_display_sequence_ = sequence;
         }
+    }
+    if (auto bluetooth_text = serialize_bluetooth_settings(bluetooth_); bluetooth_text != saved_bluetooth_text_ &&
+                                                                    write_file(root / "bluetooth.txt", bluetooth_text)) {
+        saved_bluetooth_text_ = std::move(bluetooth_text);
     }
     if (saved_language_text_.compare(0, 2, interface_language_code(language_)) != 0) {
         const auto language_text = std::string(interface_language_code(language_)) + "\n";
