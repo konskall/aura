@@ -30,6 +30,8 @@ enum class OfflineCommandKind {
     OpenBattery,
     OpenWifi,
     OpenFiles,
+    OpenFlashlight,
+    OpenRedLight,
     Restart,
     PowerOff,
     ConfirmAction,

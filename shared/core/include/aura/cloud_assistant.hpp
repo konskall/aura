@@ -21,7 +21,7 @@ namespace aura {
 class AssistantStreamMailbox;
 
 // The device's own assistant (the owner's choice, 2026-11-05): straight from
-// the device, Groq recognises speech (whisper-large-v3-turbo) and answers
+// the device, Groq recognises speech (whisper-large-v3) and answers
 // (openai/gpt-oss-120b, streamed), and Azure speaks (the el-GR neural voices),
 // with the requests, settings and error codes of the PC bridge
 // (bridge/src/groq-runner.mjs, bridge/src/speech.mjs). Audio and text leave

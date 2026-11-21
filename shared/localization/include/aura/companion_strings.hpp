@@ -358,6 +358,27 @@ struct CompanionStrings {
     const char* seconds_format;  // %u
     const char* wake_word;
     const char* wake_word_unavailable;
+    // «Αύρα» on the device (2026-11-20): Ήχος > the wake word's screen. The row's
+    // title is the short one: the whole wake_word was cut beside its state.
+    const char* wake_word_row;
+    const char* wake_word_off;
+    const char* wake_word_on_format;  // %s: the sensitivity
+    const char* wake_word_listen;
+    const char* wake_word_listen_detail;
+    const char* wake_word_sensitivity;
+    const char* wake_word_low;
+    const char* wake_word_low_detail;
+    const char* wake_word_normal;
+    const char* wake_word_normal_detail;
+    const char* wake_word_high;
+    const char* wake_word_high_detail;
+    const char* wake_word_note;
+    const char* wake_word_failed;
+    // Φακός (2026-11-21): the screen as a light, white or red.
+    const char* flashlight_title;
+    const char* flashlight_white;
+    const char* flashlight_red;
+    const char* red_light_title;
     const char* muted_face_down;
 
     // Weather settings

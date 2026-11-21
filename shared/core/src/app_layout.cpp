@@ -11,12 +11,12 @@ namespace {
 constexpr std::string_view kHeader{"AURA_APP_LAYOUT_V1"};
 constexpr std::array<std::string_view, kLauncherAppCount> kCodes{
     "conversation", "weather", "messages", "clock", "notes", "today",
-    "radio", "notifications", "settings", "organizer", "photos", "files",
+    "radio", "notifications", "settings", "organizer", "photos", "files", "flashlight",
 };
 
 // The default order before Αρχεία (2026-11-18): an order stored without a
 // change of the owner's becomes the new default.
-constexpr std::array<LauncherApp, kLauncherAppCount - 1> kPreviousDefaultOrder{
+constexpr std::array<LauncherApp, 11> kPreviousDefaultOrder{
     LauncherApp::Conversation, LauncherApp::Notes, LauncherApp::Messages,
     LauncherApp::Today, LauncherApp::Weather, LauncherApp::Notifications,
     LauncherApp::Clock, LauncherApp::Radio, LauncherApp::Photos,
@@ -102,23 +102,28 @@ bool LauncherLayoutModel::restore(std::string_view data) noexcept {
         parsed[count++] = *app;
     }
     const auto known = [&seen](LauncherApp app) { return seen[static_cast<std::size_t>(app)]; };
-    // V1 orders saved before Photos and Files existed keep their owner's order:
-    // Photos joins at the end and Files right after it.
+    // V1 orders saved before an app existed keep their owner's order, each app
+    // joining as it did: Photos at the end, Files right after it (2026-11-18),
+    // Φακός at the end (2026-11-21).
     if (!known(LauncherApp::Photos)) {
-        if (known(LauncherApp::Files) || count + 2 != kLauncherAppCount) return false;
+        if (known(LauncherApp::Files) || known(LauncherApp::Flashlight) || count + 3 != kLauncherAppCount) return false;
         parsed[count++] = LauncherApp::Photos;
         seen[static_cast<std::size_t>(LauncherApp::Photos)] = true;
     }
     if (!known(LauncherApp::Files)) {
-        if (count + 1 != kLauncherAppCount) return false;
+        if (known(LauncherApp::Flashlight) || count + 2 != kLauncherAppCount) return false;
         const bool previous_default = std::equal(kPreviousDefaultOrder.begin(), kPreviousDefaultOrder.end(), parsed.begin());
         const auto photos = std::find(parsed.begin(), parsed.begin() + static_cast<std::ptrdiff_t>(count), LauncherApp::Photos);
         std::move_backward(photos + 1, parsed.begin() + static_cast<std::ptrdiff_t>(count),
                            parsed.begin() + static_cast<std::ptrdiff_t>(count + 1));
         *(photos + 1) = LauncherApp::Files;
         ++count;
-        if (previous_default) parsed = kDefaultLauncherOrder;
+        if (previous_default) {
+            parsed = kDefaultLauncherOrder;
+            count = kLauncherAppCount;
+        }
     }
+    if (!known(LauncherApp::Flashlight) && count + 1 == kLauncherAppCount) parsed[count++] = LauncherApp::Flashlight;
     if (count != kLauncherAppCount) return false;
     if (parsed == snapshot_.order) return true;
     snapshot_.order = parsed;

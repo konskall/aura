@@ -901,6 +901,105 @@
         }
     }
 
+    // ---- Φακός (the owner, 2026-11-21) ---------------------------------------
+    // The whole screen a light, white or red, in four steps of 25 % of its light
+    // each. The platform keeps the panel at full brightness while it shows, so
+    // the steps are the pixels' own (136, 186, 224, 255: the panel's gamma, 2.2,
+    // turns values into light). A tap on the light leaves only the light.
+    bool flashlight_red{false};
+    int flashlight_level{4};  // 1-4
+    bool flashlight_controls{true};
+    lv_obj_t* flashlight_panel{};
+
+    static std::uint32_t flashlight_rgb(bool red, int level) {
+        static constexpr std::uint32_t kValues[4]{136U, 186U, 224U, 255U};
+        const std::uint32_t value = kValues[static_cast<std::size_t>(std::clamp(level, 1, 4) - 1)];
+        return red ? value << 16U : (value << 16U) | (value << 8U) | value;
+    }
+
+    static void flashlight_light_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        self->flashlight_controls = !self->flashlight_controls;
+        if (self->flashlight_panel) lv_obj_set_hidden(self->flashlight_panel, !self->flashlight_controls);
+    }
+
+    static void flashlight_color_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        self->flashlight_red = user_value(event) != 0U;
+        self->render(UiView::Flashlight);
+    }
+
+    static void flashlight_level_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        self->flashlight_level = static_cast<int>(user_value(event));
+        self->render(UiView::Flashlight);
+    }
+
+    static void flashlight_close_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (self->accept_action()) self->go_back();
+    }
+
+    void render_flashlight() {
+        auto* light = lv_obj_create(content);
+        ui::reset(light);
+        lv_obj_set_size(light, ui::tokens::display_width, ui::tokens::display_height);
+        lv_obj_set_pos(light, 0, 0);
+        lv_obj_set_style_bg_color(light, ui::color(flashlight_rgb(flashlight_red, flashlight_level)), 0);
+        lv_obj_set_style_bg_opa(light, LV_OPA_COVER, 0);
+        lv_obj_set_clickable(light, true);
+        lv_obj_add_event_cb(light, flashlight_light_event, LV_EVENT_CLICKED, this);
+
+        // Its buttons over the bottom of the light; a tap between them is the light's.
+        constexpr int kPanelHeight = 184;
+        flashlight_panel = lv_obj_create(content);
+        ui::reset(flashlight_panel);
+        lv_obj_set_clickable(flashlight_panel, false);
+        lv_obj_set_size(flashlight_panel, ui::tokens::display_width, kPanelHeight);
+        lv_obj_set_pos(flashlight_panel, 0, ui::tokens::display_height - kPanelHeight);
+        for (int level = 1; level <= 4; ++level) {
+            char text[8];
+            std::snprintf(text, sizeof(text), "%d%%", level * 25);
+            auto* step = flashlight_button(30 + (level - 1) * 108, 0, 96, 64, text, level == flashlight_level,
+                                           flashlight_level_event);
+            set_value(step, static_cast<std::uintptr_t>(level));
+        }
+        set_value(flashlight_button(38, 80, 150, 80, c().flashlight_white, !flashlight_red, flashlight_color_event), 0U);
+        set_value(flashlight_button(200, 80, 150, 80, c().flashlight_red, flashlight_red, flashlight_color_event), 1U);
+        auto* close = flashlight_button(362, 80, 80, 80, nullptr, false, flashlight_close_event);
+        lv_obj_center(icon_view(close, ui::IconRole::Close, 32, 0xFFFFFF));
+        lv_obj_set_hidden(flashlight_panel, !flashlight_controls);
+    }
+
+    // The flashlight's own buttons, alike in every look: dark over the white or
+    // red light (a look's light or outlined buttons vanished on white), the
+    // chosen one ringed in amber.
+    lv_obj_t* flashlight_button(int x, int y, int width, int height, const char* text, bool chosen,
+                                lv_event_cb_t callback) {
+        auto* button = lv_button_create(flashlight_panel);
+        ui::reset(button);
+        lv_obj_set_clickable(button, true);
+        lv_obj_set_size(button, width, height);
+        lv_obj_set_pos(button, x, y);
+        lv_obj_set_style_radius(button, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(button, ui::color(0x101014), 0);
+        lv_obj_set_style_bg_opa(button, LV_OPA_90, 0);
+        lv_obj_set_style_bg_color(button, ui::color(0x2A2A30), LV_STATE_PRESSED);
+        if (chosen) {
+            lv_obj_set_style_border_width(button, 3, 0);
+            lv_obj_set_style_border_color(button, ui::color(ui::tokens::amber), 0);
+        }
+        if (text) {
+            auto* label = ui::make_label(button, text, chosen ? 0xFFFFFF : 0xB8B8C0, ui::font_body());
+            lv_obj_center(label);
+        }
+        lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, this);
+        return button;
+    }
+
     // Apps use a 3-column scrolling grid; later rows intentionally peek.
     void render_launcher_grid() {
         make_header(launcher_reordering ? c().app_layout_title : v().applications,
@@ -982,6 +1081,10 @@
                     cell = app_cell_in(grid, column, row, index, fx().title, ui::IconRole::Folder,
                                        ui::tokens::amber, UiView::Files, files_open_event);
                     set_target(cell, UiView::Files);
+                    break;
+                case LauncherApp::Flashlight:
+                    cell = app_cell_in(grid, column, row, index, c().flashlight_title, ui::IconRole::Flashlight,
+                                       ui::tokens::amber, UiView::Flashlight);
                     break;
                 case LauncherApp::Count: break;
             }
@@ -1327,7 +1430,7 @@
             {"files", UiView::Files},                                       {"settings", UiView::Settings},
             {"sound", UiView::Audio},       {"display", UiView::DisplaySettings},
             {"wifi", UiView::Wifi},         {"battery", UiView::Battery},   {"home", UiView::Home},
-            {"apps", UiView::Launcher},
+            {"apps", UiView::Launcher},     {"flashlight", UiView::Flashlight}, {"red_light", UiView::Flashlight},
         };
         for (const auto& entry : kViews) {
             if (entry.app == app) return entry.view;
@@ -1349,6 +1452,8 @@
         if (app == "photos") return p().title;
         if (app == "files") return fx().title;
         if (app == "notifications") return v().notifications;
+        if (app == "flashlight") return c().flashlight_title;
+        if (app == "red_light") return c().red_light_title;
         return std::string(app);
     }
 
@@ -3039,8 +3144,8 @@
 
     // Full-screen moments carry no status chrome.
     static bool immersive(UiView view) {
-        return view == UiView::AlwaysOn || view == UiView::ClockAlert ||
-               view == UiView::PhoneCall || view == UiView::PowerOff || view == UiView::Boot;
+        return view == UiView::AlwaysOn || view == UiView::ClockAlert || view == UiView::PhoneCall ||
+               view == UiView::PowerOff || view == UiView::Boot || view == UiView::Flashlight;
     }
 
     void companion_tick() {

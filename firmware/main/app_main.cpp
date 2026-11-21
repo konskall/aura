@@ -455,6 +455,11 @@ extern "C" void app_main(void) {
     const bool weather_backend_ready = weather_backend.initialize();
     if (weather_backend_ready) weather.set_refresh_interval(weather_backend.refresh_interval());
     boot_step(38);
+    // «Αύρα» (2026-11-20): the wake word's model and features, loaded before
+    // Wi-Fi starts; the companion listens with it once the owner allows it.
+    static aura::firmware::Esp32WakeWord wake_word_engine;
+    wake_word_engine.initialize();
+    companion.set_wake_word_engine(&wake_word_engine);
     const bool network_started = network.start();
     boot_step(50);
     ESP_LOGI(kTag, "Audio backend initialization: %s", audio_ready ? "ready" : "unavailable");
@@ -1030,6 +1035,16 @@ extern "C" void app_main(void) {
                     audio.stop();
                     start_listening(true);
                 }
+                // «Αύρα» (2026-11-20): the wake word listens while the assistant
+                // has nothing under way and nothing sounds (the radio, an answer,
+                // an alarm); then the question starts as from the talk target.
+                const bool wake_allowed = !aura::is_turn_active(controller.snapshot().state) &&
+                                          !assistant.turn->listening() && !assistant.turn->speaking() &&
+                                          audio.diagnostics().state != aura::AudioState::Playing;
+                companion.set_wake_monitor(wake_allowed);
+                if (companion.take_wake_word()) start_listening(false);
+            } else {
+                companion.set_wake_monitor(false);  // no assistant to ask
             }
             // Xweather (2026-11-19): with the keys the PC sent, its rain, alerts and
             // lightning; what arrived goes back in after each forecast refresh.

@@ -16,6 +16,8 @@ test('chat turns carry device facts and history as quoted data', () => {
   assert.match(text, /ACTION: \{"type":"timer"/);
   assert.match(text, /never claim that it is already done/);
   assert.match(text, /selected interface language is Greek/);
+  // The flashlight, white or red, opens like an app (2026-11-21).
+  assert.match(text, /home, apps, flashlight or red_light\)/);
 });
 
 test('chat turns validate and enforce the selected English interface language', () => {

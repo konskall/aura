@@ -43,11 +43,13 @@ int main() {
     // The owner's order (2026-11-11), left to right and row by row, with Αρχεία
     // to the right of Φωτογραφίες (2026-11-18): side by side in the three columns
     // and in Γραφίτης's two.
+    // Φακός (2026-11-21) after them, alone on a fifth row.
     expect(kDefaultLauncherOrder == std::array<LauncherApp, kLauncherAppCount>{
                LauncherApp::Conversation, LauncherApp::Notes, LauncherApp::Messages,
                LauncherApp::Today, LauncherApp::Weather, LauncherApp::Notifications,
                LauncherApp::Photos, LauncherApp::Files, LauncherApp::Clock,
-               LauncherApp::Radio, LauncherApp::Organizer, LauncherApp::Settings},
+               LauncherApp::Radio, LauncherApp::Organizer, LauncherApp::Settings,
+               LauncherApp::Flashlight},
            "the default order is the owner's");
     const auto photos_at = static_cast<std::size_t>(
         std::find(kDefaultLauncherOrder.begin(), kDefaultLauncherOrder.end(), LauncherApp::Photos) -
@@ -125,8 +127,25 @@ int main() {
                                       "notifications", "settings", "organizer"})),
            "an order from before Φωτογραφίες is accepted");
     expect(older.snapshot().order[9] == LauncherApp::Organizer && older.snapshot().order[10] == LauncherApp::Photos &&
-               older.snapshot().order[11] == LauncherApp::Files,
-           "both join at the end, side by side");
+               older.snapshot().order[11] == LauncherApp::Files && older.snapshot().order[12] == LauncherApp::Flashlight,
+           "both join at the end, side by side, and Φακός after them");
+    // Orders stored before Φακός (2026-11-21), the owner's among them: kept as
+    // they are, with Φακός at the end.
+    LauncherLayoutModel before_flashlight;
+    expect(before_flashlight.restore(layout_text({"settings", "photos", "files", "conversation", "notes", "messages",
+                                                  "today", "weather", "notifications", "clock", "radio", "organizer"})),
+           "an order from before Φακός is accepted");
+    expect(before_flashlight.snapshot().order[0] == LauncherApp::Settings &&
+               before_flashlight.snapshot().order[2] == LauncherApp::Files &&
+               before_flashlight.snapshot().order[11] == LauncherApp::Organizer &&
+               before_flashlight.snapshot().order[12] == LauncherApp::Flashlight,
+           "Φακός joins at the end and the rest keep their order");
+    LauncherLayoutModel default_before_flashlight;
+    expect(default_before_flashlight.restore(layout_text({"conversation", "notes", "messages", "today", "weather",
+                                                          "notifications", "photos", "files", "clock", "radio",
+                                                          "organizer", "settings"})) &&
+               default_before_flashlight.snapshot().order == kDefaultLauncherOrder,
+           "the default order from before Φακός becomes the new default");
 
     const auto before = restored.snapshot();
     expect(!restored.restore(layout_text({"conversation", "conversation"})), "a duplicate app is rejected");

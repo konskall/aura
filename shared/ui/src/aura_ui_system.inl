@@ -145,6 +145,13 @@
         if (conversation_ready) tappable(barge_row, sound_setting_event, 3);
         else ui::set_button_disabled(barge_row, true);
         y += kRowPitch;
+        // «Αύρα» (2026-11-20): only with a model on the device, its own screen.
+        if (capabilities.wake_word) {
+            const auto summary = wake_word_summary();
+            settings_row(list, y, c().wake_word_row, summary.c_str(), ui::IconRole::Microphone, ui::tokens::lilac,
+                         UiView::WakeWord);
+            y += kRowPitch;
+        }
 
         const char* voice_name = sound.assistant_voice == AssistantVoice::Athina ? c().voice_athina :
                                   c().voice_nestoras;
@@ -199,6 +206,89 @@
         ui::set_button_disabled(preview, !capabilities.speech_output || !callbacks.on_voice_preview || audio.muted);
         y += kButtonHeight + 16;
         auto* note = label(list, c().voice_online_note, kGutter + 8, y, kWidth - 16, ui::font_caption(),
+                           ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
+        lv_obj_update_layout(note);
+        list_end(list, y + lv_obj_get_height(note), 12);
+    }
+
+    // «Αύρα» without a touch (2026-11-20): the switch and three sensitivities.
+    // The platform keeps a choice (on_wake_word) or the screen says it did not.
+    const char* wake_word_sensitivity_name(WakeWordSensitivity sensitivity) const {
+        switch (sensitivity) {
+            case WakeWordSensitivity::Low: return c().wake_word_low;
+            case WakeWordSensitivity::High: return c().wake_word_high;
+            case WakeWordSensitivity::Normal: break;
+        }
+        return c().wake_word_normal;
+    }
+
+    std::string wake_word_summary() const {
+        if (!wake_word.enabled) return c().wake_word_off;
+        char text[96];
+        std::snprintf(text, sizeof(text), c().wake_word_on_format, wake_word_sensitivity_name(wake_word.sensitivity));
+        return text;
+    }
+
+    void choose_wake_word(const WakeWordSettings& next) {
+        if (!callbacks.on_wake_word || !callbacks.on_wake_word(next)) {
+            show_toast(c().wake_word_failed, ui::tokens::coral);
+            return;
+        }
+        wake_word = next;
+        render(UiView::WakeWord);
+    }
+
+    static void wake_word_switch_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        auto next = self->wake_word;
+        next.enabled = !next.enabled;
+        self->choose_wake_word(next);
+    }
+
+    static void wake_word_sensitivity_event(lv_event_t* event) {
+        auto* self = self_of(event);
+        if (!self->accept_action()) return;
+        auto next = self->wake_word;
+        next.sensitivity = static_cast<WakeWordSensitivity>(user_value(event));
+        self->choose_wake_word(next);
+    }
+
+    void render_wake_word() {
+        // The short name: the whole wake_word was cut in every look's header;
+        // «Αύρα» is in the switch's title below it.
+        make_header(c().wake_word_row);
+        auto* list = make_list();
+        int y = 0;
+        auto* listen = list_row(list, y, c().wake_word_listen, c().wake_word_listen_detail, ui::IconRole::Microphone,
+                                ui::tokens::lilac, kRowHeight, 252, true);
+        add_switch(listen, wake_word.enabled);
+        tappable(listen, wake_word_switch_event);
+        y += kRowPitch + 8;
+        line(list, c().wake_word_sensitivity, kGutter + 4, y, kWidth - 8, ui::font_caption(), ui::tokens::text_secondary);
+        y += 40;
+        const struct {
+            WakeWordSensitivity sensitivity;
+            const char* title;
+            const char* detail;
+        } choices[] = {
+            {WakeWordSensitivity::Low, c().wake_word_low, c().wake_word_low_detail},
+            {WakeWordSensitivity::Normal, c().wake_word_normal, c().wake_word_normal_detail},
+            {WakeWordSensitivity::High, c().wake_word_high, c().wake_word_high_detail},
+        };
+        for (const auto& choice : choices) {
+            const bool selected = wake_word.sensitivity == choice.sensitivity;
+            auto* row = list_row(list, y, choice.title, choice.detail, ui::IconRole::Voice,
+                                 selected ? ui::tokens::lilac : ui::tokens::indigo, kRowHeight, 252);
+            if (selected) {
+                auto* check = icon_view(row, ui::IconRole::Check, 28, ui::tokens::lilac);
+                lv_obj_align(check, LV_ALIGN_RIGHT_MID, 0, 0);
+            }
+            tappable(row, wake_word_sensitivity_event, static_cast<std::uintptr_t>(choice.sensitivity));
+            y += kRowPitch;
+        }
+        y += 8;
+        auto* note = label(list, c().wake_word_note, kGutter + 8, y, kWidth - 16, ui::font_caption(),
                            ui::tokens::text_tertiary, LV_TEXT_ALIGN_CENTER);
         lv_obj_update_layout(note);
         list_end(list, y + lv_obj_get_height(note), 12);

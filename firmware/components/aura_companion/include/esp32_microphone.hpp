@@ -20,9 +20,12 @@ namespace aura::firmware {
 // 300 ms after a start are dropped.
 class Esp32Microphone {
 public:
-    // It was 30 dB; 24 leaves room for a voice close to the device (the
-    // questions' peaks of 32767 were the ES7210's start, not speech).
-    static constexpr float kVoiceGainDb = 24.0F;
+    // Listening: the wake word, a question, a note. At 24 dB a voice a metre
+    // away came in at about -50 dBFS, under the recorder's floor and the wake
+    // word's training, and the owner had to shout (2026-11-20); close speech
+    // peaked at -20 dBFS, so 33 dB still leaves it room. (The peaks of 32767
+    // once blamed on 30 dB were the ES7210's start, dropped since.)
+    static constexpr float kVoiceGainDb = 33.0F;
     // While the device speaks: its own voice clipped the microphone at 24 dB
     // (peak 32768 on the board, 2026-11-16), which no echo filter undoes.
     static constexpr float kMonitorGainDb = 18.0F;
@@ -75,6 +78,10 @@ public:
     bool mounted() const noexcept { return mounted_; }
     std::string read(const char* name) const;
     bool write(const char* name, const std::string& data) const;
+    // Before the first battery log of a boot: battery-log.csv becomes
+    // battery-log-previous.csv (aura::keep_previous_battery_log). False
+    // without a card or without a log.
+    bool keep_previous_battery_log() const;
     bool write_note_audio(const std::string& file, const std::vector<std::uint8_t>& wav) const;
     void remove_note_audio(const std::string& file) const;
     std::string note_audio_path(const std::string& file) const;

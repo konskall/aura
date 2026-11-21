@@ -51,7 +51,9 @@ All names, rooms, messages, photos and data in the screenshots are fictional `DE
 
 ### Apps
 
-The apps grid can be rearranged: tap the pencil, then an app, then its new place. By default it reads Συνομιλία, Σημειώσεις, Μηνύματα, Σήμερα, Καιρός, Ειδοποιήσεις, Φωτογραφίες, Αρχεία, Ρολόι, Ραδιόφωνο, Οργάνωση, Ρυθμίσεις: Αρχεία sits to the right of Φωτογραφίες, and an order arranged before it existed keeps its places, with Αρχεία after Φωτογραφίες.
+The apps grid can be rearranged: tap the pencil, then an app, then its new place. By default it reads Συνομιλία, Σημειώσεις, Μηνύματα, Σήμερα, Καιρός, Ειδοποιήσεις, Φωτογραφίες, Αρχεία, Ρολόι, Ραδιόφωνο, Οργάνωση, Ρυθμίσεις, Φακός. Αρχεία sits to the right of Φωτογραφίες; an order arranged before it existed keeps its places, with Αρχεία after Φωτογραφίες, and one from before Φακός gets Φακός at the end.
+
+Φακός makes the whole screen a light, white or red, in four steps (25–100 %). The device holds the panel at full brightness while it shows and keeps it awake. A tap on the light hides its buttons, and ✕ closes it. By voice: «άναψε τον φακό», «κόκκινο φως», «σβήσε τον φακό».
 
 | App | What it offers |
 |---|---|
@@ -173,7 +175,7 @@ cd aura
   - `groq`: streamed Groq chat.
 - **`-SpeechProvider`**
   - `local`: whisper.cpp on this PC; install it with `.\scripts\setup-voice.ps1`.
-  - `groq`: Groq Whisper (`whisper-large-v3-turbo`).
+  - `groq`: Groq Whisper (`whisper-large-v3`).
 - **`-TtsProvider`**
   - `auto`: official Azure Speech when configured, otherwise the installed Windows voices.
   - `neural`: an unofficial Edge read-aloud service. It is never chosen automatically and the launcher warns when you select it.

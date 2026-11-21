@@ -2,6 +2,7 @@
 
 #include "aura/assistant_actions.hpp"
 #include "aura/audio_service.hpp"
+#include "aura/battery_history.hpp"
 #include "aura/text_util.hpp"
 #include "aura_board_profile.h"
 #include "aura_display.h"
@@ -92,6 +93,9 @@ void Esp32Companion::start() {
     if (const auto data = store_.read("sound.txt"); !data.empty()) sound_ = parse_sound_settings(data);
     bluetooth_ = parse_bluetooth_settings(store_.read("bluetooth.txt"));
     saved_bluetooth_text_ = serialize_bluetooth_settings(bluetooth_);
+    // «Αύρα» (2026-11-20): off until the owner turns it on.
+    wake_word_ = parse_wake_word_settings(store_.read("wake-word.txt"));
+    saved_wake_word_text_ = serialize_wake_word_settings(wake_word_);
     if (const auto data = store_.read("display.txt"); !data.empty()) {
         display_.set_settings(parse_display_settings(data));
     }
@@ -149,10 +153,13 @@ void Esp32Companion::start() {
     // listens without a card; only voice notes need the card (begin_note).
     capabilities_.microphone = microphone_.initialize();
     // Recognition and spoken replies start with the cloud keys
-    // (set_speech_available); the wake word waits for a trained «Αύρα» model.
+    // (set_speech_available). The wake word needs the model built in and
+    // loaded (Esp32WakeWord, 2026-11-20).
     capabilities_.speech_recognition = false;
     capabilities_.speech_output = false;
-    capabilities_.wake_word = false;
+    capabilities_.wake_word = capabilities_.microphone && wake_engine_ && wake_engine_->ready();
+    if (capabilities_.wake_word) wake_engine_->set_cutoff(wake_word_cutoff(wake_word_.sensitivity));
+    ESP_LOGI(kTag, "wake word %s", !capabilities_.wake_word ? "unavailable" : wake_word_.enabled ? "on" : "off");
     // The panel dims itself (no veil from the UI), and the side button is the
     // only way back from power off.
     capabilities_.panel_brightness = true;
@@ -320,6 +327,15 @@ void Esp32Companion::install(AuraUiCallbacks& callbacks, IAoratonService* aorato
         update_bluetooth(static_cast<std::uint64_t>(esp_timer_get_time() / 1000));
         return true;
     };
+    // «Αύρα»: the choice takes effect at once and is stored by save().
+    callbacks.on_wake_word = [this](const WakeWordSettings& settings) {
+        if (!capabilities_.wake_word) return false;
+        wake_word_ = settings;
+        wake_engine_->set_cutoff(wake_word_cutoff(settings.sensitivity));
+        ESP_LOGI(kTag, "wake word %s, cutoff %.2f", settings.enabled ? "on" : "off",
+                 static_cast<double>(wake_word_cutoff(settings.sensitivity)));
+        return true;
+    };
     callbacks.on_update_check = [this] {
         if (ota_.begin_check() && !updater_.request_check()) ota_.check_failed("OTA_BUSY");
     };
@@ -341,10 +357,15 @@ bool Esp32Companion::begin_question() {
     // answer, or it ended and the conversation goes on), is kept: no restart,
     // so none of the ES7210's settling, and after a barge-in the words that
     // interrupted the answer begin the question.
-    const bool warm = microphone_.running() && (barge_monitoring_ || barge_triggered_);
+    // So is the wake word's (2026-11-20): after «Αύρα», or a tap while it listened.
+    const bool warm = microphone_.running() &&
+                      (barge_monitoring_ || barge_triggered_ || wake_monitoring_ || wake_triggered_);
     const bool interrupted = warm && barge_triggered_;
     barge_monitoring_ = false;
     barge_triggered_ = false;
+    wake_monitoring_ = false;
+    wake_triggered_ = false;
+    wake_heard_ = false;
     if (recording_note_ || recording_question_ || voice_.state != VoiceCaptureState::Idle ||
         !capabilities_.speech_recognition) {
         if (warm) microphone_.stop();
@@ -430,6 +451,7 @@ void Esp32Companion::cancel_question() {
 
 bool Esp32Companion::begin_voice_message() {
     set_barge_monitor(false);
+    stop_wake_monitor();
     if (recording_note_ || recording_question_ || recording_message_ || voice_.state != VoiceCaptureState::Idle ||
         !capabilities_.microphone || !microphone_.start()) {
         return false;
@@ -501,8 +523,9 @@ void Esp32Companion::set_barge_monitor(bool on) {
         }
         return;
     }
+    stop_wake_monitor();  // the answer's monitor takes the microphone
     if (!capabilities_.microphone || recording_note_ || recording_question_ || recording_message_ ||
-        voice_.state != VoiceCaptureState::Idle || barge_triggered_ || !microphone_.start()) {
+        voice_.state != VoiceCaptureState::Idle || barge_triggered_ || wake_triggered_ || !microphone_.start()) {
         return;
     }
     microphone_.set_gain(Esp32Microphone::kMonitorGainDb);
@@ -516,6 +539,41 @@ void Esp32Companion::set_barge_monitor(bool on) {
 bool Esp32Companion::take_barge_in() noexcept {
     const bool heard = barge_heard_;
     barge_heard_ = false;
+    return heard;
+}
+
+// «Αύρα» (2026-11-20): the microphone listens for the wake word while app_main
+// allows it (no question, no answer, no sound) and the owner turned it on. It
+// opens as a question's does, at the voice's gain, so the question after
+// «Αύρα» goes on from it without the ES7210's settling (begin_question).
+void Esp32Companion::set_wake_monitor(bool allowed) {
+    const bool want = allowed && capabilities_.wake_word && wake_word_.enabled && !recording_note_ &&
+                      !recording_question_ && !recording_message_ && voice_.state == VoiceCaptureState::Idle &&
+                      !barge_monitoring_ && !barge_triggered_ && !wake_triggered_ && pending_system_action_.load() < 0;
+    if (want == wake_monitoring_) return;
+    if (!want) {
+        stop_wake_monitor();
+        return;
+    }
+    if (microphone_.running() || !microphone_.start()) return;
+    wake_engine_->restart();
+    samples_.clear();
+    wake_monitoring_ = true;
+    wake_stats_ms_ = now_ms();
+    ESP_LOGI(kTag, "wake word: listening");
+}
+
+void Esp32Companion::stop_wake_monitor() {
+    if (!wake_monitoring_) return;
+    wake_monitoring_ = false;
+    microphone_.stop();
+    samples_.clear();
+    ESP_LOGI(kTag, "wake word: not listening");
+}
+
+bool Esp32Companion::take_wake_word() noexcept {
+    const bool heard = wake_heard_;
+    wake_heard_ = false;
     return heard;
 }
 
@@ -578,6 +636,7 @@ void Esp32Companion::decline_action() {
 
 void Esp32Companion::begin_note() {
     set_barge_monitor(false);
+    stop_wake_monitor();
     if (recording_note_ || recording_question_ || voice_.state != VoiceCaptureState::Idle ||
         !capabilities_.microphone || !storage_jobs_ || !microphone_.start()) return;
     audio_.stop();
@@ -684,6 +743,40 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
     // A microphone left open by a barge-in nobody took up is closed.
     if (barge_triggered_ && !barge_heard_ && !recording_question_) {
         barge_triggered_ = false;
+        microphone_.stop();
+    }
+    // «Αύρα»: the open microphone's voice goes to the engine until it is heard.
+    // Nothing of it is kept: the engine's buffer holds a second at most.
+    if (wake_monitoring_ && wake_engine_) {
+        samples_.clear();
+        microphone_.drain(samples_);
+        if (!samples_.empty()) wake_engine_->feed(samples_.data(), samples_.size());
+        // How near a try that did not wake came (a number only): the owner's
+        // tries from a distance, to tune the gain and the cutoffs.
+        if (const float miss = wake_engine_->take_near_miss(); miss > 0.0F) {
+            ESP_LOGI(kTag, "wake word: almost (window peak %.2f, wakes over %.2f)", static_cast<double>(miss),
+                     static_cast<double>(wake_word_cutoff(wake_word_.sensitivity)));
+        }
+        if (wake_engine_->take_detection()) {
+            wake_monitoring_ = false;  // the microphone stays open for the question
+            wake_triggered_ = true;
+            wake_heard_ = true;
+            display_.user_activity(now);
+            const auto stats = wake_engine_->take_stats();
+            ESP_LOGI(kTag, "wake word: heard (window peak %.2f)", static_cast<double>(stats.peak));
+        } else if (now - wake_stats_ms_ >= 60000) {
+            wake_stats_ms_ = now;
+            const auto stats = wake_engine_->take_stats();
+            ESP_LOGI(kTag, "wake word: %u inferences in a minute, window peak %.2f, slowest %u us, %u samples dropped, "
+                     "arena %u bytes",
+                     static_cast<unsigned>(stats.inferences), static_cast<double>(stats.peak),
+                     static_cast<unsigned>(stats.slowest_us), static_cast<unsigned>(stats.dropped),
+                     static_cast<unsigned>(stats.arena_bytes));
+        }
+    }
+    // A microphone left open by a wake word nobody took up is closed.
+    if (wake_triggered_ && !wake_heard_ && !recording_question_) {
+        wake_triggered_ = false;
         microphone_.stop();
     }
     clock_.tick(elapsed_ms);
@@ -809,8 +902,12 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
     if (inactive < last_inactive_ms_) display_.user_activity(now);
     last_inactive_ms_ = inactive;
 
-    const bool busy = clock_.snapshot().alert || recording_note_ || recording_question_ || recording_message_ ||
-                      phone_.snapshot().incoming_call ||
+    // Φακός (the owner, 2026-11-21): the panel at full brightness while it
+    // shows, the screen kept awake; face down it goes dark as ever, and the
+    // owner's brightness comes back after it.
+    const bool flashlight = active_ui_ && active_ui_->view() == UiView::Flashlight;
+    const bool busy = flashlight || clock_.snapshot().alert || recording_note_ || recording_question_ ||
+                      recording_message_ || phone_.snapshot().incoming_call ||
                       audio_.diagnostics().state == AudioState::Playing ||
                       ota_.snapshot().state == UpdateState::Downloading || photos_.snapshot().playing ||
                       transfer_state.state == TransferState::Receiving ||
@@ -818,7 +915,8 @@ void Esp32Companion::poll(std::uint32_t elapsed_ms) {
                        (transfer_state.state == TransferState::Ready || transfer_state.state == TransferState::Starting));
     display_.hold_awake(busy, now);
     display_.tick(now);
-    const int brightness = display_.snapshot().brightness_percent;
+    const int brightness =
+        flashlight && display_.snapshot().mode == DisplayMode::Active ? 100 : display_.snapshot().brightness_percent;
     if (brightness != applied_brightness_) {
         applied_brightness_ = brightness;
         aura_board_display_set_brightness(brightness);
@@ -910,7 +1008,17 @@ void Esp32Companion::storage_task() {
             case StoreJobKind::Layout:
             case StoreJobKind::AoratonSync:
             case StoreJobKind::Bluetooth:
+            case StoreJobKind::WakeWord:
+                job->success = store_.write(job->name.c_str(), job->text);
+                break;
             case StoreJobKind::BatteryLog:
+                // The history starts again at every boot: the first write keeps
+                // the last log, a battery that ran out included (2026-11-20).
+                if (!battery_log_previous_kept_) {
+                    battery_log_previous_kept_ = true;
+                    if (store_.keep_previous_battery_log())
+                        ESP_LOGI(kTag, "battery log: the last one kept as %s", kBatteryLogPreviousFile);
+                }
                 job->success = store_.write(job->name.c_str(), job->text);
                 break;
             case StoreJobKind::Voice:
@@ -987,6 +1095,10 @@ void Esp32Companion::poll_storage_results() {
                 bluetooth_save_pending_ = false;
                 if (job->success) saved_bluetooth_text_ = job->text;
                 break;
+            case StoreJobKind::WakeWord:
+                wake_word_save_pending_ = false;
+                if (job->success) saved_wake_word_text_ = job->text;
+                break;
             case StoreJobKind::BatteryLog:
                 battery_log_save_pending_ = false;
                 break;
@@ -1042,12 +1154,17 @@ void Esp32Companion::save() {
 
     if (battery_log_changed_ && !battery_log_save_pending_) {
         battery_log_changed_ = false;
-        queue_text(StoreJobKind::BatteryLog, "battery-log.csv", battery_log_, 0, battery_log_save_pending_);
+        queue_text(StoreJobKind::BatteryLog, kBatteryLogFile, battery_log_, 0, battery_log_save_pending_);
     }
     if (!bluetooth_save_pending_) {
         auto data = serialize_bluetooth_settings(bluetooth_);
         if (data != saved_bluetooth_text_)
             queue_text(StoreJobKind::Bluetooth, "bluetooth.txt", std::move(data), 0, bluetooth_save_pending_);
+    }
+    if (!wake_word_save_pending_) {
+        auto data = serialize_wake_word_settings(wake_word_);
+        if (data != saved_wake_word_text_)
+            queue_text(StoreJobKind::WakeWord, "wake-word.txt", std::move(data), 0, wake_word_save_pending_);
     }
     if (!aoraton_sync_save_pending_) {
         auto data = serialize_aoraton_sync_settings(aoraton_sync_);
@@ -1137,6 +1254,7 @@ void Esp32Companion::apply(AuraUi& ui) {
     ui.apply_phone(phone_.snapshot());
     ui.apply_update(ota_.snapshot());
     ui.apply_sound(sound_);
+    ui.apply_wake_word(wake_word_);
     ui.apply_launcher_layout(launcher_layout_.snapshot());
 }
 

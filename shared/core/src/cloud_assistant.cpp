@@ -19,7 +19,9 @@ constexpr const char* kGroqChatUrl = "https://api.groq.com/openai/v1/chat/comple
 constexpr const char* kGroqModelsUrl = "https://api.groq.com/openai/v1/models";
 constexpr std::uint32_t kWarmTimeoutMs = 8000;
 constexpr const char* kGroqTranscriptionUrl = "https://api.groq.com/openai/v1/audio/transcriptions";
-constexpr const char* kTranscriptionModel = "whisper-large-v3-turbo";
+// The most accurate Whisper outside English (the owner, 2026-11-20: Greek
+// still misheard); turbo is quicker and less exact, and the clips are short.
+constexpr const char* kTranscriptionModel = "whisper-large-v3";
 // 16 kHz, the microphone's rate: the board's speaker and microphone share one
 // I2S clock, and barge-in records while the answer plays. At 24 kHz the
 // speaker never opened beside it (2026-11-16). The PC bridge keeps 24 kHz.

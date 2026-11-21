@@ -112,7 +112,8 @@
     "Ear": "hearing-rounded",
     "Swap": "swap-horiz-rounded",
     "Palette": "palette-rounded",
-    "Folder": "folder-rounded"
+    "Folder": "folder-rounded",
+    "Flashlight": "flashlight-on-rounded"
   },
   "lucideFallbacks": []
 }

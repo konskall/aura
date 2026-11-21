@@ -112,7 +112,8 @@
     "Ear": "ear-light",
     "Swap": "arrows-left-right-light",
     "Palette": "palette-light",
-    "Folder": "folder-light"
+    "Folder": "folder-light",
+    "Flashlight": "flashlight-light"
   },
   "lucideFallbacks": []
 }

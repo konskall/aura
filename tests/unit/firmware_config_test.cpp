@@ -287,6 +287,20 @@ void check_owner_tools(const std::string& root) {
     expect(display.find("touch_cfg.callbacks.custom_touch_read = read_two_fingers;") != none &&
                display.find("kTouchBytes = 15") != none,
            "the touch controller is read for two fingers");
+    // Φακός (the owner, 2026-11-21): while it shows, the panel at full
+    // brightness and the screen kept awake; face down it goes dark as ever,
+    // and the owner's brightness comes back after it.
+    expect(companion.find("const bool flashlight = active_ui_ && active_ui_->view() == UiView::Flashlight;") != none &&
+               companion.find("const bool busy = flashlight ||") != none &&
+               companion.find("flashlight && display_.snapshot().mode == DisplayMode::Active ? 100 : "
+                              "display_.snapshot().brightness_percent") != none,
+           "the flashlight keeps the screen awake at full brightness");
+    // Without LVGL's gesture recognition the adapter asks for one finger
+    // (MAX_TOUCH_POINTS_V9 is 1), and asking esp_lcd_touch for no more kept
+    // the second from the photo (the owner, 2026-11-20: the zoom did nothing).
+    expect(display.find("esp_lcd_touch_get_data(touch, points, count, max_count)") == none &&
+               display.find("esp_lcd_touch_get_data(touch, both, &found, 2)") != none,
+           "both fingers are read whatever the adapter asks for");
     const std::string main = without_comments(read_file(root + "/firmware/main/app_main.cpp"));
     expect(main.find("aura_board_touch_points(finger_x, finger_y)") != none &&
                main.find("ui.set_touch_points(points") != none,
@@ -427,7 +441,11 @@ void check_echo_reference(const std::string& root) {
     expect(microphone.find("kReferenceSlot = 0") != none && microphone.find("kVoiceSlot = 1") != none &&
                microphone.find("kInterfaceReg, kTdm") != none,
            "slot 0 is the speaker's signal and slot 1 the voice, in TDM");
-    expect(header.find("kVoiceGainDb = 24.0F") != none, "the voice at 24 dB, not 30");
+    // 24 dB heard a voice a metre away at -50 dBFS, under the recorder's floor
+    // and the wake word's training (the owner had to shout, 2026-11-20); close
+    // speech peaked at -20 dBFS, so 33 dB leaves it room. While AURA speaks, 18.
+    expect(header.find("kVoiceGainDb = 33.0F") != none && header.find("kMonitorGainDb = 18.0F") != none,
+           "listening at 33 dB; while AURA speaks, 18");
     expect(header.find("kSettleMs = 300") != none && microphone.find("16U * kSettleMs") != none,
            "the ES7210's first 300 ms after a start are dropped");
     const std::string audio =

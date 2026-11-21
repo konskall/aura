@@ -76,10 +76,12 @@ enum class AssistantActionType {
     PowerOff,
 };
 
-// The apps the assistant can open, by the names its ACTION line uses.
-inline constexpr std::array<std::string_view, 19> kAssistantApps{
+// The apps the assistant can open, by the names its ACTION line uses. Φακός
+// (2026-11-21) opens white as "flashlight" and red as "red_light".
+inline constexpr std::array<std::string_view, 21> kAssistantApps{
     "weather", "clock",    "notes",  "calendar", "tasks", "shopping", "radio", "today", "messages", "notifications",
-    "photos",  "files",    "settings", "sound",  "display", "wifi",   "battery", "home", "apps",
+    "photos",  "files",    "settings", "sound",  "display", "wifi",   "battery", "home", "apps",   "flashlight",
+    "red_light",
 };
 bool assistant_app_known(std::string_view app) noexcept;
 

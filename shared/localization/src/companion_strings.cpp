@@ -348,6 +348,26 @@ const CompanionStrings& companion_el_gr() noexcept {
         s.seconds_format = "Μετά από %u δευτ.";
         s.wake_word = "Λέξη αφύπνισης «Αύρα»";
         s.wake_word_unavailable = "Χρειάζεται εκπαιδευμένο μοντέλο";
+        s.wake_word_row = "Λέξη αφύπνισης";
+        s.wake_word_off = "Κλειστή";
+        s.wake_word_on_format = "Ανοιχτή · %s";
+        s.wake_word_listen = "Ακούει για «Αύρα»";
+        s.wake_word_listen_detail = "Πες τη και ρώτα";
+        s.wake_word_sensitivity = "Ευαισθησία";
+        s.wake_word_low = "Χαμηλή";
+        s.wake_word_low_detail = "Σπάνια κατά λάθος";
+        s.wake_word_normal = "Κανονική";
+        s.wake_word_normal_detail = "Η προτεινόμενη";
+        s.wake_word_high = "Υψηλή";
+        s.wake_word_high_detail = "Ακούει πιο εύκολα";
+        s.wake_word_note = "Το μικρόφωνο μένει ανοιχτό όσο το AURA δεν μιλά και δεν παίζει ήχο. "
+                           "Ό,τι ακούει μένει στη συσκευή μέχρι να ακουστεί «Αύρα». "
+                           "Θέλει περισσότερη μπαταρία.";
+        s.wake_word_failed = "Η ρύθμιση δεν αποθηκεύτηκε";
+        s.flashlight_title = "Φακός";
+        s.flashlight_white = "Λευκό";
+        s.flashlight_red = "Κόκκινο";
+        s.red_light_title = "Κόκκινο φως";
         s.muted_face_down = "Σίγαση · η συσκευή είναι ανάποδα";
 
         s.weather_settings_title = "Ρυθμίσεις καιρού";
@@ -880,6 +900,26 @@ const CompanionStrings& companion_en_us() noexcept {
         s.seconds_format = "After %u s";
         s.wake_word = "Wake word “Aura”";
         s.wake_word_unavailable = "Needs a trained model";
+        s.wake_word_row = "Wake word";
+        s.wake_word_off = "Off";
+        s.wake_word_on_format = "On · %s";
+        s.wake_word_listen = "Listens for “Aura”";
+        s.wake_word_listen_detail = "Say it, then ask";
+        s.wake_word_sensitivity = "Sensitivity";
+        s.wake_word_low = "Low";
+        s.wake_word_low_detail = "Rarely by mistake";
+        s.wake_word_normal = "Normal";
+        s.wake_word_normal_detail = "Recommended";
+        s.wake_word_high = "High";
+        s.wake_word_high_detail = "Hears it more easily";
+        s.wake_word_note = "The microphone stays open while AURA is not speaking or playing sound. "
+                           "What it hears stays on the device until “Aura” is heard. "
+                           "It uses more battery.";
+        s.wake_word_failed = "The setting was not saved";
+        s.flashlight_title = "Flashlight";
+        s.flashlight_white = "White";
+        s.flashlight_red = "Red";
+        s.red_light_title = "Red light";
         s.muted_face_down = "Muted · the device is face down";
 
         s.weather_settings_title = "Weather settings";

@@ -208,13 +208,20 @@ static esp_err_t read_two_fingers(esp_lcd_touch_handle_t touch, esp_lcd_touch_po
         portEXIT_CRITICAL(&touch->data.lock);
     }
     // A read that failed keeps the fingers last seen, as the component does.
-    *count = 0;
-    const esp_err_t coordinates = esp_lcd_touch_get_data(touch, points, count, max_count);
-    s_fingers = *count > 2 ? 2 : *count;
+    // Both fingers are taken for the photo's zoom whatever the adapter asks for:
+    // without LVGL's gesture recognition it asks for one (MAX_TOUCH_POINTS_V9),
+    // and asking esp_lcd_touch for no more kept the second from the photo (the
+    // owner, 2026-11-20). LVGL still gets as many as it asked for: the first.
+    esp_lcd_touch_point_data_t both[2] = {0};
+    uint8_t found = 0;
+    const esp_err_t coordinates = esp_lcd_touch_get_data(touch, both, &found, 2);
+    s_fingers = found > 2 ? 2 : found;
     for (int finger = 0; finger < s_fingers; ++finger) {
-        s_finger_x[finger] = points[finger].x;
-        s_finger_y[finger] = points[finger].y;
+        s_finger_x[finger] = both[finger].x;
+        s_finger_y[finger] = both[finger].y;
     }
+    *count = found < max_count ? found : max_count;
+    for (uint8_t finger = 0; finger < *count; ++finger) points[finger] = both[finger];
     return coordinates;
 }
 

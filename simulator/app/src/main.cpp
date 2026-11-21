@@ -2181,6 +2181,20 @@ int main(int argc, char** argv) {
             ui.show(aura::UiView::Battery);
         } else if (capture_scenario == "voice") {
             ui.show(aura::UiView::VoiceSettings);
+        } else if (capture_scenario == "wake-word") {
+            // «Αύρα» (2026-11-20): the device's screen, as with a model built in
+            // (the simulator has no engine, so it offers none itself).
+            aura::CompanionCapabilities wake_capabilities;
+            wake_capabilities.microphone = wake_capabilities.speech_recognition = wake_capabilities.wake_word = true;
+            ui.set_capabilities(wake_capabilities);
+            aura::WakeWordSettings wake_settings;
+            wake_settings.enabled = true;
+            ui.apply_wake_word(wake_settings);
+            ui.show(aura::UiView::WakeWord);
+        } else if (capture_scenario == "flashlight") {
+            ui.open_app("flashlight");  // Φακός (2026-11-21), white, its buttons in view
+        } else if (capture_scenario == "red-light") {
+            ui.open_app("red_light");
         } else if (capture_scenario == "typography-proof-1") {
             ui.show_typography_proof(0);
         } else if (capture_scenario == "typography-proof-2") {
@@ -2324,7 +2338,7 @@ int main(int argc, char** argv) {
             aura::UiView::AoratonMessage, aura::UiView::AoratonAssist,
             aura::UiView::Weather, aura::UiView::WeatherSettings, aura::UiView::WeatherLocation,
             aura::UiView::Calendar,
-            aura::UiView::Battery, aura::UiView::VoiceSettings,
+            aura::UiView::Battery, aura::UiView::VoiceSettings, aura::UiView::WakeWord, aura::UiView::Flashlight,
             aura::UiView::Diagnostics, aura::UiView::Wifi, aura::UiView::WifiPassword,
             aura::UiView::WifiDetails, aura::UiView::Clock, aura::UiView::ClockNew, aura::UiView::TimerNew,
             aura::UiView::AlarmNew, aura::UiView::ReminderNew, aura::UiView::Notes, aura::UiView::NoteNew,
@@ -2673,7 +2687,9 @@ int main(int argc, char** argv) {
         lv_obj_update_layout(ui.root());
         if (auto* grid = find_scrollable(ui.root())) lv_obj_scroll_to_y(grid, 680, LV_ANIM_OFF);
         pump(3);
-        tap(384, 360);
+        // Scrolled to its end the grid shows Φακός's fifth row (2026-11-21) at the
+        // bottom, so the fourth row's icons are at y 188.
+        tap(384, 188);
         record("launcher.settings", "icon-center", ui.view() == aura::UiView::Settings,
                std::to_string(static_cast<int>(ui.view())));
         reset_to(aura::UiView::Home);
@@ -4067,8 +4083,15 @@ int main(int argc, char** argv) {
         }
         reset_to(aura::UiView::Launcher);
         scroll_view_to(680);
-        tap(384, 360);
+        tap(384, 188);
         record("launcher.row4", "settings", ui.view() == aura::UiView::Settings, view_text());
+        // Φακός, alone on the fifth row (2026-11-21), and its ✕ back.
+        reset_to(aura::UiView::Launcher);
+        scroll_view_to(680);
+        tap(96, 360);
+        record("launcher.row5", "flashlight", ui.view() == aura::UiView::Flashlight, view_text());
+        tap(402, 416);
+        record("flashlight.close", "x", ui.view() == aura::UiView::Launcher, view_text());
 
         // Launcher edit mode: Edit, pick an app, pick its new place. The order
         // is stored at once, and the grid opens apps again when editing ends.
@@ -4107,7 +4130,7 @@ int main(int argc, char** argv) {
 
         reset_to(aura::UiView::Launcher);
         scroll_view_to(680);
-        tap(240, 360);
+        tap(240, 188);
         record("launcher.row4", "organizer", ui.view() == aura::UiView::Calendar, view_text());
         tap(432, 48);
         record("organizer.new", "plus", ui.view() == aura::UiView::OrganizerNew, view_text());
@@ -7369,7 +7392,8 @@ int main(int argc, char** argv) {
                 aura::UiView::Settings, aura::UiView::AppearanceSettings, aura::UiView::Audio,
                 aura::UiView::AoratonRooms, aura::UiView::AoratonConversation, aura::UiView::AoratonCompose,
                 aura::UiView::Weather, aura::UiView::WeatherSettings, aura::UiView::Calendar,
-                aura::UiView::Battery, aura::UiView::VoiceSettings, aura::UiView::Diagnostics,
+                aura::UiView::Battery, aura::UiView::VoiceSettings, aura::UiView::WakeWord, aura::UiView::Flashlight,
+                aura::UiView::Diagnostics,
                 aura::UiView::Wifi, aura::UiView::Clock, aura::UiView::ClockNew, aura::UiView::TimerNew,
                 aura::UiView::AlarmNew, aura::UiView::ReminderNew, aura::UiView::Notes, aura::UiView::NoteNew,
                 aura::UiView::Briefing, aura::UiView::PhoneLink,

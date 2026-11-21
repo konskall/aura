@@ -37,6 +37,7 @@ idf_component_register(
         "${AURA_ROOT}/shared/core/src/battery_history.cpp"
         "${AURA_ROOT}/shared/core/src/alarm_station.cpp"
         "${AURA_ROOT}/shared/core/src/xweather.cpp"
+        "${AURA_ROOT}/shared/core/src/wake_word.cpp"
         "${AURA_ROOT}/shared/core/src/text_util.cpp"
         "${AURA_ROOT}/shared/core/src/voice.cpp"
         "${AURA_ROOT}/shared/core/src/aoraton_crypto.cpp"

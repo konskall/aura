@@ -22,6 +22,7 @@
 #include "aura/sounds.hpp"
 #include "aura/text_util.hpp"
 #include "aura/voice.hpp"
+#include "aura/wake_word.hpp"
 #include "aura/weather.hpp"
 #include "aura/wifi.hpp"
 
@@ -113,6 +114,10 @@ enum class UiView {
     // Αρχεία: a new name, and a look inside a picture or a text file.
     FileRename,
     FilePreview,
+    // «Αύρα» without a touch (Ήχος, 2026-11-20): on or off, and its sensitivity.
+    WakeWord,
+    // The screen as a light, white or red (2026-11-21).
+    Flashlight,
 };
 
 // Power actions from Settings > System. PowerOn comes from a long press on the
@@ -286,6 +291,8 @@ struct AuraUiCallbacks {
     std::function<void(std::size_t index, int direction)> on_radio_move;
     std::function<void(std::size_t from, std::size_t to)> on_launcher_app_move;
     std::function<void(const SoundSettings& settings)> on_sound_settings;
+    // The wake word's choice (Ήχος > «Αύρα»): true when the platform kept it.
+    std::function<bool(const WakeWordSettings& settings)> on_wake_word;
     std::function<void()> on_sound_preview;
     std::function<void(AssistantVoice voice)> on_voice_preview;
     std::function<void(SystemAction action)> on_system_action;
@@ -321,6 +328,8 @@ public:
     void apply_assistant_extras(const AssistantExtras& extras);
     // Chime and spoken-reply choices; volume and mute come with apply_audio.
     void apply_sound(const SoundSettings& settings);
+    // The wake word's stored choice (its row shows with capabilities.wake_word).
+    void apply_wake_word(const WakeWordSettings& settings);
     // A dark, switched-off screen; a long press asks the platform to power on.
     void power_off();
     // The volume after a press of a volume key, briefly (0-100 %).

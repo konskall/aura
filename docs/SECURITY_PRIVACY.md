@@ -156,3 +156,26 @@ See [ADR 0010](ADR/0010-device-aoraton-account.md).
   - Αποσύνδεση empties the cache.
   - The card does show how many files were opened, and their sizes.
 - **Logs.** The PC helper prints no code, token, key, PIN or invite. On the device, the serial log carries the crypto self-test result and realtime status codes only.
+
+## The wake word «Αύρα» (2026-11-20)
+
+ADR 0011. Off until the owner turns it on (Ήχος > Λέξη αφύπνισης). While it is
+on and AURA is quiet, the microphone stays open and the device itself listens for
+«Αύρα» (microWakeWord's model, built into the firmware).
+
+- What it hears is processed in RAM as it arrives, at most a second waiting in a
+  buffer; it is never stored, logged or sent.
+- Nothing leaves the device until «Αύρα» is heard. The question that follows is
+  recorded and sent exactly as after a tap (ADR 0009).
+- It does not listen while a question, an answer, a note or a voice message uses
+  the microphone, nor while the radio, an answer or an alarm sounds.
+- The serial log has numbers only: inferences, the highest window mean, the
+  slowest inference, dropped samples, and how near a try that did not wake came.
+- A false wake starts an ordinary question. If the recorder then hears no speech
+  nothing is sent; speech in the room after it (a television, say) is sent as a
+  question would be. The sensitivity setting trades missed words for fewer
+  false wakes.
+- High (0.75 since 2026-11-21, the owner's choice) wakes from across a room, but
+  more often by mistake than Normal (0.98). Its rate was measured in no test, so
+  each false wake sends what is said after it. The serial log counts the wakes
+  (`wake word: heard`).

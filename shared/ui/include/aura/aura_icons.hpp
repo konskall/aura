@@ -20,7 +20,7 @@ enum class IconRole {
     WifiLow, WifiMedium, VisibilityOff, Sparkles,
     ChevronLeft, Check, Plus,
     Languages, Notebook, Sunrise, Smartphone, Phone, PhoneOff, Download, BellRing, Moon, Hand, Flip, Ear, Swap,
-    Palette, Folder,
+    Palette, Folder, Flashlight,
     Count,
 };
 

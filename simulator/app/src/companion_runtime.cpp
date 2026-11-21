@@ -581,7 +581,9 @@ bool CompanionRuntime::handle_offline_command(const std::string& prompt) {
         case OfflineCommandKind::OpenApps:
         case OfflineCommandKind::OpenBattery:
         case OfflineCommandKind::OpenWifi:
-        case OfflineCommandKind::OpenFiles: {
+        case OfflineCommandKind::OpenFiles:
+        case OfflineCommandKind::OpenFlashlight:
+        case OfflineCommandKind::OpenRedLight: {
             ctx_.controller->dispatch({EventType::Cancel});
             voice_turn_ = false;
             reset_speech_pipeline();

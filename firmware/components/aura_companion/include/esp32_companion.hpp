@@ -23,6 +23,7 @@
 #include "esp32_motion.hpp"
 #include "esp32_ota.hpp"
 #include "esp32_phone_link.hpp"
+#include "esp32_wake_word.hpp"
 
 #include <array>
 #include <cstdint>
@@ -113,6 +114,15 @@ public:
     void set_barge_monitor(bool on);
     bool barge_monitoring() const noexcept { return barge_monitoring_; }
     bool take_barge_in() noexcept;
+    // «Αύρα» without a touch (2026-11-20): the engine app_main loads before
+    // Wi-Fi starts, and the owner's choice from Ήχος (wake-word.txt).
+    void set_wake_word_engine(Esp32WakeWord* engine) noexcept { wake_engine_ = engine; }
+    // While app_main allows it (nothing else uses the microphone or the
+    // speaker) and the owner turned it on, the microphone listens for «Αύρα».
+    void set_wake_monitor(bool allowed);
+    bool wake_monitoring() const noexcept { return wake_monitoring_; }
+    // True once after «Αύρα»: the microphone stays open for the question.
+    bool take_wake_word() noexcept;
     // The Sound settings the voice turn follows (spoken answers, the voice).
     const SoundSettings& sound() const noexcept { return sound_; }
     // The microphone records (a note, a question, a voice message): the radio
@@ -170,7 +180,7 @@ private:
     void finish_note();
     void save();
     enum class StoreJobKind { Clock, Notes, Organizer, Conversations, Sound, Display, Language, Layout, Voice, DeleteVoice,
-                              AoratonSync, Bluetooth, BatteryLog };
+                              AoratonSync, Bluetooth, BatteryLog, WakeWord };
     struct StoreJob {
         StoreJobKind kind{StoreJobKind::Clock};
         std::string name;
@@ -295,6 +305,17 @@ private:
     std::string battery_log_;
     bool battery_log_changed_{false};
     bool battery_log_save_pending_{false};
+    bool battery_log_previous_kept_{false};  // the storage task's, once a boot
+    // «Αύρα»: the engine, the owner's choice, and the listening.
+    Esp32WakeWord* wake_engine_{nullptr};
+    WakeWordSettings wake_word_{};
+    std::string saved_wake_word_text_;
+    bool wake_word_save_pending_{false};
+    bool wake_monitoring_{false};
+    bool wake_heard_{false};
+    bool wake_triggered_{false};  // the wake word's microphone stays open for the question
+    std::uint64_t wake_stats_ms_{0};
+    void stop_wake_monitor();
     bool phone_bonded_{false};
     std::uint64_t pairing_until_ms_{0};
     std::uint64_t bluetooth_checked_ms_{0};

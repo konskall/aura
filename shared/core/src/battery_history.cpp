@@ -22,6 +22,26 @@ void civil_from_days(std::int64_t days, int& year, int& month, int& day) {
 
 }  // namespace
 
+bool keep_previous_battery_log(const std::string& directory) {
+    const std::string current = directory + "/" + kBatteryLogFile;
+    const std::string backup = current + ".bak";
+    const std::string previous = directory + "/" + kBatteryLogPreviousFile;
+    const auto exists = [](const std::string& path) {
+        std::FILE* file = std::fopen(path.c_str(), "rb");
+        if (!file) return false;
+        std::fclose(file);
+        return true;
+    };
+    // The store writes through a .bak: alone, it is a write cut short.
+    const bool has_current = exists(current);
+    const std::string& source = has_current ? current : backup;
+    if (!has_current && !exists(backup)) return false;
+    std::remove(previous.c_str());  // FAT renames onto no existing file
+    if (std::rename(source.c_str(), previous.c_str()) != 0) return false;
+    if (has_current) std::remove(backup.c_str());
+    return true;
+}
+
 bool BatteryHistory::add(const BatterySample& reading) {
     if (!samples_.empty()) {
         const auto& last = samples_.back();

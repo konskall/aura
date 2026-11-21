@@ -13,14 +13,18 @@
 #include "aura/sounds.hpp"
 #include "aura/text_util.hpp"
 #include "aura/voice.hpp"
+#include "aura/wake_word.hpp"
 #include "aura/xweather.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -1671,6 +1675,146 @@ void battery_history_tests() {
     expect(history.samples().size() == BatteryHistory::kMaxSamples, "a day of samples at most");
 }
 
+// The owner's first discharge was lost (2026-11-20): the log lives in RAM and
+// starts again at every boot, so the first write after the battery ran out
+// replaced it. The first write of a boot now keeps the old log as
+// battery-log-previous.csv.
+void battery_log_keep_tests() {
+    namespace fs = std::filesystem;
+    const fs::path folder = fs::temp_directory_path() / "aura_battery_log_keep_test";
+    fs::remove_all(folder);
+    fs::create_directories(folder);
+    const auto put = [&](const char* name, const char* text) { std::ofstream(folder / name, std::ios::binary) << text; };
+    const auto get = [&](const char* name) {
+        std::ifstream file(folder / name, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    };
+    const std::string directory = folder.string();
+    expect(std::string(aura::kBatteryLogFile) == "battery-log.csv" &&
+               std::string(aura::kBatteryLogPreviousFile) == "battery-log-previous.csv",
+           "the two logs' names");
+
+    put("battery-log.csv", "the discharge\n");
+    put("battery-log-previous.csv", "an older one\n");
+    expect(aura::keep_previous_battery_log(directory), "a log on the card is kept");
+    expect(get("battery-log-previous.csv") == "the discharge\n", "as the previous one, replacing an older one");
+    expect(!fs::exists(folder / "battery-log.csv"), "and the new boot's log starts empty");
+
+    expect(!aura::keep_previous_battery_log(directory), "with no log yet, nothing to keep");
+    expect(get("battery-log-previous.csv") == "the discharge\n", "and the previous one stays");
+
+    put("battery-log.csv.bak", "a write cut short\n");
+    expect(aura::keep_previous_battery_log(directory), "a write cut short left only its backup");
+    expect(get("battery-log-previous.csv") == "a write cut short\n" && !fs::exists(folder / "battery-log.csv.bak"),
+           "which is kept the same way");
+
+    fs::remove_all(folder);
+    fs::create_directories(folder);
+    expect(!aura::keep_previous_battery_log(directory) && fs::is_empty(folder), "an empty card stays empty");
+    fs::remove_all(folder);
+}
+
+// «Αύρα» without a touch (the owner, 2026-11-19; the first model, 2026-11-20):
+// the device does what microWakeWord's own test did, so that test's cutoffs
+// (tools/wakeword/README.md) hold on the device.
+void wake_word_tests() {
+    using namespace aura;
+    // Off until the owner turns it on: an open microphone, and its battery.
+    const WakeWordSettings defaults;
+    expect(!defaults.enabled && defaults.sensitivity == WakeWordSensitivity::Normal, "off, normal sensitivity");
+    for (const auto sensitivity : {WakeWordSensitivity::Low, WakeWordSensitivity::Normal, WakeWordSensitivity::High}) {
+        WakeWordSettings settings;
+        settings.enabled = true;
+        settings.sensitivity = sensitivity;
+        const auto back = parse_wake_word_settings(serialize_wake_word_settings(settings));
+        expect(back.enabled && back.sensitivity == sensitivity, "the settings round-trip");
+    }
+    const auto garbage = parse_wake_word_settings("enabled=1\nsensitivity=loud\n");
+    expect(!garbage.enabled && garbage.sensitivity == WakeWordSensitivity::Normal, "a text that is not ours: defaults");
+    const auto odd = parse_wake_word_settings("aura-wake-word 1\nenabled=1\nsensitivity=loud\n");
+    expect(odd.enabled && odd.sensitivity == WakeWordSensitivity::Normal, "an unknown sensitivity: normal");
+
+    // The final test's table for Low 0.99 and Normal 0.98. High is 0.75 (the
+    // owner's choice, 2026-11-21): the owner's tries from a distance came to
+    // 0.58-0.85 and woke at none of the old 0.96.
+    expect(wake_word_cutoff(WakeWordSensitivity::Low) == 0.99F && wake_word_cutoff(WakeWordSensitivity::Normal) == 0.98F &&
+               wake_word_cutoff(WakeWordSensitivity::High) == 0.75F,
+           "each sensitivity's cutoff");
+
+    // Features as in training (x 0.0390625), then the input tensor's own
+    // quantization, cut toward zero as numpy's astype(int8) cuts.
+    constexpr float kScale = 0.10196078568696976F;
+    constexpr int kZero = -128;
+    expect(quantize_wake_feature(0, kScale, kZero) == -128, "silence is the lowest input");
+    expect(quantize_wake_feature(100, kScale, kZero) == -89, "100: 3.906/0.102 = 38.3, -89.7 cut toward zero");
+    expect(quantize_wake_feature(400, kScale, kZero) == 25, "400: 25.25 cut to 25");
+    expect(quantize_wake_feature(667, kScale, kZero) == 127 && quantize_wake_feature(65535, kScale, kZero) == 127,
+           "the loudest clamp to 127");
+
+    // The detector: the mean of the last five outputs over the cutoff, after a
+    // cooldown of 75 means at the start and after each detection.
+    WakeWordDetector detector;
+    detector.set_cutoff(0.98F);
+    int first = 0;
+    for (int push = 1; push <= 200 && first == 0; ++push) {
+        if (detector.push(255)) first = push;
+    }
+    expect(first == 79, "sure from the start: heard at the 75th mean, the 79th output");
+    int second = 0;
+    for (int push = 80; push <= 300 && second == 0; ++push) {
+        if (detector.push(255)) second = push;
+    }
+    expect(second == 154, "and once more only after another 75 means");
+    expect(detector.take_peak() > 0.99F && detector.take_peak() == 0.0F, "the peak mean, once");
+
+    detector.reset();
+    detector.set_cutoff(200.0F / 255.0F);
+    bool heard = false;
+    for (int push = 0; push < 120; ++push) heard = detector.push(200) || heard;
+    expect(!heard, "a mean exactly at the cutoff is not over it");
+    expect(detector.push(205), "a little over it is");
+
+    detector.reset();
+    detector.set_cutoff(0.98F);
+    heard = false;
+    for (int push = 0; push < 300; ++push) heard = detector.push(push % 5 == 0 ? 255 : 10) || heard;
+    expect(!heard, "one sure output among unsure ones is not a word");
+    detector.reset();
+    for (int push = 0; push < 78; ++push) heard = detector.push(255) || heard;
+    expect(!heard, "after a reset the cooldown starts again");
+
+    // A try that came near without waking, for the device's log (the owner,
+    // 2026-11-20, had to shout from a metre): a rise of the mean over 0.5 that
+    // falls back under 0.2 without a word gives its highest mean, once.
+    detector.reset();
+    detector.set_cutoff(0.98F);
+    for (int push = 0; push < 100; ++push) detector.push(0);
+    expect(detector.take_near_miss() == 0.0F, "quiet: nothing came near");
+    for (int push = 0; push < 10; ++push) detector.push(200);
+    expect(detector.take_near_miss() == 0.0F, "a rise still under way is not yet a miss");
+    for (int push = 0; push < 10; ++push) detector.push(0);
+    const float miss = detector.take_near_miss();
+    expect(miss > 0.78F && miss < 0.79F, "it fell back without a word: its highest mean (200/255)");
+    expect(detector.take_near_miss() == 0.0F, "once");
+    for (int push = 0; push < 10; ++push) detector.push(100);
+    for (int push = 0; push < 10; ++push) detector.push(0);
+    expect(detector.take_near_miss() == 0.0F, "a rise under 0.5 is not near");
+    heard = false;
+    for (int push = 0; push < 10; ++push) heard = detector.push(255) || heard;
+    for (int push = 0; push < 10; ++push) detector.push(0);
+    expect(heard && detector.take_near_miss() == 0.0F, "a word, and its tail, are not a miss");
+    for (int push = 0; push < 10; ++push) detector.push(150);
+    for (int push = 0; push < 10; ++push) detector.push(0);
+    const float after = detector.take_near_miss();
+    expect(after > 0.58F && after < 0.59F, "the next near try counts again (150/255)");
+    // A new listen starts clean: a rise under way when the last one stopped is
+    // not a miss of the next.
+    for (int push = 0; push < 10; ++push) detector.push(200);
+    detector.reset();
+    for (int push = 0; push < 10; ++push) detector.push(0);
+    expect(detector.take_near_miss() == 0.0F, "a reset forgets a rise under way");
+}
+
 // The screen turns with the device (the owner's request on the first flash,
 // 2026-11-14): the edge nearest the ground becomes the bottom.
 void orientation_tests() {
@@ -1750,6 +1894,8 @@ int main() {
     sound_tests();
     power_tests();
     battery_history_tests();
+    battery_log_keep_tests();
+    wake_word_tests();
     alarm_station_tests();
     xweather_tests();
     metrics_tests();

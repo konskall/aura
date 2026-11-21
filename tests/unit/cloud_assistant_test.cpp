@@ -525,7 +525,9 @@ void speech_tests() {
     const auto boundary = header(stt, "Content-Type");
     expect(boundary.rfind("multipart/form-data; boundary=", 0) == 0, "a multipart form");
     expect(contains(stt.body, "name=\"file\"; filename=\"aura.wav\"\r\nContent-Type: audio/wav\r\n\r\nRIFF") &&
-               contains(stt.body, "name=\"model\"\r\n\r\nwhisper-large-v3-turbo\r\n") &&
+               // The most accurate outside English (the owner, 2026-11-20: Greek
+               // still misheard); turbo is quicker and less exact.
+               contains(stt.body, "name=\"model\"\r\n\r\nwhisper-large-v3\r\n") &&
                contains(stt.body, "name=\"response_format\"\r\n\r\njson\r\n") &&
                contains(stt.body, "name=\"temperature\"\r\n\r\n0\r\n") &&
                contains(stt.body, "name=\"language\"\r\n\r\nel\r\n"),

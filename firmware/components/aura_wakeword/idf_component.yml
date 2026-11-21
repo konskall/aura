@@ -1,0 +1,5 @@
+## «Αύρα» on the device (2026-11-20, ADR 0011): TensorFlow Lite Micro, and
+## microWakeWord's own features with the training's settings. Both Apache-2.0.
+dependencies:
+  espressif/esp-tflite-micro: "==1.4.3"
+  esphome/esp-micro-speech-features: "==1.2.3"

@@ -13,8 +13,10 @@
 #include "aura/companion_strings.hpp"
 #include "aura/photo_strings.hpp"
 #include "aura/transfer_strings.hpp"
+#include "aura/clock_services.hpp"
 #include "aura_brand_assets.hpp"
 #include "src/image/lv_image_decoder_private.h"  // lv_image_decoder_dsc_t, to decode the compressed icons
+#include "src/misc/lv_text_private.h"             // lv_text_get_width(), as ui::text_fits measures
 
 #include <algorithm>
 #include <array>
@@ -3115,6 +3117,507 @@ void check_touch_notice() {
     lv_display_delete(display);
 }
 
+// «Αύρα» without a touch (2026-11-20): Ήχος has its row only with a model on
+// the device; its screen turns it on and picks a sensitivity, and a choice the
+// platform could not keep says so and stays as it was.
+void check_wake_word_screen() {
+    using aura::UiView;
+    using aura::WakeWordSensitivity;
+    ensure_lvgl();
+    auto* previous = lv_display_get_default();
+    static std::uint8_t buffer[480 * 48 * 2];
+    auto* display = lv_display_create(480, 480);
+    lv_display_set_buffers(display, buffer, nullptr, sizeof(buffer), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, [](lv_display_t* target, const lv_area_t*, std::uint8_t*) {
+        lv_display_flush_ready(target);
+    });
+    lv_display_set_default(display);
+    auto owner = std::make_unique<aura::AuraUi>();
+    auto& face = *owner;
+    aura::WakeWordSettings kept;
+    int offered = 0;
+    bool keeps = true;
+    aura::AuraUiCallbacks callbacks;
+    callbacks.on_wake_word = [&](const aura::WakeWordSettings& settings) {
+        ++offered;
+        if (keeps) kept = settings;
+        return keeps;
+    };
+    face.create(display, std::move(callbacks));
+    const auto& words = aura::l10n::companion_el_gr();
+
+    face.show(UiView::Audio);
+    expect(row_titled(face.root(), words.wake_word_row) == nullptr, "no model: no wake word row in Ήχος");
+    aura::CompanionCapabilities capabilities;
+    capabilities.microphone = capabilities.speech_recognition = capabilities.wake_word = true;
+    face.set_capabilities(capabilities);
+    face.show(UiView::Audio);
+    auto* row = row_titled(face.root(), words.wake_word_row);
+    expect(row != nullptr && shows_text(row, words.wake_word_off), "with a model: its row, off, its title whole");
+    if (row) lv_obj_send_event(row, LV_EVENT_CLICKED, nullptr);
+    expect(face.view() == UiView::WakeWord, "the row opens its screen");
+    // Whole words in every look and both languages, once laid out (a cut label
+    // ends in dots: the first screenshots showed the header and three details cut).
+    for (const auto look : {aura::Appearance::Halo, aura::Appearance::Marble, aura::Appearance::Aurora,
+                            aura::Appearance::Graphite}) {
+        for (const auto language : {aura::InterfaceLanguage::Greek, aura::InterfaceLanguage::English}) {
+            face.set_appearance(look);
+            face.set_language(language);
+            face.show(UiView::WakeWord);
+            lv_obj_update_layout(lv_screen_active());
+            const auto& copy = language == aura::InterfaceLanguage::Greek ? aura::l10n::companion_el_gr()
+                                                                          : aura::l10n::companion_en_us();
+            for (const char* text : {copy.wake_word_row, copy.wake_word_listen, copy.wake_word_listen_detail,
+                                     copy.wake_word_sensitivity, copy.wake_word_low, copy.wake_word_low_detail,
+                                     copy.wake_word_normal, copy.wake_word_normal_detail, copy.wake_word_high,
+                                     copy.wake_word_high_detail}) {
+                if (!shows_text(face.root(), text)) std::cerr << "cut or missing: " << text << '\n';
+                expect(shows_text(face.root(), text), "every title and detail whole");
+            }
+        }
+    }
+    face.set_language(aura::InterfaceLanguage::Greek);
+    face.set_appearance(aura::Appearance::Halo);
+    face.show(UiView::WakeWord);
+
+    face.tick(200);
+    auto* listen = row_titled(face.root(), words.wake_word_listen);
+    expect(listen && !row_switch_on(listen), "the switch starts off");
+    if (listen) lv_obj_send_event(listen, LV_EVENT_CLICKED, nullptr);
+    expect(offered == 1 && kept.enabled && kept.sensitivity == WakeWordSensitivity::Normal, "a tap turns it on");
+    expect(row_switch_on(row_titled(face.root(), words.wake_word_listen)), "and its switch shows it");
+
+    face.tick(200);
+    auto* high = row_titled(face.root(), words.wake_word_high);
+    if (high) lv_obj_send_event(high, LV_EVENT_CLICKED, nullptr);
+    expect(offered == 2 && kept.enabled && kept.sensitivity == WakeWordSensitivity::High, "High is chosen");
+
+    keeps = false;
+    face.tick(200);
+    auto* low = row_titled(face.root(), words.wake_word_low);
+    if (low) lv_obj_send_event(low, LV_EVENT_CLICKED, nullptr);
+    expect(offered == 3 && kept.sensitivity == WakeWordSensitivity::High && shows_text(face.root(), words.wake_word_failed),
+           "a choice not kept says so and changes nothing");
+    face.show(UiView::Audio);
+    char high_summary[96];
+    std::snprintf(high_summary, sizeof(high_summary), words.wake_word_on_format, words.wake_word_high);
+    expect(shows_text(face.root(), high_summary), "Ήχος still says on, High");
+    face.show(UiView::WakeWord);
+
+    aura::WakeWordSettings stored;
+    face.apply_wake_word(stored);
+    expect(face.view() == UiView::WakeWord && !row_switch_on(row_titled(face.root(), words.wake_word_listen)),
+           "the platform's stored choice shows at once");
+
+    lv_screen_load(lv_obj_create(nullptr));
+    lv_obj_delete(face.root());
+    owner.reset();
+    lv_display_set_default(previous);
+    lv_display_delete(display);
+}
+
+// The status group of a screen other than Home: its time label's parent.
+lv_obj_t* status_group_of(lv_obj_t* root, const std::string& time) {
+    for (auto* label : shown_of(root, &lv_label_class)) {
+        if (time == lv_label_get_text(label)) return lv_obj_get_parent(label);
+    }
+    return nullptr;
+}
+
+std::vector<lv_obj_t*> shown_children(lv_obj_t* parent) {
+    std::vector<lv_obj_t*> shown;
+    for (std::uint32_t index = 0; index < lv_obj_get_child_count(parent); ++index) {
+        auto* child = lv_obj_get_child(parent, static_cast<int32_t>(index));
+        if (!lv_obj_is_hidden(child)) shown.push_back(child);
+    }
+    return shown;
+}
+
+// The width of a label's text as drawn, as ui::text_fits measures it.
+std::int32_t drawn_text_width(lv_obj_t* label) {
+    lv_text_attributes_t attributes{};
+    attributes.letter_space = lv_obj_get_style_text_letter_space(label, LV_PART_MAIN);
+    attributes.max_width = LV_COORD_MAX;
+    attributes.text_flags = LV_TEXT_FLAG_NONE;
+    const char* text = lv_label_get_text(label);
+    return lv_text_get_width(text, static_cast<std::uint32_t>(std::strlen(text)),
+                             lv_obj_get_style_text_font(label, LV_PART_MAIN), &attributes);
+}
+
+// The battery and its charging only on Home (the owner, 2026-11-20: they
+// showed on the voice screens, over «Σου απαντώ…», and in Ρυθμίσεις' header).
+// Every other screen keeps the time beside its content, and the sign that
+// AURA is offline when it is.
+void check_status_battery_home_only() {
+    using aura::UiView;
+    ensure_lvgl();
+    auto* previous = lv_display_get_default();
+    static std::uint8_t buffer[480 * 48 * 2];
+    auto* display = lv_display_create(480, 480);
+    lv_display_set_buffers(display, buffer, nullptr, sizeof(buffer), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, [](lv_display_t* target, const lv_area_t*, std::uint8_t*) {
+        lv_display_flush_ready(target);
+    });
+    lv_display_set_default(display);
+    auto owner = std::make_unique<aura::AuraUi>();
+    auto& face = *owner;
+    face.create(display, aura::AuraUiCallbacks{});
+    aura::DeviceStatusSnapshot status;
+    status.clock_valid = true;
+    status.hour = 22;
+    status.minute = 6;
+    status.power_known = true;
+    status.battery_percent = 15;
+    status.charging = true;
+    status.connection_known = true;
+    status.online = true;
+    status.sequence = 1;
+    face.apply_status(status);
+    const std::string time = aura::clock_text(22, 6, true, aura::InterfaceLanguage::Greek);
+    const auto* charging = aura::ui::icon_asset(aura::ui::IconRole::Charging);
+    const auto shows_charging = [charging](lv_obj_t* root) {
+        for (auto* image : shown_of(root, &lv_image_class)) {
+            if (lv_image_get_src(image) == charging) return true;
+        }
+        return false;
+    };
+    std::uint64_t sequence = 0;
+    const auto assistant = [&face, &sequence](aura::AssistantState state, const char* code) {
+        aura::AssistantSnapshot snapshot;
+        snapshot.state = state;
+        snapshot.error_code = code;
+        snapshot.sequence = ++sequence;
+        snapshot.turn_generation = sequence;
+        face.apply(snapshot);
+    };
+
+    face.show(UiView::Home);
+    expect(shows_charging(face.root()) && shows_text(face.root(), "15%"), "Home shows the battery and its charging");
+    // Charging, then low and not charging: on no other screen.
+    for (const bool low : {false, true}) {
+        if (low) {
+            status.charging = false;
+            status.battery_percent = 12;
+            ++status.sequence;
+            face.apply_status(status);
+        }
+        const auto only_time = [&](const char* where) {
+            auto* group = status_group_of(face.root(), time);
+            const auto shown = group ? shown_children(group) : std::vector<lv_obj_t*>{};
+            if (shown.size() != 1) std::cerr << where << ": " << shown.size() << " shown in the status group\n";
+            expect(group != nullptr && shown.size() == 1, "beside the content only the time: no battery, no charging");
+        };
+        face.show(UiView::Settings);
+        only_time("Ρυθμίσεις");
+        face.show(UiView::Audio);
+        only_time("Ήχος");
+        // A voice screen's title sits where the group does: the group gives way.
+        assistant(aura::AssistantState::Listening, "");
+        expect(face.view() == UiView::Assistant && status_group_of(face.root(), time) == nullptr &&
+                   !shows_charging(face.root()),
+               "«Ακούω…»: the status group gives way to the title");
+        assistant(aura::AssistantState::Error, "NO_SPEECH");
+        only_time("Δεν σε άκουσα");
+        face.show(UiView::Home);
+        const std::string percent = std::to_string(status.battery_percent) + "%";
+        expect(shows_text(face.root(), percent.c_str()), "Home keeps the battery");
+    }
+    status.online = false;
+    ++status.sequence;
+    face.apply_status(status);
+    face.show(UiView::Settings);
+    auto* group = status_group_of(face.root(), time);
+    expect(group != nullptr && shown_children(group).size() == 2, "offline: its sign beside the time");
+
+    lv_screen_load(lv_obj_create(nullptr));
+    lv_obj_delete(face.root());
+    owner.reset();
+    lv_display_set_default(previous);
+    lv_display_delete(display);
+}
+
+// The voice screens' title clear of the status group (the owner's photo,
+// 2026-11-20: «Σου απαντώ…» under the charging sign and «10:06 μ.μ.»). In
+// every look and both languages, with the 12-hour time, online and offline,
+// the title is whole and ends before the group begins, or the group gives way.
+void check_voice_title_clear_of_status() {
+    ensure_lvgl();
+    auto* previous = lv_display_get_default();
+    static std::uint8_t buffer[480 * 48 * 2];
+    auto* display = lv_display_create(480, 480);
+    lv_display_set_buffers(display, buffer, nullptr, sizeof(buffer), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, [](lv_display_t* target, const lv_area_t*, std::uint8_t*) {
+        lv_display_flush_ready(target);
+    });
+    lv_display_set_default(display);
+    auto owner = std::make_unique<aura::AuraUi>();
+    auto& face = *owner;
+    face.create(display, aura::AuraUiCallbacks{});
+    aura::DisplaySnapshot display_state;
+    display_state.settings.clock_24h = false;
+    display_state.sequence = 1;
+    face.apply_display(display_state);
+    aura::DeviceStatusSnapshot status;
+    status.clock_valid = true;
+    status.hour = 22;
+    status.minute = 6;
+    status.power_known = true;
+    status.battery_percent = 80;
+    status.charging = true;
+    status.connection_known = true;
+    status.sequence = 1;
+    aura::AssistantExtras extras;
+    std::uint64_t sequence = 0;
+    struct Stage {
+        aura::AssistantState state;
+        bool voice;
+    };
+    for (const auto look : {aura::Appearance::Halo, aura::Appearance::Marble, aura::Appearance::Aurora,
+                            aura::Appearance::Graphite}) {
+        for (const auto language : {aura::InterfaceLanguage::Greek, aura::InterfaceLanguage::English}) {
+            face.set_appearance(look);
+            face.set_language(language);
+            const bool greek = language == aura::InterfaceLanguage::Greek;
+            const auto& visual = greek ? aura::l10n::visual_el_gr() : aura::l10n::visual_en_us();
+            const auto& words = greek ? aura::l10n::companion_el_gr() : aura::l10n::companion_en_us();
+            const std::string time = aura::clock_text(22, 6, false, language);
+            for (const bool online : {true, false}) {
+                status.online = online;
+                ++status.sequence;
+                face.apply_status(status);
+                for (const auto& stage : {Stage{aura::AssistantState::Listening, false},
+                                          Stage{aura::AssistantState::Transcribing, false},
+                                          Stage{aura::AssistantState::Thinking, false},
+                                          Stage{aura::AssistantState::Responding, true}}) {
+                    extras.voice_on = stage.voice;
+                    ++extras.sequence;
+                    face.apply_assistant_extras(extras);
+                    aura::AssistantSnapshot snapshot;
+                    snapshot.state = stage.state;
+                    snapshot.sequence = ++sequence;
+                    snapshot.turn_generation = sequence;
+                    face.apply(snapshot);
+                    lv_obj_update_layout(lv_screen_active());
+                    const char* expected = stage.state == aura::AssistantState::Listening ? visual.listening_title :
+                                           stage.state == aura::AssistantState::Transcribing ? words.transcribing_title :
+                                           stage.state == aura::AssistantState::Thinking ? visual.thinking_title :
+                                                                                           visual.speaking_title;
+                    lv_obj_t* title = nullptr;
+                    for (auto* label : shown_of(face.root(), &lv_label_class)) {
+                        if (std::strcmp(lv_label_get_text(label), expected) == 0) title = label;
+                    }
+                    if (!title) std::cerr << "cut or missing: " << expected << '\n';
+                    expect(title != nullptr, "the voice screen's title is whole");
+                    auto* group = status_group_of(face.root(), time);
+                    if (!title || !group) continue;
+                    lv_area_t title_area{};
+                    lv_area_t group_area{};
+                    lv_obj_get_coords(title, &title_area);
+                    lv_obj_get_coords(group, &group_area);
+                    const std::int32_t middle = (title_area.x1 + title_area.x2 + 1) / 2;
+                    const std::int32_t right = middle + (drawn_text_width(title) + 1) / 2;
+                    if (right + 8 > group_area.x1) {
+                        std::cerr << expected << (online ? "" : " (offline)") << ": the title ends at " << right
+                                  << ", the status group begins at " << group_area.x1 << '\n';
+                    }
+                    expect(right + 8 <= group_area.x1, "the title ends before the status group begins");
+                }
+            }
+        }
+    }
+    face.set_language(aura::InterfaceLanguage::Greek);
+    face.set_appearance(aura::Appearance::Halo);
+
+    lv_screen_load(lv_obj_create(nullptr));
+    lv_obj_delete(face.root());
+    owner.reset();
+    lv_display_set_default(previous);
+    lv_display_delete(display);
+}
+
+// «Δεν σε άκουσα» goes back to Home by itself (the owner, 2026-11-20: «δεν
+// πρέπει να μένει για πολύ ώρα, πρέπει μετά από κάποια δευτερόλεπτα να
+// επιστρέφει στην αρχική»), as its «Αρχική» does. A screen the owner opened
+// stays, and a failure with something to do waits for the owner.
+void check_no_speech_goes_home() {
+    using aura::UiView;
+    ensure_lvgl();
+    auto* previous = lv_display_get_default();
+    static std::uint8_t buffer[480 * 48 * 2];
+    auto* display = lv_display_create(480, 480);
+    lv_display_set_buffers(display, buffer, nullptr, sizeof(buffer), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, [](lv_display_t* target, const lv_area_t*, std::uint8_t*) {
+        lv_display_flush_ready(target);
+    });
+    lv_display_set_default(display);
+    auto owner = std::make_unique<aura::AuraUi>();
+    auto& face = *owner;
+    int homes = 0;
+    aura::AuraUiCallbacks callbacks;
+    callbacks.on_home = [&homes] { ++homes; };
+    face.create(display, std::move(callbacks));
+    const auto& words = aura::l10n::companion_el_gr();
+    std::uint64_t sequence = 0;
+    const auto fail = [&face, &sequence](const char* code) {
+        aura::AssistantSnapshot snapshot;
+        snapshot.state = aura::AssistantState::Error;
+        snapshot.error_code = code;
+        snapshot.sequence = ++sequence;
+        snapshot.turn_generation = sequence;
+        face.apply(snapshot);
+    };
+
+    fail("NO_SPEECH");
+    expect(face.view() == UiView::Assistant && shows_text(face.root(), words.voice_error_title),
+           "«Δεν σε άκουσα» shows");
+    for (int step = 0; step < 35; ++step) face.tick(200);
+    expect(face.view() == UiView::Assistant && homes == 0, "for some seconds, to be read");
+    for (int step = 0; step < 10; ++step) face.tick(200);
+    expect(face.view() == UiView::Home && homes == 1, "then Home by itself, as its «Αρχική» does");
+
+    fail("NO_SPEECH");
+    face.show(UiView::Settings);
+    for (int step = 0; step < 60; ++step) face.tick(200);
+    expect(face.view() == UiView::Settings && homes == 1, "a screen the owner opened stays");
+
+    fail("NETWORK_UNAVAILABLE");
+    for (int step = 0; step < 100; ++step) face.tick(200);
+    expect(face.view() == UiView::Assistant && homes == 1, "a failure with something to do waits for the owner");
+
+    lv_screen_load(lv_obj_create(nullptr));
+    lv_obj_delete(face.root());
+    owner.reset();
+    lv_display_set_default(previous);
+    lv_display_delete(display);
+}
+
+// A shown full-screen light of `rgb` (Φακός): an object of the whole screen,
+// opaque, in that colour.
+bool shows_light(lv_obj_t* root, std::uint32_t rgb) {
+    for (auto* object : shown_of(root, &lv_obj_class)) {
+        if (lv_obj_get_width(object) == 480 && lv_obj_get_height(object) == 480 &&
+            lv_obj_get_style_bg_opa(object, LV_PART_MAIN) == LV_OPA_COVER &&
+            same_color(lv_obj_get_style_bg_color(object, LV_PART_MAIN), rgb)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+lv_obj_t* button_with_icon(lv_obj_t* root, aura::ui::IconRole role) {
+    const auto* icon = aura::ui::icon_asset(role);
+    for (auto* image : shown_of(root, &lv_image_class)) {
+        if (lv_image_get_src(image) == icon && lv_obj_check_type(lv_obj_get_parent(image), &lv_button_class)) {
+            return lv_obj_get_parent(image);
+        }
+    }
+    return nullptr;
+}
+
+// Φακός (the owner, 2026-11-21: «λειτουργία φακού όπου θα ανάβει την οθόνη σε
+// λευκό χρώμα και κόκκινο με βαθμίδες φωτεινότητας»): the whole screen a light,
+// white or red, in four steps of 25 % of its light each (the panel's gamma: 136,
+// 186, 224, 255), with no status over it; a tap on the light leaves only the
+// light, another brings its buttons back; ✕ goes back. Its app in the launcher,
+// its words whole in every look and both languages.
+void check_flashlight_screen() {
+    using aura::UiView;
+    ensure_lvgl();
+    auto* previous = lv_display_get_default();
+    static std::uint8_t buffer[480 * 48 * 2];
+    auto* display = lv_display_create(480, 480);
+    lv_display_set_buffers(display, buffer, nullptr, sizeof(buffer), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(display, [](lv_display_t* target, const lv_area_t*, std::uint8_t*) {
+        lv_display_flush_ready(target);
+    });
+    lv_display_set_default(display);
+    auto owner = std::make_unique<aura::AuraUi>();
+    auto& face = *owner;
+    face.create(display, aura::AuraUiCallbacks{});
+    aura::DeviceStatusSnapshot status;
+    status.clock_valid = true;
+    status.hour = 22;
+    status.minute = 6;
+    status.sequence = 1;
+    face.apply_status(status);
+    const auto& words = aura::l10n::companion_el_gr();
+    const auto tap = [&face](lv_obj_t* target) {
+        face.tick(200);  // past the double-tap guard
+        if (target) lv_obj_send_event(target, LV_EVENT_CLICKED, nullptr);
+    };
+
+    expect(face.open_app("flashlight") && face.view() == UiView::Flashlight, "«άναψε τον φακό» opens Φακός");
+    expect(shows_light(face.root(), 0xFFFFFF), "white, at its brightest");
+    expect(!shows_text(face.root(), aura::clock_text(22, 6, true, aura::InterfaceLanguage::Greek).c_str()),
+           "no status over the light");
+    tap(row_titled(face.root(), words.flashlight_red));
+    expect(shows_light(face.root(), 0xFF0000), "Κόκκινο: red");
+    tap(row_titled(face.root(), "25%"));
+    expect(shows_light(face.root(), 0x880000), "25 %: a quarter of the light (136)");
+    tap(row_titled(face.root(), "50%"));
+    expect(shows_light(face.root(), 0xBA0000), "50 %: 186");
+    tap(row_titled(face.root(), "75%"));
+    expect(shows_light(face.root(), 0xE00000), "75 %: 224");
+    tap(row_titled(face.root(), words.flashlight_white));
+    expect(shows_light(face.root(), 0xE0E0E0), "Λευκό keeps the step");
+    tap(row_titled(face.root(), "100%"));
+    expect(shows_light(face.root(), 0xFFFFFF), "100 %: all of it");
+
+    lv_obj_t* light = nullptr;
+    for (auto* object : shown_of(face.root(), &lv_obj_class)) {
+        if (lv_obj_get_width(object) == 480 && lv_obj_get_height(object) == 480 &&
+            lv_obj_get_style_bg_opa(object, LV_PART_MAIN) == LV_OPA_COVER &&
+            same_color(lv_obj_get_style_bg_color(object, LV_PART_MAIN), 0xFFFFFF)) {
+            light = object;
+        }
+    }
+    expect(light != nullptr, "the light is one object");
+    tap(light);
+    expect(shows_light(face.root(), 0xFFFFFF) && !shows_text(face.root(), words.flashlight_red) &&
+               button_with_icon(face.root(), aura::ui::IconRole::Close) == nullptr,
+           "a tap on the light leaves only the light");
+    tap(light);
+    expect(shows_text(face.root(), words.flashlight_red) && button_with_icon(face.root(), aura::ui::IconRole::Close),
+           "another brings its buttons back");
+    tap(button_with_icon(face.root(), aura::ui::IconRole::Close));
+    expect(face.view() == UiView::Home, "✕ goes back where it came from");
+
+    expect(face.open_app("red_light") && face.view() == UiView::Flashlight && shows_light(face.root(), 0xFF0000),
+           "«κόκκινο φως» opens it red");
+    face.show(UiView::Home);
+
+    for (const auto look : {aura::Appearance::Halo, aura::Appearance::Marble, aura::Appearance::Aurora,
+                            aura::Appearance::Graphite}) {
+        for (const auto language : {aura::InterfaceLanguage::Greek, aura::InterfaceLanguage::English}) {
+            face.set_appearance(look);
+            face.set_language(language);
+            const auto& copy = language == aura::InterfaceLanguage::Greek ? aura::l10n::companion_el_gr()
+                                                                          : aura::l10n::companion_en_us();
+            face.show(UiView::Launcher);
+            lv_obj_update_layout(lv_screen_active());
+            if (!shows_text(face.root(), copy.flashlight_title)) std::cerr << "cut or missing: " << copy.flashlight_title << '\n';
+            expect(shows_text(face.root(), copy.flashlight_title), "its app in the launcher, its name whole");
+            face.show(UiView::Flashlight);
+            lv_obj_update_layout(lv_screen_active());
+            for (const char* text : {copy.flashlight_white, copy.flashlight_red, "25%", "50%", "75%", "100%"}) {
+                if (!shows_text(face.root(), text)) std::cerr << "cut or missing: " << text << '\n';
+                expect(shows_text(face.root(), text), "its buttons' words whole");
+            }
+        }
+    }
+    face.set_language(aura::InterfaceLanguage::Greek);
+    face.set_appearance(aura::Appearance::Halo);
+    face.show(UiView::Launcher);
+    tap(row_titled(face.root(), words.flashlight_title));
+    expect(face.view() == UiView::Flashlight, "the launcher's Φακός opens it");
+
+    lv_screen_load(lv_obj_create(nullptr));
+    lv_obj_delete(face.root());
+    owner.reset();
+    lv_display_set_default(previous);
+    lv_display_delete(display);
+}
+
 int main() {
     check_aura_logo_asset(aura_brand_aura_compact, 144, 53);
     check_aura_logo_asset(aura_brand_aura_hero, 176, 65);
@@ -3255,6 +3758,11 @@ int main() {
     check_synapse_direct_on_home();
     check_button_labels_fit();
     check_touch_notice();
+    check_wake_word_screen();
+    check_status_battery_home_only();
+    check_voice_title_clear_of_status();
+    check_no_speech_goes_home();
+    check_flashlight_screen();
     check_reading_font();
     check_header_glass();
     check_header_glass_bands();

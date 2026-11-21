@@ -105,7 +105,8 @@ std::string chat_instructions(const TurnRequest& request, const std::string& pro
     line("ACTION: {\"type\":\"brightness\",\"value\":70}  (or \"step\":20 for brighter, \"step\":-20 for dimmer)");
     line("ACTION: {\"type\":\"mute\",\"on\":true}");
     line("ACTION: {\"type\":\"open\",\"app\":\"weather\"}  (app is weather, clock, notes, calendar, tasks, shopping, "
-         "radio, today, messages, notifications, photos, files, settings, sound, display, wifi, battery, home or apps)");
+         "radio, today, messages, notifications, photos, files, settings, sound, display, wifi, battery, home, apps, "
+         "flashlight or red_light)");
     line("ACTION: {\"type\":\"restart\"}");
     line("ACTION: {\"type\":\"power_off\"}");
     line("Before the action line, say in one sentence what will happen. The user must confirm it on the device,");

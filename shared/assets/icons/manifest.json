@@ -539,6 +539,11 @@
       "role": "Folder",
       "source": "folder.svg",
       "lordiconCandidate": null
+    },
+    {
+      "role": "Flashlight",
+      "source": "flashlight.svg",
+      "lordiconCandidate": null
     }
   ]
 }

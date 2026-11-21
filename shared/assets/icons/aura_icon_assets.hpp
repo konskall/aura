@@ -41,6 +41,7 @@ LV_IMAGE_DECLARE(aura_icon_ellipsis);
 LV_IMAGE_DECLARE(aura_icon_eye);
 LV_IMAGE_DECLARE(aura_icon_eye_off);
 LV_IMAGE_DECLARE(aura_icon_file_text);
+LV_IMAGE_DECLARE(aura_icon_flashlight);
 LV_IMAGE_DECLARE(aura_icon_flip_vertical);
 LV_IMAGE_DECLARE(aura_icon_folder);
 LV_IMAGE_DECLARE(aura_icon_globe_2);

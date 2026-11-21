@@ -38,7 +38,7 @@ const roleMap = {
   Languages: 'languages', Notebook: 'notebook-pen', Sunrise: 'sunrise', Smartphone: 'smartphone',
   Phone: 'phone', PhoneOff: 'phone-off', Download: 'download', BellRing: 'bell-ring', Moon: 'moon',
   Hand: 'hand', Flip: 'flip-vertical', Ear: 'ear', Swap: 'arrow-left-right', Palette: 'palette',
-  Folder: 'folder',
+  Folder: 'folder', Flashlight: 'flashlight',
 };
 
 const lordiconCandidates = {

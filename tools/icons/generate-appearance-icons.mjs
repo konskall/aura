@@ -46,7 +46,7 @@ const families = {
       Check: ['check'], Plus: ['plus'], Languages: ['translate'], Notebook: ['notebook'], Sunrise: ['sun-horizon'],
       Smartphone: ['device-mobile'], Phone: ['phone'], PhoneOff: ['phone-slash', 'phone-x'], Download: ['download-simple'],
       BellRing: ['bell-ringing'], Moon: ['moon'], Hand: ['hand'], Flip: ['flip-vertical'], Ear: ['ear'],
-      Swap: ['arrows-left-right'], Palette: ['palette'], Folder: ['folder'],
+      Swap: ['arrows-left-right'], Palette: ['palette'], Folder: ['folder'], Flashlight: ['flashlight'],
     },
   },
   solar: {
@@ -85,6 +85,7 @@ const families = {
       Smartphone: ['smartphone'], Phone: ['phone'], PhoneOff: ['end-call'], Download: ['download-minimalistic'],
       BellRing: ['bell-bing'], Moon: ['moon'], Hand: ['hand-shake', 'hand-stars'], Flip: ['flip-vertical'],
       Ear: ['headphones-round', 'ear'], Swap: ['transfer-horizontal'], Palette: ['palette'], Folder: ['folder'],
+      Flashlight: ['flashlight'],
     },
   },
   material: {
@@ -117,6 +118,7 @@ const families = {
       Smartphone: ['smartphone'], Phone: ['call'], PhoneOff: ['call-end'], Download: ['download'],
       BellRing: ['notifications-active'], Moon: ['dark-mode', 'bedtime'], Hand: ['back-hand', 'pan-tool'],
       Flip: ['flip'], Ear: ['hearing'], Swap: ['swap-horiz'], Palette: ['palette'], Folder: ['folder'],
+      Flashlight: ['flashlight-on'],
     },
   },
 };

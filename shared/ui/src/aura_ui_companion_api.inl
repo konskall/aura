@@ -274,6 +274,11 @@ bool AuraUi::open_app(std::string_view app) {
                                                                                 : OrganizerKind::Event);
         return true;
     }
+    // Φακός: white or red by the name it was opened with, its buttons in view.
+    if (app == "flashlight" || app == "red_light") {
+        impl_->flashlight_red = app == "red_light";
+        impl_->flashlight_controls = true;
+    }
     const UiView view = Impl::app_view(app);
     show_from_home(view);
     if (view == UiView::Files && impl_->callbacks.on_files_open) impl_->callbacks.on_files_open(std::string{});

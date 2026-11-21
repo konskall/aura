@@ -171,6 +171,35 @@ int main() {
     expect(kind("Δείξε την μπαταρία") == OfflineCommandKind::OpenBattery, "the battery screen");
     expect(kind("Δείξε μου τα μηνύματα που έστειλε η Μαρία") == OfflineCommandKind::None,
            "a question about messages goes to the assistant");
+
+    // Φακός (the owner, 2026-11-21: «η Αύρα πρέπει να μπορεί να ανάψει το
+    // φακό»): white, red, and off, said outright; anything more is the assistant's.
+    expect(kind("Άναψε τον φακό") == OfflineCommandKind::OpenFlashlight &&
+               kind("Αύρα, άναψε το φακό") == OfflineCommandKind::OpenFlashlight &&
+               kind("Άνοιξε τον φακό") == OfflineCommandKind::OpenFlashlight &&
+               kind("Φακός") == OfflineCommandKind::OpenFlashlight &&
+               kind("Μπορείς να ανάψεις τον φακό;") == OfflineCommandKind::OpenFlashlight &&
+               kind("Turn on the flashlight") == OfflineCommandKind::OpenFlashlight &&
+               kind("Torch on") == OfflineCommandKind::OpenFlashlight,
+           "the flashlight, white");
+    expect(kind("Κόκκινο φως") == OfflineCommandKind::OpenRedLight &&
+               kind("Άναψε κόκκινο φως") == OfflineCommandKind::OpenRedLight &&
+               kind("Άναψε τον φακό στο κόκκινο") == OfflineCommandKind::OpenRedLight &&
+               kind("Red light") == OfflineCommandKind::OpenRedLight,
+           "the flashlight, red");
+    expect(kind("Σβήσε τον φακό") == OfflineCommandKind::OpenHome && kind("Κλείσε τον φακό") == OfflineCommandKind::OpenHome &&
+               kind("Σβήσε το κόκκινο φως") == OfflineCommandKind::OpenHome &&
+               kind("Turn off the flashlight") == OfflineCommandKind::OpenHome,
+           "off: Home, never the device switched off");
+    expect(kind("Πού έβαλα τον φακό μου;") == OfflineCommandKind::None &&
+               kind("Πώς μαγειρεύω φακές;") == OfflineCommandKind::None &&
+               kind("Τι σημαίνει το κόκκινο φως στο φανάρι;") == OfflineCommandKind::None &&
+               kind("Άναψε το φως") == OfflineCommandKind::None,
+           "a sentence about a flashlight, lentils, a traffic light or the room's light is the assistant's");
+    expect(std::string(offline_command_app(OfflineCommandKind::OpenFlashlight)) == "flashlight" &&
+               std::string(offline_command_app(OfflineCommandKind::OpenRedLight)) == "red_light",
+           "the flashlight's two apps");
+
     expect(std::string(offline_command_app(OfflineCommandKind::OpenWeather)) == "weather" &&
                std::string(offline_command_app(OfflineCommandKind::OpenToday)) == "today" &&
                offline_command_app(OfflineCommandKind::Restart) == nullptr, "each opening command names its app");
@@ -181,7 +210,8 @@ int main() {
                                OfflineCommandKind::OpenSettings, OfflineCommandKind::OpenMessages,
                                OfflineCommandKind::OpenPhotos, OfflineCommandKind::OpenHome,
                                OfflineCommandKind::OpenApps, OfflineCommandKind::OpenBattery,
-                               OfflineCommandKind::OpenWifi, OfflineCommandKind::OpenFiles}) {
+                               OfflineCommandKind::OpenWifi, OfflineCommandKind::OpenFiles,
+                               OfflineCommandKind::OpenFlashlight, OfflineCommandKind::OpenRedLight}) {
         const char* app = offline_command_app(opening);
         expect(app && assistant_app_known(app), "each opening command names a known app");
     }

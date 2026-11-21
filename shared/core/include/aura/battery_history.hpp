@@ -53,4 +53,14 @@ private:
     std::vector<BatterySample> samples_;
 };
 
+// The card's logs. The history lives in RAM and starts again at every boot, so
+// the first write of a boot keeps the last log as battery-log-previous.csv: a
+// battery that ran out keeps its record when the device starts again on power
+// (the owner's first discharge was lost that way, 2026-11-20).
+inline constexpr char kBatteryLogFile[] = "battery-log.csv";
+inline constexpr char kBatteryLogPreviousFile[] = "battery-log-previous.csv";
+// In `directory`: battery-log.csv (or its .bak, a write cut short) becomes
+// battery-log-previous.csv, replacing an older one. False when there was none.
+bool keep_previous_battery_log(const std::string& directory);
+
 }  // namespace aura

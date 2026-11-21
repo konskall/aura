@@ -40,7 +40,8 @@ const bytes = (value) => Buffer.byteLength(value, 'utf8');
 // so it is used whenever setup-voice.ps1 installed it.
 export const WHISPER_MODELS = Object.freeze(['ggml-large-v3-turbo-q5_0.bin', 'ggml-small-q5_1.bin']);
 const GROQ_TRANSCRIPTION_ENDPOINT = 'https://api.groq.com/openai/v1/audio/transcriptions';
-const GROQ_TRANSCRIPTION_MODEL = 'whisper-large-v3-turbo';
+// The most accurate Whisper outside English, as on the device (2026-11-20).
+const GROQ_TRANSCRIPTION_MODEL = 'whisper-large-v3';
 const AZURE_TTS_PATH = '/cognitiveservices/v1';
 const AZURE_TTS_OUTPUT_FORMAT = 'audio-24khz-48kbitrate-mono-mp3';
 

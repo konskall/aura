@@ -77,6 +77,7 @@ add_library(aura_core STATIC
     shared/core/src/battery_history.cpp
     shared/core/src/alarm_station.cpp
     shared/core/src/xweather.cpp
+    shared/core/src/wake_word.cpp
     shared/core/src/text_util.cpp
     shared/core/src/voice.cpp
     shared/core/src/aoraton_crypto.cpp

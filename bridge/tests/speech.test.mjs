@@ -254,7 +254,8 @@ test('optional Groq STT uploads one bounded WAV with no secret in the URL', asyn
   assert.equal(calls[0].url, 'https://api.groq.com/openai/v1/audio/transcriptions');
   assert.equal(calls[0].options.headers.authorization, 'Bearer test-only-key');
   assert.equal(calls[0].url.includes('test-only-key'), false);
-  assert.equal(calls[0].options.body.get('model'), 'whisper-large-v3-turbo');
+  // The most accurate outside English, as on the device (2026-11-20).
+  assert.equal(calls[0].options.body.get('model'), 'whisper-large-v3');
   assert.equal(calls[0].options.body.get('language'), 'el');
 });
 

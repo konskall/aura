@@ -91,7 +91,17 @@ Measured on COM3 with temporary firmware (removed afterwards) and Waveshare's sc
 
 - The ES7210 has two microphones (MIC1 and MIC2, the top corners) and, on MIC3, the ES8311's output wired back ("AEC" in the schematic, taken before the NS4150B amplifier). MIC4 is unused. The BSP opens only MIC1 and MIC2; `Esp32Microphone` adds MIC3 through the ES7210's registers after opening (clocks, power, PGA, TDM on SDOUT1, reset) and reads four 16-bit TDM slots a frame: **0 the speaker's signal, 1 and 3 the microphones, 2 empty**. Slot 1 is the voice.
 - **The ES7210 starts with about 250 ms of noise in every slot** (rms about 1100, peaks at full scale), after each start and again when the speaker's side of the shared I2S is reconfigured while it listens. The first 300 ms after a start are dropped. Before, every question began with it (its "peak 32767"), and a listen after an answer took it for speech and ended 1.4 s later with nothing said.
-- Gains: the voice at 24 dB (it was 30; the questions' peaks of 32767 were the start's noise, so 24 dB is room for a voice close to the device, not a measured clip); 18 dB while the device speaks (its own voice reached 32768 at 24 dB); the speaker's signal at 12 dB (peak about 4200 at the owner's volume). Each question's levels are in the log (`question: … input peak, rms` and `rms by tenths of a second`).
+- Gains:
+  - **Listening (the wake word, a question, a note): 33 dB since 2026-11-20.** It was 24 dB from 2026-11-16, and 30 dB before that.
+  - The peaks of 32767 once blamed on 30 dB were the start's noise.
+  - At 24 dB the owner had to shout from a metre. In the owner's tries that day (24 dB):
+    - a question close to the device peaked at about −20 dBFS (3241);
+    - one from about a metre came in at rms 30–100 (−50 to −40 dBFS);
+    - twice the recorder found no speech in it (its floor is rms 30);
+    - the room was about rms 13 to 44.
+  - **While the device speaks: 18 dB**, since its own voice reached 32768 at 24 dB.
+  - **The speaker's signal: 12 dB** (peak about 4200 at the owner's volume).
+  - Each question's levels are in the log (`question: … input peak, rms` and `rms by tenths of a second`).
 - The speaker and the microphones share one I2S. Playback and recording run at the same rate (16 kHz), and a clip goes out as 32-bit samples, so the frame is 64 bits both ways and neither side reconfigures the shared clock while the other runs.
 - **The echo:** the microphones hear the speaker far louder than a voice (rms about 8300 at 24 dB). Offline, from 3 s of the board's samples: the echo's response is short (99% of it within 3.3 ms), and the best linear filter of any length takes out about 12 dB (coherence 0.906 at 1–2 kHz: the speaker's and the amplifier's distortion, which the signal taken before the amplifier does not hold). The NLMS filter of `EchoReferenceGate` (128 taps) reaches that on the board: 11.5–12.2 dB and no false interruption over 8 s of speech-like sound, and 19.1 dB on a spoken answer. Below 500 Hz the speaker gives under 1% of the echo.
 - **The voice** (Azure's MP3, 32 kbit/s, 16 kHz, mono) has a worker thread and a connection of its own, and plays as it arrives: the speaker starts once 1.2 s of it has been decoded, about 6 KB, three reads of the HTTPS client. Each spoken piece logs how long it played and how long it waited for the download, and each answer how long after the question its first words, its voice and its whole text came (`turn:`).

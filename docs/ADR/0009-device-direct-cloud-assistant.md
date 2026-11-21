@@ -9,7 +9,8 @@ device note in ADR 0005. The PC bridge is unchanged.
 The ESP32 runs the spoken assistant without the PC and without a hosted
 gateway:
 
-- **Groq** recognises speech with `whisper-large-v3-turbo` and answers with `openai/gpt-oss-120b`. The answer is streamed, with temperature 0.2 and at most 1,200 tokens.
+- **Groq** recognises speech with `whisper-large-v3` and answers with `openai/gpt-oss-120b`. The answer is streamed, with temperature 0.2 and at most 1,200 tokens.
+  - Until 2026-11-20 recognition used `whisper-large-v3-turbo`. The owner still found Greek misheard, and `whisper-large-v3` is Groq's most accurate model outside English. Turbo is quicker and cheaper, but the questions are a few seconds long. The PC bridge changed with it.
 - **Azure Speech** speaks with the `el-GR` Athina and Nestoras neural voices, as 24 kHz mono MP3 that the shared `minimp3` path decodes to PCM.
 
 The requests, limits and error codes are the PC bridge's (`bridge/src/groq-runner.mjs`, `bridge/src/speech.mjs`). The prompt is built by `shared/core/src/turn_prompt.cpp`, and `tests/interop/run_turn_prompt_parity.mjs` keeps it identical to the bridge's `turn-prompt.mjs`.

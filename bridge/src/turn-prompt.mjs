@@ -88,7 +88,7 @@ export function buildChatInstructions({ prompt, context = '', history = [], lang
     'ACTION: {"type":"volume","value":40}  (or "step":10 for louder, "step":-10 for quieter)',
     'ACTION: {"type":"brightness","value":70}  (or "step":20 for brighter, "step":-20 for dimmer)',
     'ACTION: {"type":"mute","on":true}',
-    'ACTION: {"type":"open","app":"weather"}  (app is weather, clock, notes, calendar, tasks, shopping, radio, today, messages, notifications, photos, files, settings, sound, display, wifi, battery, home or apps)',
+    'ACTION: {"type":"open","app":"weather"}  (app is weather, clock, notes, calendar, tasks, shopping, radio, today, messages, notifications, photos, files, settings, sound, display, wifi, battery, home, apps, flashlight or red_light)',
     'ACTION: {"type":"restart"}',
     'ACTION: {"type":"power_off"}',
     'Before the action line, say in one sentence what will happen. The user must confirm it on the device,',

@@ -382,6 +382,31 @@ OfflineCommand parse_offline_command(const std::string& text) {
         return command;
     }
 
+    // Φακός (the owner, 2026-11-21: «η Αύρα πρέπει να μπορεί να ανάψει το
+    // φακό»): «άναψε τον φακό», «κόκκινο φως», «σβήσε τον φακό», said outright.
+    // Off is Home, never the device switched off. A sentence about a
+    // flashlight, lentils (φακές) or a traffic light is the assistant's.
+    const auto red = [](const std::string& word) { return word.rfind("κοκκιν", 0) == 0 || word == "red"; };
+    const bool torch_named = folded_has_word(words, {"φακο", "φακοσ", "φακου", "flashlight", "torch"});
+    const bool red_named = std::any_of(words.begin(), words.end(), red);
+    if (torch_named || (red_named && folded_has_word(words, {"φωσ", "light"}))) {
+        const bool only_the_light = std::all_of(words.begin(), words.end(), [&red](const std::string& word) {
+            return filler_word(word) || red(word) ||
+                   is_one_of(word, {"φακο", "φακοσ", "φακου", "flashlight", "torch", "φωσ", "light", "αναψε",
+                                    "αναψεισ", "ανοιξε", "ανοιξεισ", "βαλε", "βαλεισ", "σβησε", "σβησεισ", "κλεισε",
+                                    "κλεισεισ", "μπορεισ", "να", "τον", "το", "τη", "την", "στο", "σε", "με", "turn",
+                                    "switch", "on", "off", "open", "the", "a", "my", "can", "you", "with"});
+        });
+        if (only_the_light) {
+            if (folded_has_word(words, {"σβησε", "σβησεισ", "κλεισε", "κλεισεισ", "off"})) {
+                command.kind = OfflineCommandKind::OpenHome;
+            } else {
+                command.kind = red_named ? OfflineCommandKind::OpenRedLight : OfflineCommandKind::OpenFlashlight;
+            }
+            return command;
+        }
+    }
+
     if (asks_restart(words)) {
         command.kind = OfflineCommandKind::Restart;
         return command;
@@ -560,6 +585,8 @@ const char* offline_command_app(OfflineCommandKind kind) noexcept {
         case OfflineCommandKind::OpenBattery: return "battery";
         case OfflineCommandKind::OpenWifi: return "wifi";
         case OfflineCommandKind::OpenFiles: return "files";
+        case OfflineCommandKind::OpenFlashlight: return "flashlight";
+        case OfflineCommandKind::OpenRedLight: return "red_light";
         case OfflineCommandKind::None:
         case OfflineCommandKind::ShowTime:
         case OfflineCommandKind::ShowBattery:

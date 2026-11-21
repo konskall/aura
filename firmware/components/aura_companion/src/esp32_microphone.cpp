@@ -1,5 +1,7 @@
 #include "esp32_microphone.hpp"
 
+#include "aura/battery_history.hpp"
+
 #include "bsp/esp-bsp.h"
 #include "esp_codec_dev.h"
 #include "esp_heap_caps.h"
@@ -264,6 +266,10 @@ bool Esp32CompanionStore::write(const char* name, const std::string& data) const
     return true;
 }
 
+bool Esp32CompanionStore::keep_previous_battery_log() const {
+    return mounted_ && aura::keep_previous_battery_log(kRoot);
+}
+
 std::string Esp32CompanionStore::note_audio_path(const std::string& file) const {
     return std::string(kRoot) + "/notes/" + file;
 }
@@ -315,7 +321,7 @@ void Esp32CompanionStore::factory_reset() const {
     if (!mounted_) return;
     for (const char* name : {"clock.txt", "notes.txt", "organizer.txt", "conversations.txt", "sound.txt", "display.txt",
                                "language.txt", "app-layout.txt", "photos-settings.json", "aoraton-sync.txt",
-                               "bluetooth.txt"}) {
+                               "bluetooth.txt", "wake-word.txt"}) {
         const auto path = std::string(kRoot) + "/" + name;
         std::remove(path.c_str());
         std::remove((path + ".tmp").c_str());

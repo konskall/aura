@@ -43,6 +43,9 @@ namespace {
 constexpr std::size_t kConversationRenderLimit = 40;
 constexpr std::uint32_t kToastMs = 2600;
 constexpr std::uint32_t kForgetArmMs = 4000;
+// «Δεν σε άκουσα» gives way to Home by itself (the owner, 2026-11-20): time to
+// read it and to tap «Δοκιμή ξανά», then Home.
+constexpr std::uint32_t kNoSpeechHomeMs = 8000;
 
 // v12 "Halo" geometry (docs/design/AURA_V12_HALO_DESIGN.md).
 constexpr int kGutter = ui::tokens::GUTTER;
@@ -129,8 +132,8 @@ struct AuraUi::Impl {
     lv_display_t* display{};
     lv_obj_t* screen{};
     lv_obj_t* content{};
-    // Status chrome: Wi-Fi and battery on Home; the time (plus offline, low
-    // battery and charging only when they apply) on every other screen.
+    // Status chrome: Wi-Fi and battery on Home; the time (plus offline when it
+    // applies) on every other screen.
     lv_obj_t* status_bar{};
     lv_obj_t* status_left{};
     lv_obj_t* status_right{};
@@ -149,6 +152,10 @@ struct AuraUi::Impl {
     lv_obj_t* header_title{};
     lv_obj_t* header_glass{};
     bool header_action{false};
+    // A voice screen's title, centred where the status group sits: the group
+    // gives way to it (the owner's photo, 2026-11-20: «Σου απαντώ…» under
+    // the charging sign and «10:06 μ.μ.»).
+    bool stage_title_shown{false};
     bool view_fade{true};
     lv_obj_t* home_clock{};
     lv_obj_t* home_date{};
@@ -193,6 +200,7 @@ struct AuraUi::Impl {
     lv_obj_t* toast{};
     lv_obj_t* toast_label{};
     std::uint32_t toast_remaining_ms{0};
+    std::uint32_t no_speech_shown_ms{0};  // how long «Δεν σε άκουσα» has been in view
 
     AuraUiCallbacks callbacks{};
     AssistantSnapshot snapshot{};
@@ -238,6 +246,7 @@ struct AuraUi::Impl {
     // is rebuilt once the finger lifts and the list stops (tick()).
     bool refresh_pending{false};
     SoundSettings sound{};
+    WakeWordSettings wake_word{};
     lv_obj_t* sound_volume_label{};
     SystemAction pending_system{SystemAction::Restart};
     // A card format asks twice: the second confirmation arms it.
@@ -1050,6 +1059,8 @@ struct AuraUi::Impl {
             case UiView::WeatherSettings:
             case UiView::Calendar:
             case UiView::VoiceSettings:
+            case UiView::WakeWord:
+            case UiView::Flashlight:
             case UiView::Clock:
             case UiView::ClockNew:
             case UiView::TimerNew:
@@ -1770,6 +1781,7 @@ struct AuraUi::Impl {
 
     // State title and caption above the presence.
     void stage_title(const char* title, const char* caption, std::uint32_t caption_color) {
+        stage_title_shown = true;
         state_label = line(content, title, kGutter, 28, kWidth, ui::font_title(), ui::tokens::text,
                            LV_TEXT_ALIGN_CENTER);
         if (caption) line(content, caption, kGutter, 76, kWidth, ui::font_caption(), caption_color,
@@ -4244,12 +4256,14 @@ struct AuraUi::Impl {
         aoraton_sign_in_spinner = nullptr;
         photo_frame = nullptr;
         photo_zoom_image = nullptr;
+        flashlight_panel = nullptr;
         file_spinner = nullptr;
         presence->detach();
         header_back = nullptr;
         header_title = nullptr;
         header_glass = nullptr;
         header_action = false;
+        stage_title_shown = false;
         home_clock = nullptr;
         home_date = nullptr;
         home_date_detail = nullptr;
@@ -4369,6 +4383,8 @@ struct AuraUi::Impl {
         // Leaving the city picker always reopens it on its presets.
         if (!refresh && view != UiView::WeatherLocation) weather_typing = false;
         if (!refresh) leave_edit_modes(view);
+        // Φακός opens with its buttons in view, however it was left.
+        if (!refresh && view == UiView::Flashlight) flashlight_controls = true;
         // The calendar opens on today, whatever month it was left on.
         if (!refresh && view == UiView::Calendar && current_view != UiView::OrganizerNew) calendar_year = 0;
         current_view = view;
@@ -4409,6 +4425,8 @@ struct AuraUi::Impl {
             case UiView::OrganizerNew: render_companion(view); break;
             case UiView::Battery: render_battery(); break;
             case UiView::VoiceSettings: render_voice_settings(); break;
+            case UiView::WakeWord: render_wake_word(); break;
+            case UiView::Flashlight: render_flashlight(); break;
             case UiView::TypographyProof: render_typography_proof(); break;
             case UiView::Wifi: render_wifi(); break;
             case UiView::WifiPassword: render_wifi_password(); break;
@@ -4482,16 +4500,18 @@ struct AuraUi::Impl {
         if (lv_image_get_src(status_network) != network_icon) lv_image_set_src(status_network, network_icon);
         lv_obj_set_style_image_recolor(status_network, ui::color(online ? ui::tokens::text : ui::tokens::coral), 0);
 
-        // Home shows the full status; other screens only what needs attention.
+        // Home shows the full status; other screens the time, and offline when
+        // it is. The battery and its charging only on Home (the owner,
+        // 2026-11-20: not on the voice screens, nor in a header).
         lv_obj_set_hidden(status_left, !home);
-        lv_obj_set_hidden(status_right, !home && header_action);
+        lv_obj_set_hidden(status_right, (!home && header_action) || stage_title_shown);
         lv_obj_set_hidden(status_time, home || (current_view == UiView::PhotoViewer && photo_fullscreen));
         lv_obj_set_hidden(status_alert, home || !(status.connection_known && !status.online));
         lv_obj_set_hidden(status_bluetooth, !(status.bluetooth_known && status.bluetooth_enabled));
         lv_obj_set_hidden(status_developer, !developer_mode);
         lv_obj_set_hidden(status_muted, !audio.muted);
-        lv_obj_set_hidden(status_charging, !(status.power_known && status.charging));
-        const bool show_battery = home || low;
+        lv_obj_set_hidden(status_charging, !home || !(status.power_known && status.charging));
+        const bool show_battery = home;
         // Without the percentage (Κατάσταση συσκευής) the icon stays alone.
         lv_obj_set_hidden(status_battery, !show_battery || !display_power.settings.battery_percent);
         lv_obj_set_hidden(status_battery_glyph, !show_battery || !status.power_known);
@@ -4651,6 +4671,15 @@ void AuraUi::apply_sound(const SoundSettings& settings) {
                          settings.assistant_voice != impl_->sound.assistant_voice;
     impl_->sound = settings;
     if (changed && (impl_->current_view == UiView::Audio || impl_->current_view == UiView::VoiceSettings)) {
+        impl_->render(impl_->current_view);
+    }
+}
+
+void AuraUi::apply_wake_word(const WakeWordSettings& settings) {
+    const bool changed = settings.enabled != impl_->wake_word.enabled ||
+                         settings.sensitivity != impl_->wake_word.sensitivity;
+    impl_->wake_word = settings;
+    if (changed && (impl_->current_view == UiView::Audio || impl_->current_view == UiView::WakeWord)) {
         impl_->render(impl_->current_view);
     }
 }
@@ -4923,6 +4952,20 @@ void AuraUi::tick(std::uint32_t elapsed_ms) {
         impl_->toast_remaining_ms = elapsed_ms >= impl_->toast_remaining_ms ? 0U :
                                     impl_->toast_remaining_ms - elapsed_ms;
         if (impl_->toast_remaining_ms == 0 && impl_->toast) lv_obj_set_hidden(impl_->toast, true);
+    }
+    // «Δεν σε άκουσα» goes Home as its «Αρχική» does, once it has been read;
+    // never from under a finger. Other failures wait for the owner.
+    if (impl_->current_view == UiView::Assistant && impl_->snapshot.state == AssistantState::Error &&
+        impl_->snapshot.error_code == "NO_SPEECH") {
+        impl_->no_speech_shown_ms += elapsed_ms;
+        if (impl_->no_speech_shown_ms >= kNoSpeechHomeMs && !Impl::interacting()) {
+            impl_->no_speech_shown_ms = 0;
+            if (impl_->callbacks.on_home) impl_->callbacks.on_home();
+            impl_->navigation.reset();
+            impl_->render(UiView::Home);
+        }
+    } else {
+        impl_->no_speech_shown_ms = 0;
     }
     if (impl_->wifi_forget_armed && impl_->phase_ms - impl_->wifi_forget_armed_at > kForgetArmMs) {
         impl_->wifi_forget_armed = false;
